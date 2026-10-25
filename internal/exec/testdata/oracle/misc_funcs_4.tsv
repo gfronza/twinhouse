@@ -1,0 +1,3 @@
+mapKeys(map(\'a\', 1, \'b\', 2))	mapValues(map(\'a\', 1, \'b\', 2))	mapContains(map(\'a\', 1), \'a\')	mapContains(map(\'a\', 1), \'z\')	arrayElement(map(\'k\', [1, 2]), \'k\')	toTypeName(map(1, \'x\'))
+Array(String)	Array(UInt8)	UInt8	UInt8	Array(UInt8)	String
+['a','b']	[1,2]	1	0	[1,2]	Map(UInt8, String)

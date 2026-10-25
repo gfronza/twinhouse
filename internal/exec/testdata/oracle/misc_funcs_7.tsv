@@ -1,0 +1,3 @@
+splitByChar(\',\', \'\')	splitByChar(\',\', \'a\')	splitByString(\',\', \'a,b,,c\')
+Array(String)	Array(String)	Array(String)
+['']	['a']	['a','b','','c']

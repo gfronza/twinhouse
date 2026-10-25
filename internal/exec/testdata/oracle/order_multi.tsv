@@ -1,0 +1,11 @@
+tenant	amount
+String	Int32
+initech	42
+globex	-100
+globex	1
+globex	100
+acme	-3
+acme	0
+acme	5
+acme	7
+acme	10

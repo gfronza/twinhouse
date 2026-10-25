@@ -1,0 +1,3 @@
+finalizeAggregation(uniqExactMergeState(s))	toTypeName(uniqExactMergeState(s))	sumMerge(t)
+UInt64	String	UInt64
+4	AggregateFunction(uniqExact, UInt8)	45

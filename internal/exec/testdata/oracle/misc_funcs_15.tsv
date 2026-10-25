@@ -1,0 +1,3 @@
+ifNull(NULL, NULL)	coalesce(1, NULL)	coalesce(NULL, \'a\', \'b\')	toTypeName(coalesce(toNullable(\'x\'), \'y\'))
+Nullable(Nothing)	UInt8	String	String
+\N	1	a	String

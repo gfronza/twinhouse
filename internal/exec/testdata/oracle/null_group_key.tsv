@@ -1,0 +1,6 @@
+n	count()
+Nullable(Int32)	UInt64
+-7	1
+0	1
+5	1
+\N	2

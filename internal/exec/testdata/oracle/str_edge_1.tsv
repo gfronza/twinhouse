@@ -1,0 +1,3 @@
+position(\'héllo\', \'l\')	substring(\'héllo\', 2, 2)	like(\'abc\', \'%\')	like(\'\', \'%\')	like(\'abc\', \'\')	match(\'\', \'^$\')
+UInt64	String	UInt8	UInt8	UInt8	UInt8
+4	é	1	1	0	1

@@ -1,0 +1,5 @@
+tenant	groupArrayIf(user_id, equals(flag, 1))	arraySort(groupUniqArrayIf(kind, equals(flag, 1)))
+String	Array(UInt64)	Array(String)
+acme	[1,1,2]	['add','recalc','remove']
+globex	[3,4]	['add']
+initech	[]	[]

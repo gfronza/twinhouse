@@ -1,0 +1,8 @@
+tenant	kind
+String	LowCardinality(String)
+acme	add
+acme	recalc
+acme	remove
+globex	add
+globex	remove
+initech	add

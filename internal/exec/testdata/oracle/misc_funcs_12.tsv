@@ -1,0 +1,3 @@
+lower(toFixedString(\'AB\', 3))	length(toFixedString(\'AB\', 3))	equals(toFixedString(\'AB\', 3), \'AB\')	concat(toFixedString(\'A\', 2), \'b\')
+FixedString(3)	UInt64	UInt8	String
+ab\0	3	1	A\0b

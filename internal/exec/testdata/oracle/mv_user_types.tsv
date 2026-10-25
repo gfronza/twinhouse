@@ -1,0 +1,3 @@
+toTypeName(last)	toTypeName(lo)	toTypeName(argMaxMerge(last))	toTypeName(countMerge(n))	toTypeName(uniqExactMerge(kinds))	toTypeName(sum(lo))
+String	String	String	String	String	String
+AggregateFunction(argMax, String, DateTime64(9))	SimpleAggregateFunction(min, UInt64)	String	UInt64	UInt64	UInt64

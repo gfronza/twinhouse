@@ -1,0 +1,7 @@
+status	day	sum(hits)	max(big)
+String	Date	UInt64	SimpleAggregateFunction(max, Int64)
+cancelled	2024-01-01	1	50
+new	2024-01-01	2	100
+paid	2024-01-01	1	100
+shipped	2024-01-03	1	100
+stale	2024-01-01	1	1

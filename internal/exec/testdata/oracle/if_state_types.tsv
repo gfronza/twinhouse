@@ -1,0 +1,3 @@
+toTypeName(sumIfState(number, greater(number, 1)))	toTypeName(uniqExactIfState(toString(number), greater(number, 0)))	toTypeName(countIfState(greater(number, 1)))	toTypeName(sumStateIf(number, greater(number, 1)))	toTypeName(argMaxIfState(number, number, greater(number, 0)))
+String	String	String	String	String
+AggregateFunction(sumIf, UInt64, UInt8)	AggregateFunction(uniqExactIf, String, UInt8)	AggregateFunction(countIf, UInt8)	AggregateFunction(sum, UInt64)	AggregateFunction(argMaxIf, UInt64, UInt64, UInt8)

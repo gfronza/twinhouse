@@ -1,0 +1,5 @@
+id	customer	status	total	updated
+String	String	String	Int64	DateTime64(3)
+o1	c1	shipped	100	2024-01-03 09:00:00.000
+o2	c1	cancelled	50	2024-01-01 13:00:00.000
+o3	c2	new	-5	2024-01-02 00:00:00.000

@@ -1,0 +1,6 @@
+tenant	user_id	amount
+String	UInt64	Int32
+acme	2	7
+acme	2	0
+globex	3	100
+globex	3	-100

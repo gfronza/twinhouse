@@ -1,0 +1,3 @@
+count()	uniqExact(id)	max(ver)
+UInt64	UInt64	UInt64
+3	3	5

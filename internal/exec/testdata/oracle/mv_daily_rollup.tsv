@@ -1,0 +1,4 @@
+tenant	sum(total)	uniqExactMerge(users)	max(last_ts)
+String	UInt64	UInt64	SimpleAggregateFunction(max, DateTime64(9))
+t1	22	3	2024-01-02 09:00:00.000000000
+t2	10	2	2024-01-03 00:00:00.000000000

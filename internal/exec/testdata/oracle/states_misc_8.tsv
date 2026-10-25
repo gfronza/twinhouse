@@ -1,0 +1,3 @@
+net	countIf(equals(kind, \'add\'))
+Int64	UInt64
+62	6

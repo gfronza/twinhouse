@@ -1,0 +1,3 @@
+toTypeName(jb.v)	toTypeName(jb.n)	toTypeName(w)
+String	String	String
+UInt8	Nullable(String)	String

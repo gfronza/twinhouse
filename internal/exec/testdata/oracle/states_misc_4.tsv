@@ -1,0 +1,3 @@
+avgMerge(a)	countMerge(c)	minMerge(mi)	maxMerge(ma)	anyMerge(an)	groupArrayMerge(ga)
+Float64	UInt64	Int32	DateTime64(3)	String	Array(UInt64)
+3.8	5	-3	2024-01-03 12:00:00.500	acme	[1,1,1,2,2]

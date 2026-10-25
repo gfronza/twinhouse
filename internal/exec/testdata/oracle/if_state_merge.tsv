@@ -1,0 +1,3 @@
+sumIfMerge(s)	countIfMerge(c)	uniqExactIfMerge(u)
+UInt64	UInt64	UInt64
+14	4	2

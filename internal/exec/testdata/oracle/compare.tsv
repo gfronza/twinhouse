@@ -1,0 +1,3 @@
+equals(1, 1)	notEquals(1, 2)	less(1, 2)	lessOrEquals(2, 1)	less(\'a\', \'b\')	equals(\'abc\', \'abc\')	equals(1, 1.)	greater(toUInt64(18446744073709551615), toInt64(-1))	less(-1, toUInt8(0))	equals(1, \'1\')	less(\'2024-01-01\', toDate(\'2024-01-02\'))	equals(toDateTime(\'2024-01-01 00:00:00\'), toDate(\'2024-01-01\'))	equals(nan, nan)	notEquals(nan, nan)	less(nan, 1)	less([1, 2], [1, 3])	equals((1, 2), (1, 2))	greater((1, \'b\'), (1, \'a\'))
+UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8
+1	1	1	0	1	1	1	1	1	1	1	1	0	1	0	1	1	1

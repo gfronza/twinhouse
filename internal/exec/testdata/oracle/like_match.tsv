@@ -1,0 +1,3 @@
+like(\'abc\', \'a%\')	like(\'abc\', \'a_c\')	like(\'abc\', \'A%\')	ilike(\'abc\', \'A%\')	notLike(\'abc\', \'%z%\')	like(\'a_c\', \'a\\\\_c\')	like(\'abc\', \'a\\\\_c\')	like(\'a%c\', \'a\\\\%c\')	match(\'abc123\', \'^[a-z]+[0-9]+$\')	match(\'abc\', \'z\')	like(\'x\\ny\', \'x%y\')	like(\'ä\', \'_\')
+UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8	UInt8
+1	1	0	1	1	1	0	1	1	0	1	1

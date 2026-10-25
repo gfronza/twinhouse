@@ -1,0 +1,4 @@
+concat(CAST(number, \'String\'), \'-x\')	CAST(number, \'String\')
+String	String
+0-x	0
+1-x	1

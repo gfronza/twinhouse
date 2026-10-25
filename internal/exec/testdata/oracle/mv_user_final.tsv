@@ -1,0 +1,5 @@
+tenant	user	finalizeAggregation(last)	finalizeAggregation(n)	finalizeAggregation(kinds)	lo
+String	String	String	UInt64	UInt64	SimpleAggregateFunction(min, UInt64)
+t1	u1	recalc	3	3	0
+t1	u2	add	2	1	2
+t1	u3	add	1	1	1

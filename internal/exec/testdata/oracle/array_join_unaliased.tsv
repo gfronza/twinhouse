@@ -1,0 +1,10 @@
+tenant	tags
+String	String
+acme	a
+acme	a
+acme	b
+acme	c
+globex	a
+globex	x
+globex	y
+globex	z

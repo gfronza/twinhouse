@@ -1,0 +1,3 @@
+formatDateTime(toDateTime64(\'2024-01-02 03:04:05.123456\', 6), \'%Y-%m-%d %H:%i:%S %F %T %y %e %j %I %p %D %R %w %u %f %h %a %b %M %W %c %Q %r %s %%\')	formatDateTime(toDateTime(\'2024-12-31 23:00:00\'), \'%Y%m%d\')	formatDateTime(toDate(\'2024-07-04\'), \'%d/%m/%Y\')
+String	String	String
+2024-01-02 03:04:05 2024-01-02 03:04:05 24 2 002 03 AM 01/02/24 03:04 2 2 123456 03 Tue Jan January Tuesday 01 1 03:04 AM 05 %	20241231	04/07/2024

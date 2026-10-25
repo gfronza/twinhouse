@@ -1,0 +1,4 @@
+tenant	uniqExactMerge(u)	sumMerge(s)	argMaxMerge(k)	max(f)
+String	UInt64	Int64	String	Int64
+acme	2	19	recalc	12
+globex	1	0	remove	0

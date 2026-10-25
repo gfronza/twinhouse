@@ -1,0 +1,5 @@
+tenant	kind	cnt	amt
+String	String	SimpleAggregateFunction(sum, UInt64)	SimpleAggregateFunction(sum, UInt64)
+t1	add	4	18
+t1	recalc	1	4
+t2	add	2	10

@@ -1,0 +1,10 @@
+tenant	user_id	t
+String	UInt64	String
+acme	1	a
+acme	1	b
+acme	1	a
+acme	2	c
+globex	3	x
+globex	3	y
+globex	3	z
+globex	4	a

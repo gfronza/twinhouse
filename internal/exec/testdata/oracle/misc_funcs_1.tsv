@@ -1,0 +1,3 @@
+toTimeZone(toDateTime(\'2024-01-01 00:00:00\'), \'Asia/Tokyo\')	toTypeName(toTimeZone(toDateTime(\'2024-01-01 00:00:00\'), \'Asia/Tokyo\'))	toString(toDateTime(\'2024-01-01 00:00:00\'), \'America/New_York\')
+DateTime(\'Asia/Tokyo\')	String	String
+2024-01-01 09:00:00	DateTime(\'Asia/Tokyo\')	2023-12-31 19:00:00

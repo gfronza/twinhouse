@@ -1,0 +1,3 @@
+formatDateTime(toDateTime64(\'2024-01-02 03:04:05.123456\', 6, \'Europe/Berlin\'), \'%a %b %c %C %d %D %e %f %F %g %G %h %H %i %I %j %k %l %m %M %p %Q %r %R %s %S %T %u %V %w %W %y %Y %z\')
+String
+Tue Jan 01 20 02 01/02/24 2 123456 2024-01-02 24 2024 03 03 04 03 002 03 03 01 January AM 1 03:04 AM 03:04 05 05 03:04:05 2 01 2 Tuesday 24 2024 +0100

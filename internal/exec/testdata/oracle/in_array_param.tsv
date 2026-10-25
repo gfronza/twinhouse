@@ -1,0 +1,4 @@
+tenant	user_id	count()
+String	UInt64	UInt64
+acme	1	3
+globex	4	1

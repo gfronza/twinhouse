@@ -1,0 +1,3 @@
+plus(0.1, 0.2)	multiply(1e308, 10)	multiply(-1e308, 10)	divide(5, 0.)	divide(toFloat32(1), 3)
+Float64	Float64	Float64	Float64	Float64
+0.30000000000000004	inf	-inf	inf	0.3333333333333333

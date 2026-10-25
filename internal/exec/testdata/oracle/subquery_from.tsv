@@ -1,0 +1,5 @@
+tenant	max(s)
+String	Int64
+acme	12
+globex	1
+initech	42

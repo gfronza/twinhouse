@@ -1,0 +1,10 @@
+a.k	a.v	a.n	b.k	w	b.v	b.n	c.k	c.v	c.n
+String	UInt8	Nullable(String)	String	String	UInt8	Nullable(String)	String	UInt8	Nullable(String)
+b	2	\N	b	z	7	\N	b	2	\N
+b	2	\N	b	z	7	\N	b	3	q
+b	2	\N	b	x	9	q	b	2	\N
+b	2	\N	b	x	9	q	b	3	q
+b	3	q	b	z	7	\N	b	2	\N
+b	3	q	b	z	7	\N	b	3	q
+b	3	q	b	x	9	q	b	2	\N
+b	3	q	b	x	9	q	b	3	q

@@ -1,0 +1,5 @@
+entity	item	last_op	last_qty
+String	String	String	Int64
+e1	i1	recalc	7
+e1	i3	add	9
+e2	i1	add	4

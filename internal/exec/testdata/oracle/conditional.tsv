@@ -1,0 +1,3 @@
+if(1, toUInt8(1), toInt16(2))	toTypeName(if(1, toUInt8(1), toInt16(2)))	if(NULL, 1, 2)	if(0, \'a\', NULL)	toTypeName(if(0, \'a\', NULL))	multiIf(0, 1, 0, 2, 3)	toTypeName(multiIf(1, 1, 2, 300, -1))	multiIf(greater(1, 2), \'x\', greater(2, 1), \'y\', NULL)	caseWithExpression(2, 1, \'one\', 2, \'two\', \'many\')	multiIf(0, 1, NULL)	toTypeName(multiIf(0, 1, NULL))
+Int16	String	UInt8	Nullable(String)	String	UInt8	String	Nullable(String)	String	Nullable(UInt8)	String
+1	Int16	2	\N	Nullable(String)	3	Int32	y	two	\N	Nullable(UInt8)

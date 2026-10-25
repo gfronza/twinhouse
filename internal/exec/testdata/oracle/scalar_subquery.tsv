@@ -1,0 +1,3 @@
+_subquery_1	toTypeName(_subquery_2)	_subquery_3	_subquery_4
+Nullable(Int32)	String	Nullable(UInt8)	Tuple(`1` UInt8, `\'a\'` String)
+100	Nullable(Int32)	\N	(1,'a')

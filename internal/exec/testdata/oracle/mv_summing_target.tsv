@@ -1,0 +1,4 @@
+customer	sum(n)	sum(total)
+String	UInt64	Int64
+c1	5	351
+c2	1	-5

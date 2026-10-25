@@ -1,0 +1,6 @@
+x	count()
+Nullable(UInt8)	UInt64
+0	3
+1	2
+2	2
+\N	1

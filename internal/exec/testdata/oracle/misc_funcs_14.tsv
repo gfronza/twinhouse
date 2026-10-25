@@ -1,0 +1,3 @@
+trimBoth(\'  a  \', \' \')	trimLeft(\'xxa\', \'x\')	trimLeft(\'  a\')	trimRight(\'a  \')
+String	String	String	String
+a	a	a	a

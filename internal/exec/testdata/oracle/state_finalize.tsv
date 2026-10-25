@@ -1,0 +1,3 @@
+finalizeAggregation(uniqExactState(tenant))	finalizeAggregation(sumState(amount))	finalizeAggregation(avgState(price))	finalizeAggregation(maxState(ts))	finalizeAggregation(countState())
+UInt64	Int64	Float64	DateTime64(3)	UInt64
+3	62	12.92111111111111	2024-02-29 23:59:59.999	9

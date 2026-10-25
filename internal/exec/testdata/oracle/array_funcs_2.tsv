@@ -1,0 +1,3 @@
+arrayStringConcat([\'a\', \'b\'], \'-\')	arrayStringConcat([1, 2])	arrayDistinct([1, 2, 1, NULL, NULL])	arraySort([3, 1, 2])	arraySort([\'b\', \'a\'])	arrayReverse([1, 2, 3])	arrayConcat([1], [2, 3])	toTypeName(arrayConcat([1], [-2]))	arraySlice([1, 2, 3, 4], 2, 2)	arraySlice([1, 2, 3, 4], -2)
+String	String	Array(UInt8)	Array(UInt8)	Array(String)	Array(UInt8)	Array(UInt8)	String	Array(UInt8)	Array(UInt8)
+a-b	12	[1,2]	[1,2,3]	['a','b']	[3,2,1]	[1,2,3]	Array(Int16)	[2,3]	[3,4]

@@ -1,0 +1,4 @@
+e	count()	max(id)	max(fs)	min(b)
+Enum8(\'a\' = 1, \'b\' = 2)	UInt64	UInt8	FixedString(4)	Bool
+a	2	4	ab\0\0	false
+b	2	3	abcd	false

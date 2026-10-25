@@ -1,0 +1,3 @@
+greaterOrEquals(now(), toDateTime(\'2024-01-01 00:00:00\'))	greater(today(), toDate(\'2024-01-01\'))	less(yesterday(), today())	dateDiff(\'day\', yesterday(), today())
+UInt8	UInt8	UInt8	Int64
+1	1	1	1

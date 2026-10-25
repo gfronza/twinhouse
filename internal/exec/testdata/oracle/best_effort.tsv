@@ -1,0 +1,3 @@
+parseDateTimeBestEffort(\'2024-01-02T03:04:05Z\')	parseDateTimeBestEffort(\'2024-01-02T03:04:05+02:00\')	parseDateTime64BestEffort(\'2024-01-02 03:04:05.123\')	parseDateTimeBestEffort(\'1700000000\')	parseDateTimeBestEffort(\'2024-01-02\')	parseDateTimeBestEffortOrNull(\'garbage\')	parseDateTimeBestEffortOrZero(\'garbage\')	toDateTime64(1700000000.5, 3)	toDateTime64(\'2024-01-02\', 3)	toDateTime64(\'2024-01-02 03:04:05.123456789\', 9)
+DateTime	DateTime	DateTime64(3)	DateTime	DateTime	Nullable(DateTime)	DateTime	DateTime64(3)	DateTime64(3)	DateTime64(9)
+2024-01-02 03:04:05	2024-01-02 01:04:05	2024-01-02 03:04:05.123	2023-11-14 22:13:20	2024-01-02 00:00:00	\N	1970-01-01 00:00:00	2023-11-14 22:13:20.500	2024-01-02 00:00:00.000	2024-01-02 03:04:05.123456789

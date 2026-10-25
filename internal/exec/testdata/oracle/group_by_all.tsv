@@ -1,0 +1,8 @@
+tenant	kind	count()
+String	LowCardinality(String)	UInt64
+acme	add	3
+acme	recalc	1
+acme	remove	1
+globex	add	2
+globex	remove	1
+initech	add	1

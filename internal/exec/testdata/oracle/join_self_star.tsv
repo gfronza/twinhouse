@@ -1,0 +1,7 @@
+k	v	n	y.k	y.v	y.n
+String	UInt8	Nullable(String)	String	UInt8	Nullable(String)
+a	1	p	a	1	p
+b	2	\N	b	2	\N
+b	2	\N	b	3	q
+b	3	q	b	2	\N
+b	3	q	b	3	q

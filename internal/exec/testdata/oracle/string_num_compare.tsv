@@ -1,0 +1,3 @@
+equals(toUInt8(44), \'300\')	equals(toInt8(-1), \'-1\')	equals(toFloat64(1.5), \'1.5\')	in(toUInt64(1), (\'1\', \'300\'))	less(1, \'2\')	less(toInt8(-5), \'-1\')
+UInt8	UInt8	UInt8	UInt8	UInt8	UInt8
+0	1	1	1	1	1

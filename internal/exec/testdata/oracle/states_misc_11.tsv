@@ -1,0 +1,3 @@
+uniqExact(tenant, kind)	uniq(tenant, user_id)	countDistinct(tenant, kind)
+UInt64	UInt64	UInt64
+6	5	6

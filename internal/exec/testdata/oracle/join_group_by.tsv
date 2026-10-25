@@ -1,0 +1,4 @@
+k	count()	sum(jb.v)	groupArray(w)
+String	UInt64	UInt64	Array(String)
+a	1	0	['']
+b	4	32	['x','z','x','z']

@@ -1,0 +1,3 @@
+plus(toUInt8(255), toUInt8(1))	plus(toInt8(127), toInt8(1))	plus(toUInt64(18446744073709551615), 1)	divide(7, 2)	divide(-7, 2)	intDiv(-7, 2)	modulo(-7, 3)	modulo(7, -3)	intDiv(7, -2)	divide(1, 0)	divide(-1, 0)	divide(0, 0)	multiply(toUInt8(200), toUInt8(2))	minus(toInt64(-9223372036854775807), 2)	multiply(2.5, 4)	modulo(10, 3.5)
+UInt16	Int16	UInt64	Float64	Float64	Int8	Int16	UInt8	Int8	Float64	Float64	Float64	UInt16	Int64	Float64	Float64
+256	128	0	3.5	-3.5	-3	-1	1	-3	inf	-inf	nan	400	9223372036854775807	10	3

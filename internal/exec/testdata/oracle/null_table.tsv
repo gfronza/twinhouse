@@ -1,0 +1,7 @@
+k	n	plus(n, 1)	toTypeName(plus(n, 1))	greater(n, 0)	if(greater(n, 0), \'pos\', \'not\')	coalesce(n, -1)	toString(n)	isNull(n)	in(n, (5, 0))	ifNull(n, 99)
+UInt32	Nullable(Int32)	Nullable(Int64)	String	Nullable(UInt8)	String	Int32	Nullable(String)	UInt8	Nullable(UInt8)	Int32
+1	\N	\N	Nullable(Int64)	\N	not	-1	\N	1	\N	99
+2	5	6	Nullable(Int64)	1	pos	5	5	0	1	5
+3	-7	-6	Nullable(Int64)	0	not	-7	-7	0	0	-7
+4	0	1	Nullable(Int64)	0	not	0	0	0	1	0
+5	\N	\N	Nullable(Int64)	\N	not	-1	\N	1	\N	99

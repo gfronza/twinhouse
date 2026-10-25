@@ -1,0 +1,3 @@
+\'x\\\'y\'	plus(_CAST(3, \'UInt8\'), 1)	_CAST([(\'a\', 1)], \'Array(Tuple(String, UInt8))\')	_CAST(\'1704067200.123\', \'DateTime64(3)\')	toTypeName(_CAST(3, \'UInt8\'))
+String	UInt16	Array(Tuple(String, UInt8))	DateTime64(3)	String
+x\'y	4	[('a',1)]	2024-01-01 00:00:00.123	UInt8

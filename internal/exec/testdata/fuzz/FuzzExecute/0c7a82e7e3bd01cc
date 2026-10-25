@@ -1,0 +1,2 @@
+go test fuzz v1
+string("WITH t AS(SELECT sum(amount)FROM t)SELECT t FROM n")

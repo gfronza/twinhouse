@@ -1,0 +1,3 @@
+range(3)	toTypeName(range(3))	toTypeName(range(toUInt64(3)))	range(1, 5)	range(1, 10, 3)	toTypeName(range(-1, 2))	range(-1, 2)
+Array(UInt8)	String	String	Array(UInt8)	Array(UInt8)	String	Array(Int16)
+[0,1,2]	Array(UInt8)	Array(UInt64)	[1,2,3,4]	[1,4,7]	Array(Int16)	[-1,0,1]

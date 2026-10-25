@@ -1,0 +1,12 @@
+name	type	position	default_kind	default_expression	is_in_sorting_key
+String	String	UInt64	String	String	UInt8
+a	UInt32	1			1
+b	UInt32	2	DEFAULT	a * 2	0
+c	String	3	MATERIALIZED	concat(\'x\', toString(a))	0
+e	String	4	ALIAS	concat(c, \'!\')	0
+n	Nullable(String)	5			0
+s	String	6	DEFAULT	\'dflt\'	0
+dt	DateTime	7	DEFAULT	toDateTime(\'2024-01-01 00:00:00\')	0
+u8	UInt8	8			0
+f	Float32	9			0
+d	Date	10			0

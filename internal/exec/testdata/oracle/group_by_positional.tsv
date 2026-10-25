@@ -1,0 +1,8 @@
+tenant	kind	sum(amount)
+String	LowCardinality(String)	Int64
+acme	add	22
+acme	recalc	0
+acme	remove	-3
+globex	add	101
+globex	remove	-100
+initech	add	42

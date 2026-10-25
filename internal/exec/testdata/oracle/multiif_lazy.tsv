@@ -1,0 +1,5 @@
+number	if(equals(number, 0), 0, intDiv(10, number))
+UInt64	UInt8
+0	0
+1	10
+2	5

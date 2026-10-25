@@ -1,0 +1,3 @@
+toTypeName(sum(x))	toTypeName(avg(x))	toTypeName(min(x))	toTypeName(any(x))	toTypeName(argMax(x, x))	toTypeName(count(x))	toTypeName(uniqExact(x))	toTypeName(groupArray(x))
+String	String	String	String	String	String	String	String
+Nullable(UInt64)	Nullable(Float64)	Nullable(UInt64)	Nullable(UInt64)	Nullable(UInt64)	UInt64	UInt64	Array(UInt64)

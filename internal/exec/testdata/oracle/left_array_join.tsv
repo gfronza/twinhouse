@@ -1,0 +1,14 @@
+tenant	t	toTypeName(t)
+String	String	String
+acme	a	String
+acme	b	String
+acme		String
+acme	a	String
+acme	c	String
+acme		String
+globex	x	String
+globex	y	String
+globex	z	String
+globex		String
+globex	a	String
+initech		String

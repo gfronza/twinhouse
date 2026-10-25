@@ -1,0 +1,4 @@
+toTypeName(arrayJoin([1, 2]))
+String
+UInt8
+UInt8

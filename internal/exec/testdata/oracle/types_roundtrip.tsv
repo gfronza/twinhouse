@@ -1,0 +1,6 @@
+id	fs	e	u	m	tp	an	lcn	d32	dt	b	f32	i128
+UInt8	FixedString(4)	Enum8(\'a\' = 1, \'b\' = 2)	UUID	Map(String, UInt16)	Tuple(x String, y Int8)	Array(Nullable(Int32))	LowCardinality(Nullable(String))	Date32	DateTime64(3, \'Asia/Tokyo\')	Bool	Float32	Int64
+1	ab\0\0	a	61f0c404-5cb3-11e7-907b-a6006ad3dba0	{'k':1,'z':2}	('s',-1)	[1,NULL]	\N	1950-06-01	2024-01-01 09:00:00.123	true	1.1	-5
+2	abcd	b	00000000-0000-0000-0000-000000000000	{}	('',0)	[]	\N	2299-12-31	1970-01-01 09:00:00.000	false	0	0
+3	\0\0\0\0	b	00000000-0000-0000-0000-000000000000	{}	('',0)	[]	\N	1900-01-01	1970-01-01 09:00:00.000	true	0	0
+4	\0\0\0\0	a	00000000-0000-0000-0000-000000000000	{'a':7}	('t',127)	[]	x	1900-01-01	1970-01-01 09:00:00.000	false	0	0

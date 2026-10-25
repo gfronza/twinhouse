@@ -1,0 +1,3 @@
+toTypeName(kind)	toTypeName(lower(kind))	toTypeName(equals(kind, \'add\'))	toTypeName(length(kind))	toTypeName(in(kind, \'add\'))
+String	String	String	String	String
+LowCardinality(String)	LowCardinality(String)	LowCardinality(UInt8)	LowCardinality(UInt64)	LowCardinality(UInt8)

@@ -1,0 +1,3 @@
+minus(toDate(\'1970-01-01\'), 2)	addDays(toDate(\'2149-06-06\'), 2)	addMonths(toDate(\'2149-06-06\'), 1)	plus(toDateTime(\'2106-02-07 06:28:15\'), 1)	plus(toDate32(\'2299-12-31\'), 1)	minus(toStartOfMonth(toDate(\'2024-03-31\')), 31)	minus(toDateTime(0), 1)
+Date	Date	Date	DateTime	Date32	Date	DateTime
+2149-06-05	1970-01-02	1970-01-30	1970-01-01 00:00:00	2299-12-31	2024-01-30	2106-02-07 06:28:15

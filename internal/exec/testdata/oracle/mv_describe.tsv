@@ -1,0 +1,9 @@
+name	type	default_type	default_expression	comment	codec_expression	ttl_expression
+String	String	String	String	String	String	String
+tenant	String					
+user	String					
+last	AggregateFunction(argMax, String, DateTime64(9))					
+n	AggregateFunction(count)					
+kinds	AggregateFunction(uniqExact, String)					
+lo	SimpleAggregateFunction(min, UInt64)					
+first	SimpleAggregateFunction(any, String)					

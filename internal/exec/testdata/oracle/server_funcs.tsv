@@ -1,0 +1,3 @@
+toTypeName(version())	toTypeName(revision())	toTypeName(timezone())	toTypeName(uptime())	toTypeName(now())	toTypeName(now64())	toTypeName(now64(9))	toTypeName(today())	toTypeName(generateUUIDv4())
+String	String	String	String	String	String	String	String	String
+String	UInt32	String	UInt32	DateTime	DateTime64(3)	DateTime64(9)	Date	UUID

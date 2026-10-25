@@ -1,0 +1,11 @@
+tags	length(tags)	has(tags, \'a\')	arrayElement(tags, 1)
+Array(String)	UInt64	UInt8	String
+['a','b']	2	1	a
+[]	0	0	
+['a']	1	1	a
+['c']	1	0	c
+[]	0	0	
+['x','y','z']	3	0	x
+[]	0	0	
+['a']	1	1	a
+[]	0	0	

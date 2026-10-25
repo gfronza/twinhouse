@@ -1,0 +1,3 @@
+left(\'hello\', 2)	right(\'hello\', 3)	left(\'hello\', -2)	right(\'hello\', -2)	repeat(\'ab\', 3)	repeat(\'x\', 0)	arrayCount([1, 0, 2])	arraySum([1, 2, 3])	toTypeName(arraySum([1, 2]))	arrayMax([1, 5, 2])	arrayMin([3, 1])	arrayUniq([1, 1, 2])	emptyArrayString()	toTypeName(emptyArrayString())
+String	String	String	String	String	String	UInt32	UInt64	String	UInt8	UInt8	UInt32	Array(String)	String
+he	llo	hel	llo	ababab		2	6	UInt64	5	1	2	[]	Array(String)

@@ -1,0 +1,5 @@
+tenant	minus(_subquery_1, max(amount))
+String	Nullable(Int64)
+acme	90
+globex	0
+initech	58

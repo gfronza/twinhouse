@@ -1,0 +1,5 @@
+user_id	kind	amount
+UInt64	LowCardinality(String)	Int32
+1	add	10
+1	add	5
+1	remove	-3

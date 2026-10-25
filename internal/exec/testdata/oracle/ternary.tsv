@@ -1,0 +1,5 @@
+number	if(equals(modulo(number, 2), 0), \'even\', \'odd\')
+UInt64	String
+0	even
+1	odd
+2	even

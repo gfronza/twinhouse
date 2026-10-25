@@ -1,0 +1,3 @@
+replaceAll(\'aaa\', \'a\', \'bb\')	replaceAll(\'abc\', \'\', \'x\')	splitByChar(\'a\', \'banana\')	splitByString(\'\', \'abc\')	concat()	length(\'\')
+String	String	Array(String)	Array(String)	String	UInt64
+bbbbbb	abc	['b','n','n','']	['a','b','c']		0

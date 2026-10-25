@@ -1,0 +1,3 @@
+count(note)	count()	any(note)	min(note)	max(note)	groupArray(note)	uniqExact(note)	argMax(note, ts)	argMin(note, ts)
+UInt64	UInt64	Nullable(String)	Nullable(String)	Nullable(String)	Array(String)	UInt64	Nullable(String)	Nullable(String)
+6	9	first		z	['first','oops','r','big','','z']	6		z

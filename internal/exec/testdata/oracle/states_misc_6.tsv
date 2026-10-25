@@ -1,0 +1,11 @@
+name	type
+String	String
+tenant	String
+user_id	UInt64
+kind	LowCardinality(String)
+amount	Int32
+price	Float64
+ts	DateTime64(3)
+tags	Array(String)
+note	Nullable(String)
+flag	UInt8

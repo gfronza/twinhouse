@@ -1,0 +1,5 @@
+tenant	sumIf(price, equals(flag, 1))	avgIf(price, equals(flag, 1))	minIf(amount, greater(amount, 0))	maxIf(amount, less(amount, 0))	uniqExactIf(user_id, equals(flag, 0))	uniqIf(user_id, 1)
+String	Float64	Float64	Int32	Int32	UInt64	UInt64
+acme	-0.25	-0.08333333333333333	5	-3	2	2
+globex	100.08999999999999	50.044999999999995	1	-100	1	2
+initech	0	nan	42	0	1	1

@@ -1,0 +1,3 @@
+anyIf(tenant, greater(amount, 50))	anyLastIf(kind, less(amount, 0))	argMaxIf(kind, ts, equals(flag, 1))	countIf(and(equals(flag, 1), isNotNull(note)))
+String	String	String	UInt64
+globex	remove	add	5

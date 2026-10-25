@@ -1,0 +1,3 @@
+toUnixTimestamp(toDate(\'2024-01-01\'))	toUnixTimestamp(toDateTime64(\'2024-01-01 00:00:01.999\', 3))	toDateTime(toDate(\'2024-01-01\'))	toDateTime64(toDate(\'2024-01-01\'), 3)	toDate(toDateTime64(\'2024-01-01 23:59:59.9\', 1))
+UInt32	UInt32	DateTime	DateTime64(3)	Date
+1704067200	1704067201	2024-01-01 00:00:00	2024-01-01 00:00:00.000	2024-01-01

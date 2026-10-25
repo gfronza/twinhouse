@@ -1,0 +1,5 @@
+kind	c
+LowCardinality(String)	UInt64
+add	6
+remove	2
+recalc	1

@@ -1,0 +1,6 @@
+id	length(fs)	toString(fs)	equals(e, \'a\')	toString(e)	equals(u, \'61f0c404-5cb3-11e7-907b-a6006ad3dba0\')	arrayElement(m, \'k\')	arrayElement(m, \'nope\')	tp.x	tupleElement(tp, 2)	tupleElement(tp, \'y\')	arrayElement(an, 2)	isNull(arrayElement(an, 2))	lcn	toTypeName(lcn)	d32	toYear(d32)	toTypeName(dt)	toHour(dt)	b	not(b)	toTypeName(f32)	multiply(f32, 2)
+UInt8	UInt64	String	UInt8	String	UInt8	UInt16	UInt16	String	Int8	Int8	Nullable(Int32)	UInt8	LowCardinality(Nullable(String))	String	Date32	UInt16	String	UInt8	Bool	Bool	String	Float64
+1	4	ab	1	a	1	1	0	s	-1	-1	\N	1	\N	LowCardinality(Nullable(String))	1950-06-01	1950	DateTime64(3, \'Asia/Tokyo\')	9	true	false	Float32	2.200000047683716
+2	4	abcd	0	b	0	0	0		0	0	\N	1	\N	LowCardinality(Nullable(String))	2299-12-31	2299	DateTime64(3, \'Asia/Tokyo\')	9	false	true	Float32	0
+3	4		0	b	0	0	0		0	0	\N	1	\N	LowCardinality(Nullable(String))	1900-01-01	1900	DateTime64(3, \'Asia/Tokyo\')	9	true	false	Float32	0
+4	4		1	a	0	0	0	t	127	127	\N	1	x	LowCardinality(Nullable(String))	1900-01-01	1900	DateTime64(3, \'Asia/Tokyo\')	9	false	true	Float32	0

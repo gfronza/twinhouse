@@ -1,0 +1,4 @@
+tenant	user_id	ts
+String	UInt64	DateTime64(3)
+acme	1	2024-01-01 11:00:00.000
+acme	1	2024-01-02 09:30:00.123

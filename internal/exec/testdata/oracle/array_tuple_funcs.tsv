@@ -1,0 +1,3 @@
+arrayElement([1, 2, 3], 1)	arrayElement([1, 2, 3], -1)	arrayElement([1, 2, 3], 5)	arrayElement([\'a\'], 2)	has([1, 2], 2)	has([1, 2], 5)	has([\'a\', NULL], NULL)	length([1, 2])	empty([])	notEmpty([1])	tupleElement((1, \'a\'), 2)	tupleElement((1, \'x\'), 1)	tupleElement((5, 6), 2)	indexOf([5, 6, 7], 7)	toTypeName((1, \'a\'))	toTypeName([1, -1])	mixed	toTypeName([\'a\', NULL])
+UInt8	UInt8	UInt8	String	UInt8	UInt8	UInt8	UInt64	UInt8	UInt8	String	UInt8	UInt8	UInt64	String	String	Array(Float64)	String
+1	3	0		1	0	1	2	1	1	a	1	6	3	Tuple(UInt8, String)	Array(Int16)	[1,2.5]	Array(Nullable(String))
