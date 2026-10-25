@@ -1,0 +1,27 @@
+{
+	"meta":
+	[
+		{
+			"name": "a",
+			"type": "UInt8"
+		},
+		{
+			"name": "b",
+			"type": "String"
+		}
+	],
+
+	"data":
+	[
+
+	],
+
+	"rows": 0,
+
+	"statistics":
+	{
+		"elapsed": 0,
+		"rows_read": 0,
+		"bytes_read": 0
+	}
+}

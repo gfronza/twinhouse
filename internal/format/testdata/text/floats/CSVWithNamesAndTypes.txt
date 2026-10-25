@@ -1,0 +1,3 @@
+"a","b","c","d","e","f"
+"Float64","Float64","Float64","Float32","Float64","Float64"
+nan,inf,-inf,0.1,1e100,0.30000000000000004

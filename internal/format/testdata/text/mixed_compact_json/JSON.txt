@@ -1,0 +1,117 @@
+{
+	"meta":
+	[
+		{
+			"name": "n",
+			"type": "UInt64"
+		},
+		{
+			"name": "i",
+			"type": "Int64"
+		},
+		{
+			"name": "s",
+			"type": "String"
+		},
+		{
+			"name": "f",
+			"type": "Float64"
+		},
+		{
+			"name": "b",
+			"type": "Bool"
+		},
+		{
+			"name": "ns",
+			"type": "Nullable(String)"
+		},
+		{
+			"name": "a",
+			"type": "Array(Nullable(UInt8))"
+		},
+		{
+			"name": "t",
+			"type": "Tuple(UInt8, String)"
+		},
+		{
+			"name": "nt",
+			"type": "Tuple(x UInt8, y Array(String))"
+		},
+		{
+			"name": "m",
+			"type": "Map(String, Array(UInt8))"
+		},
+		{
+			"name": "d",
+			"type": "Date"
+		},
+		{
+			"name": "dt",
+			"type": "DateTime('UTC')"
+		},
+		{
+			"name": "dt64",
+			"type": "DateTime64(3, 'UTC')"
+		},
+		{
+			"name": "u",
+			"type": "UUID"
+		},
+		{
+			"name": "e",
+			"type": "Enum8('a' = 1, 'b' = 2)"
+		},
+		{
+			"name": "lc",
+			"type": "LowCardinality(String)"
+		},
+		{
+			"name": "fs",
+			"type": "FixedString(3)"
+		}
+	],
+
+	"data":
+	[
+		{
+			"n": 0,
+			"i": 0,
+			"s": "tab\there \"q\" 'sq' back\\slash \/",
+			"f": 1.5,
+			"b": true,
+			"ns": null,
+			"a": [1,null],
+			"t": [1,"x"],
+			"nt": [2,["p","q"]],
+			"m": {"k":[1,2]},
+			"d": "2024-01-02",
+			"dt": "2024-01-02 03:04:05",
+			"dt64": "2024-01-02 03:04:05.123",
+			"u": "00112233-4455-6677-8899-aabbccddeeff",
+			"e": "a",
+			"lc": "low",
+			"fs": "ab\u0000"
+		},
+		{
+			"n": 18446744073709551615,
+			"i": -9223372036854775808,
+			"s": "line\nbreak,comma",
+			"f": -0.25,
+			"b": false,
+			"ns": "x",
+			"a": [],
+			"t": [255,""],
+			"nt": [0,[]],
+			"m": {},
+			"d": "1970-01-01",
+			"dt": "1970-01-01 00:00:00",
+			"dt64": "2299-12-31 23:59:59.999",
+			"u": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+			"e": "b",
+			"lc": "",
+			"fs": "abc"
+		}
+	],
+
+	"rows": 2
+}

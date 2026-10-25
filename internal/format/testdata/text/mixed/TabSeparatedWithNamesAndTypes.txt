@@ -1,0 +1,4 @@
+n	i	s	f	b	ns	a	t	nt	m	d	dt	dt64	u	e	lc	fs
+UInt64	Int64	String	Float64	Bool	Nullable(String)	Array(Nullable(UInt8))	Tuple(UInt8, String)	Tuple(x UInt8, y Array(String))	Map(String, Array(UInt8))	Date	DateTime(\'UTC\')	DateTime64(3, \'UTC\')	UUID	Enum8(\'a\' = 1, \'b\' = 2)	LowCardinality(String)	FixedString(3)
+0	0	tab\there "q" \'sq\' back\\slash /	1.5	true	\N	[1,NULL]	(1,'x')	(2,['p','q'])	{'k':[1,2]}	2024-01-02	2024-01-02 03:04:05	2024-01-02 03:04:05.123	00112233-4455-6677-8899-aabbccddeeff	a	low	ab\0
+18446744073709551615	-9223372036854775808	line\nbreak,comma	-0.25	false	x	[]	(255,'')	(0,[])	{}	1970-01-01	1970-01-01 00:00:00	2299-12-31 23:59:59.999	ffffffff-ffff-ffff-ffff-ffffffffffff	b		abc

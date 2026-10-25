@@ -1,0 +1,27 @@
+{
+	"meta":
+	[
+		{
+			"name": "number",
+			"type": "UInt64"
+		}
+	],
+
+	"data":
+	[
+		[0],
+		[1],
+		[2]
+	],
+
+	"rows": 3,
+
+	"rows_before_limit_at_least": 3,
+
+	"statistics":
+	{
+		"elapsed": 0,
+		"rows_read": 0,
+		"bytes_read": 0
+	}
+}

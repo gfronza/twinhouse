@@ -1,0 +1,50 @@
+{
+	"meta":
+	[
+		{
+			"name": "a",
+			"type": "Float64"
+		},
+		{
+			"name": "b",
+			"type": "Float64"
+		},
+		{
+			"name": "c",
+			"type": "Float64"
+		},
+		{
+			"name": "d",
+			"type": "Float32"
+		},
+		{
+			"name": "e",
+			"type": "Float64"
+		},
+		{
+			"name": "f",
+			"type": "Float64"
+		}
+	],
+
+	"data":
+	[
+		{
+			"a": null,
+			"b": null,
+			"c": null,
+			"d": 0.1,
+			"e": 1e100,
+			"f": 0.30000000000000004
+		}
+	],
+
+	"rows": 1,
+
+	"statistics":
+	{
+		"elapsed": 0,
+		"rows_read": 0,
+		"bytes_read": 0
+	}
+}

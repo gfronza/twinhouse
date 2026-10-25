@@ -1,0 +1,88 @@
+{
+	"meta":
+	[
+		{
+			"name": "n",
+			"type": "UInt64"
+		},
+		{
+			"name": "i",
+			"type": "Int64"
+		},
+		{
+			"name": "s",
+			"type": "String"
+		},
+		{
+			"name": "f",
+			"type": "Float64"
+		},
+		{
+			"name": "b",
+			"type": "Bool"
+		},
+		{
+			"name": "ns",
+			"type": "Nullable(String)"
+		},
+		{
+			"name": "a",
+			"type": "Array(Nullable(UInt8))"
+		},
+		{
+			"name": "t",
+			"type": "Tuple(UInt8, String)"
+		},
+		{
+			"name": "nt",
+			"type": "Tuple(x UInt8, y Array(String))"
+		},
+		{
+			"name": "m",
+			"type": "Map(String, Array(UInt8))"
+		},
+		{
+			"name": "d",
+			"type": "Date"
+		},
+		{
+			"name": "dt",
+			"type": "DateTime('UTC')"
+		},
+		{
+			"name": "dt64",
+			"type": "DateTime64(3, 'UTC')"
+		},
+		{
+			"name": "u",
+			"type": "UUID"
+		},
+		{
+			"name": "e",
+			"type": "Enum8('a' = 1, 'b' = 2)"
+		},
+		{
+			"name": "lc",
+			"type": "LowCardinality(String)"
+		},
+		{
+			"name": "fs",
+			"type": "FixedString(3)"
+		}
+	],
+
+	"data":
+	[
+		["0", "0", "tab\there \"q\" 'sq' back\\slash \/", 1.5, true, null, [1,null], [1,"x"], {"x":2,"y":["p","q"]}, {"k":[1,2]}, "2024-01-02", "2024-01-02 03:04:05", "2024-01-02 03:04:05.123", "00112233-4455-6677-8899-aabbccddeeff", "a", "low", "ab\u0000"],
+		["18446744073709551615", "-9223372036854775808", "line\nbreak,comma", -0.25, false, "x", [], [255,""], {"x":0,"y":[]}, {}, "1970-01-01", "1970-01-01 00:00:00", "2299-12-31 23:59:59.999", "ffffffff-ffff-ffff-ffff-ffffffffffff", "b", "", "abc"]
+	],
+
+	"rows": 2,
+
+	"statistics":
+	{
+		"elapsed": 0,
+		"rows_read": 0,
+		"bytes_read": 0
+	}
+}
