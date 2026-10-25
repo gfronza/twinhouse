@@ -1,0 +1,409 @@
+1+2	plus(1, 2)
+1.50	1.5
+1e3	1000.
+0x1F	31
+1_000	1000
+inf	inf
+nan	nan
+-inf	-inf
+-1	-1
+- 1	-1
+-x	negate(x)
+'a''b'	'a\'b'
+'a\nb'	'a\nb'
+'a\\b'	'a\\b'
+'tab\there'	'tab\there'
+NULL	NULL
+true	true
+false	false
+[1, 2]	[1, 2]
+[]	[]
+(1, 'a')	(1, 'a')
+()	()
+tuple()	()
+tuple(1)	(1)
+(1,)	(1)
+a || b	concat(a, b)
+s || 'x' || s	concat(s, 'x', s)
+arr[1]	arrayElement(arr, 1)
+tup.1	tupleElement(tup, 1)
+tup.2	tupleElement(tup, 2)
+CAST(x AS String)	CAST(x, 'String')
+CAST(x, 'String')	CAST(x, 'String')
+x::String	CAST(x, 'String')
+INTERVAL 1 DAY	toIntervalDay(1)
+INTERVAL '1' DAY	toIntervalDay('1')
+INTERVAL 1 MINUTE	toIntervalMinute(1)
+count(DISTINCT x)	countDistinct(x)
+count()	count()
+count(*)	count()
+COUNT(*)	COUNT()
+CASE WHEN c THEN a ELSE b END	multiIf(c, a, b)
+CASE WHEN c THEN a END	multiIf(c, a, NULL)
+CASE x WHEN 1 THEN 2 END	caseWithExpression(x, 1, 2, NULL)
+CASE x WHEN 1 THEN 2 ELSE 3 END	caseWithExpression(x, 1, 2, 3)
+a BETWEEN 1 AND 2	and(greaterOrEquals(a, 1), lessOrEquals(a, 2))
+a NOT BETWEEN 1 AND 2	or(less(a, 1), greater(a, 2))
+n IS NULL	isNull(n)
+n IS NOT NULL	isNotNull(n)
+NOT a	not(a)
+NOT NOT a	not(not(a))
+x IN (1,2)	in(x, (1, 2))
+x IN (1)	in(x, 1)
+x IN 1	in(x, 1)
+x NOT IN (1,2)	notIn(x, (1, 2))
+(x, a) IN ((1,2),(3,4))	in((x, a), ((1, 2), (3, 4)))
+quantile(0.9)(x)	quantile(0.9)(x)
+a AND b AND c	and(a, b, c)
+a AND b OR c	or(and(a, b), c)
+a OR b OR c	or(a, b, c)
+(a OR b) AND c	and(or(a, b), c)
+a = 1	equals(a, 1)
+a == 1	equals(a, 1)
+a != 1	notEquals(a, 1)
+a <> 1	notEquals(a, 1)
+a < 1	less(a, 1)
+a <= 1	lessOrEquals(a, 1)
+a > 1	greater(a, 1)
+a >= 1	greaterOrEquals(a, 1)
+a + b * x	plus(a, multiply(b, x))
+(a + b) * x	multiply(plus(a, b), x)
+a - b - x	minus(minus(a, b), x)
+a - (b - x)	minus(a, minus(b, x))
+a / b	divide(a, b)
+a % b	modulo(a, b)
+a DIV b	intDiv(a, b)
+a MOD b	modulo(a, b)
+s LIKE 'x%'	like(s, 'x%')
+s NOT LIKE 'x%'	notLike(s, 'x%')
+s ILIKE 'x%'	ilike(s, 'x%')
+s NOT ILIKE 'x%'	notILike(s, 'x%')
+arrayMap(z -> z + 1, arr)	arrayMap(lambda(tuple(z), plus(z, 1)), arr)
+arrayMap((z, w) -> z + w, arr, arr)	arrayMap(lambda(tuple(z, w), plus(z, w)), arr, arr)
+sum(x)	sum(x)
+sumIf(x, a > 1)	sumIf(x, greater(a, 1))
+argMax(s, ts)	argMax(s, ts)
+toDateTime64('2020-01-01', 9)	toDateTime64('2020-01-01', 9)
+if(c, 1, 2)	if(c, 1, 2)
+c ? 1 : 2	if(c, 1, 2)
+t.x	x
+1 + .5	plus(1, 0.5)
+0.5	0.5
+[x, 1]	[x, 1]
+(x, 1)	(x, 1)
+tuple(x, 1)	(x, 1)
+tuple(x)	(x)
+[[1,2],[3]]	[[1, 2], [3]]
+(1, (2, 3))	(1, (2, 3))
+[(1, 'a')]	[(1, 'a')]
+[NULL, 1]	[NULL, 1]
+(NULL, 1)	(NULL, 1)
+array(1, 2)	[1, 2]
+-(1)	negate(1)
+-1.5	-1.5
+-0x1F	-31
+- -1	negate(-1)
+-(-1)	negate(-1)
+1 - -1	minus(1, -1)
+-(x)	negate(x)
+-arr[1]	negate(arrayElement(arr, 1))
+(x AS y) + 1	plus(y, 1)
+18446744073709551615	18446744073709551615
+18446744073709551616	18446744073709552000.
+1e308	1e308
+0.1	0.1
+1e-5	0.00001
+123456789.123	123456789.123
+1.0	1.
+100.0	100.
+0b101	5
+1E3	1000.
+1e+3	1000.
+0.000001	0.000001
+1e21	1e21
+1e20	100000000000000000000.
+123456789012345678901234567890	1.2345678901234568e29
+0.30000000000000004	0.30000000000000004
+3.14159	3.14159
+'\x41'	'A'
+'a\0b'	'a\0b'
+'é'	'é'
+'a\tb'	'a\tb'
+'\r'	'\r'
+'\b\f'	'\b\f'
+'a"b'	'a"b'
+'\\'	'\\'
+'\''	'\''
+INTERVAL '1 day'	toIntervalDay(1)
+INTERVAL 2 HOUR	toIntervalHour(2)
+INTERVAL 1 WEEK	toIntervalWeek(1)
+INTERVAL 3 MONTH	toIntervalMonth(3)
+INTERVAL 1 QUARTER	toIntervalQuarter(1)
+INTERVAL 1 YEAR	toIntervalYear(1)
+INTERVAL 1 SECOND	toIntervalSecond(1)
+INTERVAL 5 MILLISECOND	toIntervalMillisecond(5)
+INTERVAL x DAY	toIntervalDay(x)
+NOT x IN (1)	not(in(x, 1))
+NOT x = 1	not(equals(x, 1))
+-x * 2	multiply(negate(x), 2)
+x::String::UInt8	CAST(CAST(x, 'String'), 'UInt8')
+x = 1 = 2	equals(equals(x, 1), 2)
+a < b < x	less(less(a, b), x)
+1 < 2 = 1	equals(less(1, 2), 1)
+a + b || s	concat(plus(a, b), s)
+s || a + b	concat(s, plus(a, b))
+a = 1 AND NOT b = 2	and(equals(a, 1), not(equals(b, 2)))
+x IN (SELECT 1)	in(x, _subquery_1)
+x GLOBAL IN (1,2)	globalIn(x, (1, 2))
+x GLOBAL NOT IN (1,2)	globalNotIn(x, (1, 2))
+toString(x)	toString(x)
+lower(s)	lower(s)
+`x`	x
+"x"	x
+t.`x`	x
+default.t.x	x
+countIf(a != 1)	countIf(notEquals(a, 1))
+uniqExact(s)	uniqExact(s)
+sumState(x)	sumState(x)
+any(x)	any(x)
+quantiles(0.5, 0.9)(x)	quantiles(0.5, 0.9)(x)
+a = b IS NULL	isNull(equals(a, b))
+a BETWEEN 1 AND 2 = 1	and(greaterOrEquals(a, 1), lessOrEquals(a, equals(2, 1)))
+a = 1 IS NULL	isNull(equals(a, 1))
+s LIKE s = c	equals(like(s, s), c)
+x IN (1) = 1	equals(in(x, 1), 1)
+a + 1 IN (1)	in(plus(a, 1), 1)
+s || s = s	equals(concat(s, s), s)
+a::Int8 + 1	plus(CAST(a, 'Int8'), 1)
+-1::String	CAST('-1', 'String')
+NOT n IS NULL	not(isNull(n))
+a AND b BETWEEN 1 AND 2	and(a, and(greaterOrEquals(b, 1), lessOrEquals(b, 2)))
+x BETWEEN 1 AND 2 AND a	and(and(greaterOrEquals(x, 1), lessOrEquals(x, 2)), a)
+x BETWEEN 1 + 1 AND 2 * 3	and(greaterOrEquals(x, plus(1, 1)), lessOrEquals(x, multiply(2, 3)))
+a = 1 OR b = 2 AND c	or(equals(a, 1), and(equals(b, 2), c))
+a < b IS NULL	isNull(less(a, b))
+a + b + x	plus(plus(a, b), x)
+a * b * x	multiply(multiply(a, b), x)
+a AND (b AND c)	and(a, and(b, c))
+(a AND b) AND c	and(and(a, b), c)
+a OR (b OR c)	or(a, or(b, c))
+tup.1 + 1	plus(tupleElement(tup, 1), 1)
+(tup).1	tupleElement(tup, 1)
+tuple(1,2).1	tupleElement((1, 2), 1)
+(1,2).1	tupleElement((1, 2), 1)
+[1,2][1]	arrayElement([1, 2], 1)
+arr[1 + 1]	arrayElement(arr, plus(1, 1))
+ts - INTERVAL 1 DAY	minus(ts, toIntervalDay(1))
+INTERVAL 1 DAY + ts	plus(toIntervalDay(1), ts)
+DATE '2020-01-01'	toDate('2020-01-01')
+TIMESTAMP '2020-01-01 00:00:00'	toDateTime('2020-01-01 00:00:00')
+s REGEXP 'x'	match(s, 'x')
+EXTRACT(DAY FROM ts)	toDayOfMonth(ts)
+POSITION('a' IN s)	position(s, 'a')
+substring(s FROM 1 FOR 2)	substring(s, 1, 2)
+TRIM(BOTH ' ' FROM s)	trimBoth(s, ' ')
+trim(s)	trimBoth(s)
+sum(DISTINCT x)	sumDistinct(x)
+uniq(a, b)	uniq(a, b)
+count(DISTINCT a, b)	countDistinct(a, b)
+countIf(DISTINCT x, a > 1)	countIfDistinct(x, greater(a, 1))
+row_number() OVER (PARTITION BY a ORDER BY b)	row_number() OVER (PARTITION BY a ORDER BY b ASC)
+sum(x) OVER ()	sum(x) OVER ()
+a > 1 ? 'y' : 'n'	if(greater(a, 1), 'y', 'n')
+NOT a OR b	or(not(a), b)
+-a - -b	minus(negate(a), negate(b))
+a IS NULL AND b	and(isNull(a), b)
+x IN (SELECT 1) AND a	and(in(x, _subquery_1), a)
+x IN ()	in(x, ())
+x IN (1, 2, 3) OR a NOT IN (4)	or(in(x, (1, 2, 3)), notIn(a, 4))
+-x IN (1)	in(negate(x), 1)
+a NOT IN (SELECT 1)	notIn(a, _subquery_1)
+NULL IS NULL	isNull(NULL)
+not(a)	not(a)
+or(a, b)	or(a, b)
+equals(a, 1)	equals(a, 1)
+isNull(n)	isNull(n)
+negate(1)	negate(1)
+(a, b) = (1, 2)	equals((a, b), (1, 2))
+a * -1	multiply(a, -1)
+a - 1 - 1	minus(minus(a, 1), 1)
+2 * (3 + 4) - 5 / 6 % 7	minus(multiply(2, plus(3, 4)), modulo(divide(5, 6), 7))
+ifNull(n, 'x')	ifNull(n, 'x')
+coalesce(n, '')	coalesce(n, '')
+map('a', 1)	map('a', 1)
+m['a']	arrayElement(m, 'a')
+toStartOfDay(ts)	toStartOfDay(ts)
+now64(9)	now64(9)
+toDateTime64(now(), 9, 'UTC')	toDateTime64(now(), 9, 'UTC')
+dateDiff('second', ts, now())	dateDiff('second', ts, now())
+arrayJoin(arr)	arrayJoin(arr)
+groupArray(10)(x)	groupArray(10)(x)
+quantileTDigest(0.5)(x)	quantileTDigest(0.5)(x)
+sumIf(x, s = 'a' AND b > 2)	sumIf(x, and(equals(s, 'a'), greater(b, 2)))
+avgOrNull(x)	avgOrNull(x)
+1::UInt8	CAST('1', 'UInt8')
+'a'::String	CAST('a', 'String')
+NULL::Nullable(String)	CAST(NULL, 'Nullable(String)')
+[1,2]::Array(UInt8)	CAST('[1,2]', 'Array(UInt8)')
+(1,2)::Tuple(UInt8, UInt8)	CAST('(1,2)', 'Tuple(UInt8, UInt8)')
+x::UInt64::String	CAST(CAST(x, 'UInt64'), 'String')
+1.50::Float64	CAST('1.50', 'Float64')
+CAST('1' AS UInt8)	CAST('1', 'UInt8')
+CAST(1.50 AS Float64)	CAST(1.5, 'Float64')
+(SELECT 1)	_subquery_1
+(SELECT 1) + (SELECT 2)	plus(_subquery_1, _subquery_2)
+ltrim(s)	trimLeft(s)
+trim(TRAILING 'x' FROM s)	trimRight(s, 'x')
+TRIM(s)	trimBoth(s)
+EXTRACT(SECOND FROM ts)	toSecond(ts)
+EXTRACT(MINUTE FROM ts)	toMinute(ts)
+EXTRACT(HOUR FROM ts)	toHour(ts)
+EXTRACT(MONTH FROM ts)	toMonth(ts)
+EXTRACT(QUARTER FROM ts)	toQuarter(ts)
+EXTRACT(YEAR FROM ts)	toYear(ts)
+extract(s, 'x')	extract(s, 'x')
+INTERVAL 2 DAYS	toIntervalDay(2)
+INTERVAL 1 day	toIntervalDay(1)
+INTERVAL '2 hours'	toIntervalHour(2)
+INTERVAL (1 + 1) DAY	toIntervalDay(plus(1, 1))
+INTERVAL 1 + 1 DAY	toIntervalDay(plus(1, 1))
+x + 1 AS q	q
+a AND b ? 1 : 2	if(and(a, b), 1, 2)
+substring(s, 1, 2)	substring(s, 1, 2)
+SUBSTRING(s FROM 2)	substring(s, 2)
+position(s, 'a')	position(s, 'a')
+POSITION(s, 'a')	position(s, 'a')
+-1 + 2	plus(-1, 2)
+-1.5e3	-1500.
+-(1 + 2)	negate(plus(1, 2))
+NOT 1	not(1)
+(((x)))	x
+((x, a))	(x, a)
+date_diff('second', ts, ts)	dateDiff('second', ts, ts)
+COALESCE(n, 'a')	COALESCE(n, 'a')
+If(c, 1, 2)	If(c, 1, 2)
+Count()	Count()
+t.x + 1	plus(x, 1)
+default.t.x * 2	multiply(x, 2)
+(x + 1 AS q) * q	multiply(q, q)
+a AND b AND (c OR a)	and(a, b, or(c, a))
+(a AND b) AND c AND x	and(and(a, b), c, x)
+s || (s || s)	concat(s, concat(s, s))
+(s || s) || s	concat(concat(s, s), s)
+NOT (a) = 1	equals(not(a), 1)
+NOT (x) IN (1)	in(not(x), 1)
+not(a) AND b	and(not(a), b)
+argMax(s, ts) AS latest	latest
+countIf(n != 'remove')	countIf(notEquals(n, 'remove'))
+toDateTime64('2024-01-01 00:00:00', 9) BETWEEN ts AND ts	and(greaterOrEquals(toDateTime64('2024-01-01 00:00:00', 9), ts), lessOrEquals(toDateTime64('2024-01-01 00:00:00', 9), ts))
+(x, a) IN [(1, 2)]	in((x, a), [(1, 2)])
+ts + INTERVAL 1 HOUR - INTERVAL 30 MINUTE	minus(plus(ts, toIntervalHour(1)), toIntervalMinute(30))
+CASE WHEN a > 1 THEN 'big' WHEN a > 0 THEN 'small' ELSE 'zero' END	multiIf(greater(a, 1), 'big', greater(a, 0), 'small', 'zero')
+multiIf(a > 1, 'x', 'y')	multiIf(greater(a, 1), 'x', 'y')
+tupleElement(tup, 2)	tupleElement(tup, 2)
+toTypeName(1)	toTypeName(1)
+[1, 2, 3][2]	arrayElement([1, 2, 3], 2)
+-[1, 2][1]	negate(arrayElement([1, 2], 1))
+arrayFilter(x -> x > 1, arr)[1]	arrayElement(arrayFilter(lambda(tuple(x), greater(x, 1)), arr), 1)
+length(arr) > 0 AND notEmpty(s)	and(greater(length(arr), 0), notEmpty(s))
+coalesce(n, s, 'default')	coalesce(n, s, 'default')
+toYYYYMM(ts) = 202401	equals(toYYYYMM(ts), 202401)
+formatDateTime(ts, '%Y-%m-%d')	formatDateTime(ts, '%Y-%m-%d')
+replaceAll(s, 'a', 'b')	replaceAll(s, 'a', 'b')
+startsWith(s, 'x') OR endsWith(s, 'y')	or(startsWith(s, 'x'), endsWith(s, 'y'))
+x % 2 = 0	equals(modulo(x, 2), 0)
+x / 2 * 3 % 4	modulo(multiply(divide(x, 2), 3), 4)
+1 = 1	equals(1, 1)
+'it''s'	'it\'s'
+'line1\nline2'	'line1\nline2'
+-0.0	-0.
+1.5e-7	1.5e-7
+-1e21	-1e21
+2.5e20	250000000000000000000.
+- 1::String	CAST('- 1', 'String')
+[1, -2]::Array(Int8)	CAST('[1, -2]', 'Array(Int8)')
+[ 1 , 2 ]::Array(UInt8)	CAST('[ 1 , 2 ]', 'Array(UInt8)')
+true::String	CAST(true, 'String')
+[[1], [2]]::Array(Array(UInt8))	CAST('[[1], [2]]', 'Array(Array(UInt8))')
+(1, 'a')::Tuple(UInt8, String)	CAST('(1, \'a\')', 'Tuple(UInt8, String)')
+[x]::Array(UInt32)	CAST([x], 'Array(UInt32)')
+NULL::Nullable(UInt8)	CAST(NULL, 'Nullable(UInt8)')
+1::UInt8::String	CAST(CAST('1', 'UInt8'), 'String')
+inf::Float64	CAST(inf, 'Float64')
+a IS NOT NULL::Float64	CAST(isNotNull(a), 'Float64')
+a IS NULL::String	CAST(isNull(a), 'String')
+a + b IS NULL::String	CAST(isNull(plus(a, b)), 'String')
+a BETWEEN 1 AND 2::String	and(greaterOrEquals(a, 1), lessOrEquals(a, CAST('2', 'String')))
+SUM(x) + Count()	plus(SUM(x), Count())
++1	1
+toTypeName(+1)	toTypeName(1)
++(-1)	-1
++ -1	negate(1)
++-1	negate(1)
+-+1	negate(1)
+-(+1)	negate(1)
+1 + +2	plus(1, 2)
+1 - +2	minus(1, 2)
++x	x
++[1]	[1]
++(1, 2)	(1, 2)
++ +1	1
+[1, 2.5]	[1., 2.5]
+toTypeName([1, 2.5])	toTypeName([1., 2.5])
+[[1], [2.5]]	[[1.], [2.5]]
+[[1, 2.5], [3]]	[[1., 2.5], [3.]]
+[[1], [], [2.5]]	[[1], [], [2.5]]
+[1, -2, 2.5]	[1., -2., 2.5]
+[1.5, 2]	[1.5, 2.]
+[1, NULL, 2.5]	[1., NULL, 2.5]
+[1, x, 2.5]	[1, x, 2.5]
+[1, toUInt8(2), 2.5]	[1, toUInt8(2), 2.5]
+[-1, 2.5]	[-1., 2.5]
+[1, inf]	[1., inf]
+[1e30, 1]	[1e30, 1.]
+[1, 1e-7]	[1., 1e-7]
+array(1, 2.5)	[1, 2.5]
+[1, 1 + 1, 2.5]	[1, plus(1, 1), 2.5]
+[(1, 'a'), (2.5, 'b')]	[(1, 'a'), (2.5, 'b')]
+[(1, 2.5), (2, 3)]	[(1, 2.5), (2, 3)]
+(1, 2.5)	(1, 2.5)
+[1, 2.5][1]	arrayElement([1., 2.5], 1)
+[1, 2.5] = [1, 2]	equals([1., 2.5], [1, 2])
+1 IN (1, 2.5)	in(1, (1, 2.5))
+((1, 2.5), [1, 2.5])	((1, 2.5), [1., 2.5])
+((1, [1, 2.5]))	(1, [1., 2.5])
+[true, false]	[1, 0]
+[1, true]	[1, 1]
+(1, true)	(1, 1)
+[x, true]	[x, true]
+(x, true)	(x, true)
+((1, 'a'))	((1, 'a'))
+(((1, 'a')))	((1, 'a'))
+((1))	1
+((1, 2))	((1, 2))
+((1, x))	(1, x)
+((1, true))	((1, 1))
+((1, -2))	((1, -2))
+((1, +2))	((1, 2))
+((1, [1, 2]))	(1, [1, 2])
+((1, NULL))	((1, NULL))
+((1, 'a', (2, 3)))	((1, 'a', (2, 3)))
+((1, []))	(1, [])
+((1, 1 + 1))	(1, plus(1, 1))
+((1, toUInt8(1)))	(1, toUInt8(1))
+((1,))	(1)
+(((1,),))	((1))
+(((1, 2), (3, 4)))	(((1, 2), (3, 4)))
+((-1, 2.5))	((-1, 2.5))
+((1, inf))	((1, inf))
+((1, -inf))	((1, -inf))
+((1, 0x10))	((1, 16))
+((1, 1e3))	((1, 1000.))
+(('a', 'b'))	(('a', 'b'))
+((tuple(1, 2)))	(1, 2)
+tuple((1, 2))	((1, 2))
+tuple(1, true)	(1, true)
+toTypeName(((1, 'a')))	toTypeName(((1, 'a')))
+((1, 'a')).1	tupleElement(((1, 'a')), 1)
+(x, 1) IN ((1, 1))	in((x, 1), ((1, 1)))
+((1, 1::UInt8))	(1, CAST('1', 'UInt8'))
