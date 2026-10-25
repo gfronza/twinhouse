@@ -13,3 +13,6 @@ coverage*.txt
 .DS_Store
 .idea/
 .vscode/
+
+# Local session notes
+/.project/
