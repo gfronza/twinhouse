@@ -1,0 +1,104 @@
+UInt8 | Int16
+UInt8 | Int8
+UInt16 | Int8
+UInt16 | Int16
+UInt32 | Int32
+UInt32 | Int8
+UInt64 | Int8
+UInt64 | Int64
+UInt64 | UInt8
+Int64 | UInt32
+UInt8 | Float32
+UInt16 | Float32
+UInt32 | Float32
+Int32 | Float32
+UInt64 | Float64
+Int64 | Float32
+Int64 | Float64
+UInt32 | Float64
+Float32 | Float64
+UInt16 | Int16 | Float32
+UInt8 | Int8 | Float32
+UInt8 | String
+String | FixedString(3)
+FixedString(3) | FixedString(4)
+FixedString(3) | FixedString(3)
+Date | DateTime
+Date | DateTime64(3)
+DateTime | DateTime64(3)
+DateTime64(3) | DateTime64(6)
+DateTime64(6) | DateTime64(3)
+DateTime('UTC') | DateTime
+DateTime | DateTime('UTC')
+DateTime('UTC') | DateTime('Europe/Berlin')
+DateTime64(3, 'UTC') | DateTime64(3)
+DateTime('Europe/Berlin') | DateTime64(3, 'UTC')
+DateTime('Europe/Berlin') | Date
+Date | DateTime('Europe/Berlin')
+DateTime64(6, 'UTC') | DateTime('Europe/Berlin')
+Date | Date32
+Date32 | DateTime
+Date32 | DateTime('Asia/Tokyo')
+Date32 | DateTime64(3)
+Date | String
+Date | UInt16
+Bool | UInt8
+UInt8 | Bool
+Bool | Bool
+Bool | Int8
+Bool | UInt16
+Bool | Float64
+UUID | String
+UUID | UUID
+UUID | Nullable(UUID)
+Nullable(UInt8) | Int16
+Nullable(UInt8) | Nullable(String)
+Nullable(Nothing) | UInt8
+UInt8 | Nullable(Nothing)
+Nullable(Nothing) | Nullable(Nothing)
+Nullable(Nothing) | Array(UInt8)
+Array(UInt8) | Array(Int16)
+Array(UInt8) | Array(Nullable(Nothing))
+Array(UInt8) | UInt8
+Array(String) | Array(Nothing)
+Array(Array(UInt8)) | Array(Array(Int8))
+Tuple(UInt8, String) | Tuple(Int16, String)
+Tuple(a UInt8) | Tuple(b UInt8)
+Tuple(a UInt8) | Tuple(a Int8)
+Tuple(UInt8) | Tuple(UInt8, UInt8)
+Tuple(a UInt8, b String) | Tuple(UInt8, String)
+Tuple(UInt8, Nullable(Nothing)) | Tuple(UInt16, String)
+Map(String, UInt8) | Map(String, Int16)
+Map(String,UInt8) | Map(String, Nullable(Nothing))
+Map(UInt8, UInt8) | Map(UInt16, UInt8)
+LowCardinality(String) | String
+LowCardinality(String) | LowCardinality(String)
+LowCardinality(String) | Nullable(String)
+LowCardinality(Nullable(String)) | String
+LowCardinality(String) | Nullable(Nothing)
+LowCardinality(String) | LowCardinality(Nullable(String))
+LowCardinality(String) | FixedString(2)
+LowCardinality(String) | LowCardinality(FixedString(2))
+Nullable(String) | LowCardinality(String)
+Enum8('a'=1) | Enum8('a'=1)
+Enum8('a'=1) | Enum8('b'=2)
+Enum8('a'=1) | String
+Enum8('a'=1) | FixedString(2)
+Enum8('a'=1) | Enum16('a'=1)
+Enum8('a'=1) | Int8
+Enum8('a'=1) | UInt8
+Enum8('a'=1, 'b'=2) | Enum8('b'=2, 'a'=1)
+Enum8('a'=1) | Enum8('a'=1, 'b'=2)
+String | String
+Float64 | String
+Int8 | Int64
+Int16 | UInt16
+Int8 | UInt8
+Int8 | UInt32
+Int64 | UInt8
+Int32 | UInt32
+UInt8 | UInt16 | UInt32
+Int8 | UInt16 | Float64
+SimpleAggregateFunction(sum, UInt64) | UInt64
+AggregateFunction(sum, UInt64) | AggregateFunction(sum, UInt64)
+AggregateFunction(sum, UInt64) | UInt64

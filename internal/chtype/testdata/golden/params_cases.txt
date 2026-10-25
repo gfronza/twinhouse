@@ -1,0 +1,359 @@
+String ||| hello
+String ||| PY:"a\\tb"
+String ||| PY:"a\\nb"
+String ||| PY:"a\\\\b"
+String ||| PY:"a\\'b"
+String ||| PY:"a'b"
+String ||| PY:"a\\0b"
+String ||| PY:"a\\x41b"
+String ||| PY:"a\\x4a\\x4A"
+String ||| PY:"a\\qb"
+String ||| PY:"a\\"
+String ||| PY:"a\tb"
+String ||| PY:"a\nb"
+String ||| PY:"\\N"
+String ||| PY:""
+String ||| PY:"a\\bc\\fd\\re"
+String ||| PY:"a\\Nb"
+String ||| PY:"'quoted'"
+String ||| PY:"\\a\\v\\e\\\"\\/\\u0041\\X41\\1\\$\\`\\="
+String ||| PY:"\\x4"
+String ||| PY:"\\r\\n"
+String ||| PY:"é\xff"
+String ||| PY:"[1,2]"
+Nullable(String) ||| PY:"\\N"
+Nullable(String) ||| PY:""
+Nullable(String) ||| PY:"NULL"
+Nullable(String) ||| PY:"\\\\N"
+Nullable(UInt8) ||| PY:"\\N"
+Nullable(UInt8) ||| PY:""
+Nullable(UInt8) ||| PY:"NULL"
+Nullable(UInt8) ||| PY:"5"
+LowCardinality(Nullable(String)) ||| PY:"\\N"
+LowCardinality(String) ||| PY:"x\\ty"
+FixedString(3) ||| ab
+FixedString(3) ||| abcd
+FixedString(3) ||| abc
+FixedString(3) ||| PY:"a\\0"
+UInt8 ||| 5
+UInt8 ||| 0
+UInt8 ||| 255
+UInt8 ||| 256
+UInt8 ||| 300
+UInt8 ||| -1
+UInt8 ||| +5
+UInt8 ||| 05
+UInt8 ||| 5.0
+UInt8 ||| 1e2
+UInt8 ||| 0x10
+UInt8 ||| PY:" 5"
+UInt8 ||| PY:"5 "
+UInt8 ||| PY:""
+UInt8 ||| abc
+UInt8 ||| 99999999999999999999
+UInt16 ||| 65535
+UInt16 ||| 65536
+UInt32 ||| 4294967296
+UInt64 ||| 18446744073709551615
+UInt64 ||| 18446744073709551616
+UInt64 ||| 99999999999999999999
+UInt64 ||| -1
+UInt32 ||| -0
+Int8 ||| -128
+Int8 ||| 127
+Int8 ||| 128
+Int8 ||| -129
+Int8 ||| 300
+Int16 ||| 32768
+Int32 ||| -2147483649
+Int32 ||| +5
+Int64 ||| 9223372036854775807
+Int64 ||| 9223372036854775808
+Int64 ||| -9223372036854775808
+Int64 ||| -9223372036854775809
+Int64 ||| 99999999999999999999
+Int64 ||| 1.5
+Int64 ||| --1
+Int64 ||| -
+Int64 ||| +
+Int64 ||| -0
+Int16 ||| 007
+Float64 ||| 1.5
+Float64 ||| inf
+Float64 ||| -inf
+Float64 ||| +inf
+Float64 ||| nan
+Float64 ||| NaN
+Float64 ||| Inf
+Float64 ||| INF
+Float64 ||| infinity
+Float64 ||| -nan
+Float64 ||| 1e10
+Float64 ||| 1E10
+Float64 ||| .5
+Float64 ||| 5.
+Float64 ||| 1e
+Float64 ||| 0x1p3
+Float64 ||| 1_000
+Float64 ||| PY:"1e400"
+Float64 ||| -0
+Float64 ||| 12345678901234567890
+Float64 ||| 0.1
+Float64 ||| +1.5
+Float64 ||| 1.5e+3
+Float64 ||| 1.5E-3
+Float64 ||| 00.5
+Float64 ||| -.5
+Float64 ||| 1.
+Float64 ||| -
+Float64 ||| infx
+Float64 ||| nana
+Float64 ||| PY:""
+Float64 ||| abc
+Float64 ||| PY:" 1"
+Float32 ||| 0.1
+Float32 ||| 1e40
+Float32 ||| 16777217
+Bool ||| true
+Bool ||| false
+Bool ||| 1
+Bool ||| 0
+Bool ||| TRUE
+Bool ||| True
+Bool ||| t
+Bool ||| f
+Bool ||| yes
+Bool ||| no
+Bool ||| on
+Bool ||| off
+Bool ||| y
+Bool ||| n
+Bool ||| enable
+Bool ||| disable
+Bool ||| enabled
+Bool ||| disabled
+Bool ||| Yes
+Bool ||| ON
+Bool ||| T
+Bool ||| 2
+Bool ||| true1
+Bool ||| PY:""
+DateTime ||| 2006-01-02 15:04:05
+DateTime ||| 2006-01-02T15:04:05
+DateTime ||| 2006-01-02T15:04:05Z
+DateTime ||| 2006-01-02 15:04:05Z
+DateTime ||| 2006-01-02 15:04:05+02:00
+DateTime ||| 2006-01-02 15:04:05.123
+DateTime ||| 2006-01-02
+DateTime ||| 2006-01-02 15:04
+DateTime ||| 1136214245
+DateTime ||| 0
+DateTime ||| 1
+DateTime ||| 1234
+DateTime ||| 12345
+DateTime ||| 99999
+DateTime ||| 4294967295
+DateTime ||| -1
+DateTime ||| 1136214245.5
+DateTime ||| 2006-1-2 15:04:05
+DateTime ||| 2006-01-02 5:04:05
+DateTime ||| 2006/01/02 15:04:05
+DateTime ||| 2006-01-02 15-04-05
+DateTime ||| 1969-12-31 23:59:59
+DateTime ||| 1970-01-01 00:00:00
+DateTime ||| 2106-02-07 06:28:15
+DateTime ||| 0000-00-00 00:00:00
+DateTime ||| 2006-02-30 00:00:00
+DateTime ||| 2006-01-02 25:00:00
+DateTime ||| 2006-01-02 23:60:00
+DateTime ||| 2006-01-02 23:59:60
+DateTime ||| 2006-01-02X15:04:05
+DateTime ||| PY:" 2006-01-02 15:04:05"
+DateTime ||| PY:"2006-01-02 15:04:05 "
+DateTime ||| PY:""
+DateTime('Europe/Berlin') ||| 2006-01-02 15:04:05
+DateTime('Europe/Berlin') ||| 2006-07-02 15:04:05
+DateTime('Asia/Kolkata') ||| 1136214245
+DateTime('America/New_York') ||| 2006-01-02
+DateTime64(9) ||| 2006-01-02 15:04:05.000000000
+DateTime64(9) ||| 2006-01-02 15:04:05.123456789
+DateTime64(9) ||| 2006-01-02 15:04:05.123
+DateTime64(9) ||| 2006-01-02 15:04:05
+DateTime64(9) ||| 2006-01-02T15:04:05.123Z
+DateTime64(9) ||| 2006-01-02T15:04:05.123456789Z
+DateTime64(9) ||| 2006-01-02T15:04:05
+DateTime64(9) ||| 2006-01-02T15:04:05.5
+DateTime64(9) ||| 2006-01-02 15:04:05.1234567891
+DateTime64(3) ||| 2006-01-02 15:04:05.123456
+DateTime64(3) ||| 2006-01-02 15:04:05.1239
+DateTime64(3) ||| 1136214245
+DateTime64(3) ||| 1136214245123
+DateTime64(3) ||| 1136214245.123
+DateTime64(3) ||| 1136214245.5
+DateTime64(3) ||| 999999999999
+DateTime64(3) ||| 1000000000000
+DateTime64(9) ||| 1136214245.123456789
+DateTime64(9) ||| 1136214245
+DateTime64(9) ||| 1136214245123456789
+DateTime64(9) ||| 1136214245123
+DateTime64(6) ||| 1136214245123456
+DateTime64(0) ||| 1136214245
+DateTime64(3) ||| 2006-01-02
+DateTime64(3) ||| -1
+DateTime64(3) ||| -1.5
+DateTime64(3) ||| 1.5
+DateTime64(3) ||| 0
+DateTime64(3) ||| 12
+DateTime64(3) ||| 1900-01-01 00:00:00
+DateTime64(3) ||| 0000-00-00 00:00:00
+DateTime64(9) ||| 2262-04-11 23:47:16.854775807
+DateTime64(3, 'Europe/Berlin') ||| 2006-01-02 15:04:05.5
+DateTime64(3) ||| 2006-01-02 15:04:05.
+DateTime64(3) ||| 2006-01-02 15:04:05,123
+DateTime64(3) ||| 2006-01-02 15:04:05.123Z
+DateTime64(3) ||| 2006-01-02 15:04
+DateTime64(0) ||| 2006-01-02 15:04:05.9
+Date ||| 2006-01-02
+Date ||| 2006-1-2
+Date ||| 2006/01/02
+Date ||| 20060102
+Date ||| 13000
+Date ||| 1970-01-01
+Date ||| 1969-12-31
+Date ||| 2149-06-06
+Date ||| 2149-06-07
+Date ||| 2006-01-02 15:04:05
+Date ||| 2006-02-30
+Date ||| 0000-00-00
+Date ||| PY:""
+Date32 ||| 1900-01-01
+Date32 ||| 1899-12-31
+Date32 ||| 2006-01-02
+Date32 ||| 0000-00-00
+Date32 ||| 100
+UUID ||| 61f0c404-5cb3-11e7-907b-a6006ad3dba0
+UUID ||| 61F0C404-5CB3-11E7-907B-A6006AD3DBA0
+UUID ||| 61f0c4045cb311e7907ba6006ad3dba0
+UUID ||| {61f0c404-5cb3-11e7-907b-a6006ad3dba0}
+UUID ||| 61f0c404-5cb3-11e7-907b-a6006ad3dba
+UUID ||| 61f0c404-5cb3-11e7-907b-a6006ad3dba0x
+UUID ||| PY:""
+UUID ||| 0
+Enum8('a' = 1, 'b' = 2) ||| a
+Enum8('a' = 1, 'b' = 2) ||| 2
+Enum8('a' = 1, 'b' = 2) ||| c
+Enum8('a' = 1, 'b' = 2) ||| 3
+Enum8('a' = 1, 'b' = 2) ||| 'a'
+Enum8('a' = 1, 'b' = 2) ||| PY:""
+Enum8('1' = 5, '2' = 1) ||| 1
+Enum8('1' = 5, '2' = 1) ||| 5
+Enum8('' = 1) ||| PY:""
+Enum8('x\\ty' = 1) ||| PY:"x\\ty"
+Array(String) ||| ['a','b']
+Array(String) ||| [ 'a' , 'b' ]
+Array(String) ||| []
+Array(String) ||| [ ]
+Array(String) ||| PY:"['a\\'b','c\\\\d','e\\tf','g\\nh']"
+Array(String) ||| PY:"['a\\\\'b']"
+Array(String) ||| PY:"[\"a\",\"b\"]"
+Array(String) ||| [a,b]
+Array(String) ||| ['a',]
+Array(String) ||| ['a' 'b']
+Array(String) ||| ['a'
+Array(String) ||| ['a']x
+Array(String) ||| PY:" ['a']"
+Array(String) ||| PY:"['a'] "
+Array(String) ||| [NULL]
+Array(String) ||| ['a''b']
+Array(String) ||| PY:"['\\x41','\\0']"
+Array(String) ||| PY:"['a\"b']"
+Array(String) ||| PY:"['\\N']"
+Array(String) ||| PY:"['a\tb']"
+Array(Nullable(String)) ||| [NULL,'a']
+Array(Nullable(String)) ||| [null,'a']
+Array(Nullable(String)) ||| [NULL,NuLL]
+Array(Nullable(String)) ||| [\N,'a']
+Array(Nullable(UInt8)) ||| [NULL,1]
+Array(UInt8) ||| [1,2,300]
+Array(UInt8) ||| [1, 2]
+Array(UInt8) ||| ['1','2']
+Array(UInt8) ||| [-1]
+Array(UInt8) ||| [1.5]
+Array(Int8) ||| [-1, 200]
+Array(Int64) ||| [-1,+2]
+Array(Float64) ||| [1.5,inf,nan,-inf,1e10]
+Array(Float64) ||| [+1.5]
+Array(Float64) ||| [ -1.5 ]
+Array(Float64) ||| [Inf,NaN]
+Array(Float64) ||| [1,'2']
+Array(Bool) ||| [true,false]
+Array(Bool) ||| [true,false,1,0]
+Array(Bool) ||| ['true']
+Array(Bool) ||| [TRUE]
+Array(Date) ||| ['2006-01-02']
+Array(Date) ||| [2006-01-02]
+Array(Date) ||| ['2006-01-02 15:04:05']
+Array(DateTime) ||| ['2006-01-02 15:04:05', 1136214245]
+Array(DateTime64(9)) ||| ['2006-01-02 15:04:05.123456789']
+Array(DateTime64(3)) ||| [1136214245.5]
+Array(DateTime64(3)) ||| ['2006-01-02T15:04:05.5']
+Array(UUID) ||| ['61f0c404-5cb3-11e7-907b-a6006ad3dba0']
+Array(UUID) ||| [61f0c404-5cb3-11e7-907b-a6006ad3dba0]
+Array(UUID) ||| ['61f0c4045cb311e7907ba6006ad3dba0']
+Array(Array(String)) ||| [['a'],[],['b','c']]
+Array(Tuple(String,String)) ||| [('a','b'),('c','d')]
+Array(Tuple(String,String)) ||| [('a', 'b'), ( 'c' , 'd' )]
+Array(Tuple(String,String)) ||| []
+Array(Tuple(UInt32, Array(String))) ||| [(12,['1','3'])]
+Array(Tuple(UInt32, Array(String))) ||| [(12,['1','3']),(13,[])]
+Array(Enum8('a'=1,'b'=2)) ||| ['a','b']
+Array(Enum8('a'=1,'b'=2)) ||| [1,2]
+Array(Enum8('a'=1)) ||| ['b']
+Array(LowCardinality(String)) ||| ['a']
+Array(FixedString(2)) ||| ['ab','c']
+Array(FixedString(2)) ||| ['abc']
+Tuple(String, UInt8) ||| ('x',1)
+Tuple(String, UInt8) ||| ( 'x' , 1 )
+Tuple(String, UInt8) ||| ('x',1,2)
+Tuple(String, UInt8) ||| ('x')
+Tuple(String) ||| ('x')
+Tuple(String) ||| ('x',)
+Tuple(a String, b UInt8) ||| ('x',1)
+Tuple(String, UInt8) ||| PY:"x\t1"
+Tuple(Nullable(UInt8), String) ||| (NULL,'a')
+Map(String, UInt8) ||| {'a':1,'b':2}
+Map(String, UInt8) ||| { 'a' : 1 , 'b' : 2 }
+Map(String, UInt8) ||| {}
+Map(String, UInt8) ||| {'a':1,'a':2}
+Map(UInt8, String) ||| {1:'a'}
+Map(String, Array(UInt8)) ||| {'a':[1,2]}
+Map(String, Nullable(UInt8)) ||| {'a':NULL}
+DateTime ||| 2006-01-02 1a:04:05
+DateTime ||| 2006-13-01 00:00:00
+DateTime ||| 2006-00-10 00:00:00
+DateTime ||| 2006-01-32 00:00:00
+DateTime ||| 4294967296
+DateTime ||| 2106-02-07 06:28:16
+DateTime ||| 2200-01-01 00:00:00
+DateTime ||| 20060102150405
+Date ||| 2006-13-01
+Date ||| 2006-01-0
+DateTime64(9) ||| 1677-09-21 00:12:44
+DateTime64(3) ||| 1899-12-31 23:59:59
+DateTime64(3) ||| 2300-01-01 00:00:00
+DateTime64(3) ||| 2299-12-31 23:59:59.999
+DateTime64(9) ||| 2262-04-11 23:47:17
+Date32 ||| 2299-12-31
+Date32 ||| 2300-01-01
+String ||| PY:"\\xZZ"
+UUID ||| zzf0c404-5cb3-11e7-907b-a6006ad3dba0
+Float64 ||| .
+Float64 ||| e5
+Float64 ||| 1e+
+Float32 ||| 3.4028235e38
+Array(DateTime64(3)) ||| [1136214245]
+Array(DateTime64(3)) ||| [1136214245123]
+Array(DateTime64(3)) ||| [-1]
+Array(DateTime64(0)) ||| [1136214245]
+Array(DateTime) ||| [12]
+Array(DateTime) ||| [1.5]

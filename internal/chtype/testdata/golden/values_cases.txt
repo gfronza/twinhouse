@@ -1,0 +1,119 @@
+String ||| 'a'
+String ||| 'a\'b'
+String ||| 'a''b'
+String ||| 'a\\b'
+String ||| "a"
+String ||| a
+String ||| 1
+String ||| 1.50
+String ||| -7
+String ||| NULL
+String ||| 'a\tb\x41\N'
+String ||| PY:"'a\tb'"
+String ||| PY:"'a\nb'"
+String ||| ''
+String ||| 'unterminated
+Nullable(String) ||| NULL
+Nullable(String) ||| null
+Nullable(String) ||| Null
+Nullable(String) ||| 'NULL'
+Nullable(String) ||| \N
+UInt8 ||| 1
+UInt8 ||| 300
+UInt8 ||| -1
+UInt8 ||| +1
+UInt8 ||| 1.5
+UInt8 ||| '1'
+UInt8 ||| '300'
+UInt8 ||| 0x10
+UInt8 ||| 0b101
+UInt8 ||| 1e2
+UInt8 ||| NULL
+UInt8 ||| true
+UInt8 ||| false
+UInt64 ||| 18446744073709551615
+UInt64 ||| -1
+Int32 ||| -5
+Int32 ||| +5
+Int64 ||| -9223372036854775808
+Int64 ||| 9223372036854775808
+Int8 ||| 200
+Int8 ||| -1.9
+Float64 ||| 1.5
+Float64 ||| -1.5e3
+Float64 ||| inf
+Float64 ||| -inf
+Float64 ||| nan
+Float64 ||| '1.5'
+Float64 ||| 1
+Float64 ||| .5
+Float64 ||| +1
+Float64 ||| 0x1A
+Float64 ||| -0
+Float64 ||| -0.0
+Float64 ||| 18446744073709551616
+Float32 ||| 0.1
+Float32 ||| 1e40
+Bool ||| true
+Bool ||| false
+Bool ||| 1
+Bool ||| 0
+Bool ||| 2
+Bool ||| 'true'
+Bool ||| TRUE
+Bool ||| 'yes'
+Date ||| '2006-01-02'
+Date ||| 13000
+Date ||| 1700000000
+Date ||| '13000'
+Date32 ||| '1950-06-01'
+Date32 ||| -100
+DateTime ||| '2006-01-02 15:04:05'
+DateTime ||| 1136214245
+DateTime ||| '1136214245'
+DateTime ||| '2006-01-02T15:04:05'
+DateTime ||| 1136214245.9
+DateTime ||| -5
+DateTime('Asia/Tokyo') ||| '2006-01-02 15:04:05'
+DateTime64(3) ||| '2006-01-02 15:04:05.123'
+DateTime64(3) ||| 1136214245123
+DateTime64(3) ||| 1136214245.123
+DateTime64(3) ||| '1136214245.123'
+DateTime64(3) ||| 1136214245
+DateTime64(9) ||| '2006-01-02 15:04:05.123456789'
+DateTime64(9, 'Asia/Tokyo') ||| '2006-01-02 15:04:05.123456789'
+UUID ||| '61f0c404-5cb3-11e7-907b-a6006ad3dba0'
+UUID ||| '61F0C4045CB311E7907BA6006AD3DBA0'
+UUID ||| 61f0c404
+Enum8('a'=1,'b'=2) ||| 'a'
+Enum8('a'=1,'b'=2) ||| 2
+Enum8('a'=1,'b'=2) ||| '2'
+Enum8('a'=1,'b'=2) ||| 'z'
+FixedString(2) ||| 'a'
+FixedString(2) ||| 'abc'
+Array(String) ||| ['a', 'b']
+Array(String) ||| [ 'a' , 'b' , ]
+Array(String) ||| []
+Array(String) ||| [NULL]
+Array(UInt8) ||| [1, 2, -1]
+Array(UInt8) ||| [1, 2.5]
+Array(Int8) ||| [1, -2]
+Array(Bool) ||| [true, 0, 1]
+Array(Nullable(UInt8)) ||| [NULL, 1, null]
+Array(Float64) ||| [1, 2.5, -inf]
+Array(DateTime) ||| ['2006-01-02 15:04:05', 1136214245]
+Array(Array(UInt8)) ||| [[1], [], [2, 3]]
+Tuple(String, UInt8) ||| ('a', 1)
+Tuple(String, UInt8) ||| ('a', 1, )
+Tuple(String) ||| ('a')
+Tuple(String) ||| ('a',)
+Tuple(a String, b Nullable(UInt8)) ||| ('x', NULL)
+Map(String, UInt8) ||| {'a': 1, 'b': 2}
+Map(String, UInt8) ||| {'a': 1, }
+Map(String, UInt8) ||| {}
+Map(UInt64, Array(String)) ||| {1: ['x']}
+Array(Tuple(UInt32, Array(String))) ||| [(12, ['1','3'])]
+LowCardinality(Nullable(String)) ||| NULL
+LowCardinality(Nullable(String)) ||| 'x'
+LowCardinality(String) ||| 'x'
+SimpleAggregateFunction(sum, UInt64) ||| 5

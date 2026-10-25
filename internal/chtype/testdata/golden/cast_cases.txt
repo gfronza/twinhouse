@@ -1,0 +1,191 @@
+toFloat64(1.5)|String
+toFloat32(0.1)|String
+toFloat32(0.1)|Float64
+toFloat64(0.1)|Float32
+toFloat64(1e300)|Float32
+toFloat64(-0.)|String
+toFloat64(nan)|String
+toFloat64(inf)|UInt8
+toFloat64(nan)|Int32
+true|String
+false|UInt8
+true|Float64
+toUInt8(2)|Bool
+toUInt8(0)|Bool
+toInt8(-1)|Bool
+toFloat64(0.5)|Bool
+toFloat64(nan)|Bool
+'true'|Bool
+'1'|Bool
+'yes'|Bool
+'2'|Bool
+'abc'|UInt8
+' 1'|UInt8
+'1 '|UInt8
+''|UInt8
+'1.5'|UInt8
+'1e2'|UInt8
+'-1'|Int8
+'-1'|UInt8
+'300'|Int8
+'+5'|Int8
+'+5'|UInt8
+'05'|UInt8
+'123'|Int64
+'-9223372036854775808'|Int64
+'18446744073709551616'|UInt64
+'99999999999999999999'|UInt8
+'1.5'|Float64
+'inf'|Float64
+'nan'|Float64
+'NaN'|Float32
+'1e400'|Float64
+'1,5'|Float64
+' 1.5'|Float64
+''|Float64
+'0x10'|UInt8
+'2024-01-02'|Date
+'2024-1-2'|Date
+'20240102'|Date
+'2024-01-02 03:04:05'|Date
+' 2024-01-02'|Date
+'2024-01-02 '|Date
+'2024-01-02'|Date32
+'1899-01-01'|Date32
+'2024-01-02 03:04:05'|DateTime
+'2024-01-02T03:04:05Z'|DateTime
+'2024-01-02 03:04:05.999'|DateTime
+'1700000000'|DateTime
+'abc'|DateTime
+''|DateTime
+''|Date
+'2024-01-02 03:04'|DateTime
+'2024-01-02 03:04:05 '|DateTime
+'2024-01-02 03:04:05'|DateTime('Asia/Tokyo')
+'2024-01-02 03:04:05.123456789'|DateTime64(9)
+'2024-01-02 03:04:05.123456789'|DateTime64(3)
+'2024-01-02 03:04:05.123'|DateTime64(3, 'Europe/Berlin')
+'2024-01-02T03:04:05.123+02:00'|DateTime64(3)
+toDateTime('2024-01-02 03:04:05', 'UTC')|Date
+toDateTime('2024-01-02 23:04:05', 'Asia/Tokyo')|Date
+toDateTime('2024-01-01 20:04:05', 'UTC')|DateTime('Asia/Tokyo')
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|DateTime
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|DateTime64(1)
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|DateTime64(6)
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|Date
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|String
+toDateTime64('2024-01-02 03:04:05.999', 3, 'Asia/Tokyo')|String
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|UInt64
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|Int64
+toDateTime64('2024-01-02 03:04:05.999', 3, 'UTC')|Float64
+toDateTime64('1969-12-31 23:59:58.5', 1, 'UTC')|Int64
+toDateTime('2024-01-02 03:04:05', 'UTC')|UInt32
+toDateTime('2024-01-02 03:04:05', 'UTC')|String
+toDateTime('2024-01-02 03:04:05', 'Asia/Tokyo')|String
+toDateTime('2024-01-02 03:04:05', 'UTC')|Float64
+toDateTime('2024-01-02 03:04:05', 'UTC')|DateTime64(3)
+toDateTime('2024-01-02 03:04:05', 'UTC')|UInt8
+toDate('2024-01-02')|UInt16
+toDate('2024-01-02')|Int32
+toDate('2024-01-02')|DateTime
+toDate('2024-01-02')|DateTime('Asia/Tokyo')
+toDate('2024-01-02')|DateTime64(3, 'Asia/Tokyo')
+toDate('2024-01-02')|String
+toDate('2024-01-02')|Date32
+toDate32('1950-01-02')|Int32
+toDate32('1950-01-02')|String
+toUInt32(1700000000)|DateTime
+toUInt32(1700000000)|Date
+toUInt16(19000)|Date
+toUInt32(70000)|Date
+toInt8(-1)|Date
+toInt32(-5)|Date32
+toUInt32(100000)|Date32
+toUInt32(1700000000)|Date32
+toFloat64(1700000000.5)|DateTime
+toFloat64(1700000000.5)|DateTime64(3)
+toUInt32(1700000000)|DateTime64(3)
+toInt8(-1)|DateTime
+toInt64(5000000000)|DateTime
+toUUID('61f0c404-5cb3-11e7-907b-a6006ad3dba0')|String
+'61f0c404-5cb3-11e7-907b-a6006ad3dba0'|UUID
+'xyz'|UUID
+toUInt8(1)|UUID
+'ab'|FixedString(4)
+'abcde'|FixedString(4)
+toFixedString('ab', 4)|String
+toFixedString('ab', 4)|FixedString(5)
+toUInt8(7)|FixedString(3)
+CAST('b' AS Enum8('a'=1,'b'=2))|String
+CAST('b' AS Enum8('a'=1,'b'=2))|Int8
+CAST('b' AS Enum8('a'=1,'b'=2))|UInt64
+CAST('b' AS Enum8('a'=1,'b'=2))|Float64
+'a'|Enum8('a'=1,'b'=2)
+'2'|Enum8('a'=1,'b'=2)
+'c'|Enum8('a'=1,'b'=2)
+toUInt8(2)|Enum8('a'=1,'b'=2)
+toUInt8(3)|Enum8('a'=1,'b'=2)
+CAST('b' AS Enum8('a'=1,'b'=2))|Enum8('b'=2,'c'=3)
+CAST('b' AS Enum8('a'=1,'b'=2))|Enum16('b'=500)
+CAST(NULL AS Nullable(UInt8))|Nullable(String)
+CAST(5 AS Nullable(UInt8))|UInt8
+CAST(5 AS Nullable(UInt8))|Nullable(Float64)
+toUInt8(5)|Nullable(String)
+toUInt8(5)|LowCardinality(String)
+toUInt8(5)|LowCardinality(Nullable(String))
+CAST('x' AS LowCardinality(String))|String
+toUInt8(5)|SimpleAggregateFunction(sum, UInt64)
+[1,2]|Array(String)
+['1','2']|Array(UInt8)
+[1,300]|Array(UInt8)
+[1,NULL]|Array(Nullable(String))
+(1,'2')|Tuple(String, UInt8)
+(1,'2')|Tuple(a String, b UInt8)
+(1,2)|Tuple(UInt8)
+[1,2]|Tuple(UInt8,UInt8)
+map('a',1)|Map(String,String)
+map('a',1)|Map(String,Nullable(UInt64))
+'[1,2]'|Array(UInt8)
+'(1,\'a\')'|Tuple(UInt8, String)
+'{\'a\':1}'|Map(String, UInt8)
+'[\'a\']'|Array(String)
+'[ 1 , 2 ]'|Array(UInt8)
+'[1,2] '|Array(UInt8)
+[1,2]|String
+[toDate('2024-01-01')]|String
+(1,'a')|String
+map('a',1)|String
+toUInt64(18446744073709551615)|Int64
+toInt64(-1)|UInt32
+toInt64(-1)|UInt64
+toUInt32(4294967295)|Int32
+toInt32(300)|UInt8
+toInt32(-129)|Int8
+toUInt64(18446744073709551615)|Float64
+toUInt64(18446744073709551615)|Float32
+toInt64(9007199254740993)|Float64
+toFloat64(1e19)|UInt64
+toFloat64(1.8446744073709552e19)|UInt64
+toFloat64(-1e19)|Int64
+toFloat64(9.3e18)|Int64
+toFloat64(-9.3e18)|Int64
+toFloat64(-1.5)|UInt64
+toFloat64(-0.5)|UInt8
+toFloat64(-1.9)|UInt8
+toFloat64(255.9)|UInt8
+toFloat64(256.5)|UInt8
+toFloat64(-128.9)|Int8
+toFloat64(-129.5)|Int8
+toFloat64(3e9)|Int32
+toFloat64(3e9)|UInt32
+toFloat64(5e9)|UInt32
+toFloat64(-5e9)|Int32
+toFloat64(1e10)|UInt16
+toFloat64(1e10)|UInt8
+toFloat64(-1e10)|Int16
+toFloat64(65535.7)|UInt16
+toFloat64(-3.99)|Int8
+toDateTime64('1960-01-02 03:04:05.999', 3, 'UTC')|DateTime
+toDate32('1950-01-02')|Date
+toUInt64(1700000000123)|DateTime64(3)
+toDateTime64('1960-01-02 03:04:05', 3, 'UTC')|Date
