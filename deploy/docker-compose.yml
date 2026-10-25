@@ -1,0 +1,158 @@
+# Local multi-region stack (DESIGN.md §6):
+#   two DynamoDB Local instances standing in for us-east-1 and eu-west-1,
+#   one ClickHouse-compatible server + one stream worker per region, and the
+#   replicator emulating global tables between them.
+#
+#   make up                  # multi-region stack: :8123 (us), :8124 (eu)
+#   make up PROFILES=compat  # also the reference ClickHouse on :18123
+#   make up-single           # single region, no replication: :8125
+#
+#   Host ports are overridable (US_HTTP_PORT, EU_HTTP_PORT, DDB_US_PORT, DDB_EU_PORT,
+#   CH_REF_PORT, DDB_SINGLE_PORT, SINGLE_HTTP_PORT) so a second stack can run
+#   under another COMPOSE_PROJECT, e.g. for tests that restart containers.
+#   CHDDB_IMAGE (default dynamodb-eventstream:dev) names the built image, so a
+#   second stack built from another tree does not retag the first one's image.
+name: dynamodb-eventstream
+
+x-image: &image
+  image: ${CHDDB_IMAGE:-dynamodb-eventstream:dev}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  restart: unless-stopped
+
+x-env: &env
+  TABLE_PREFIX: chddb_
+  GLOBAL_MODE: emulated
+  REPLICA_REGIONS: us-east-1,eu-west-1
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  CATALOG_REFRESH: 1s
+  STREAM_POLL_INTERVAL: 100ms
+
+x-ddb: &ddb
+  image: amazon/dynamodb-local:latest
+  command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:8000/ || exit 1"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+
+x-server-health: &server-health
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8123/ping || exit 1"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+
+services:
+  dynamodb-us:
+    <<: *ddb
+    ports: ["${DDB_US_PORT:-18000}:8000"]
+
+  dynamodb-eu:
+    <<: *ddb
+    ports: ["${DDB_EU_PORT:-18001}:8000"]
+
+  chserver-us:
+    <<: [*image, *server-health]
+    command: ["chserver"]
+    ports: ["${US_HTTP_PORT:-8123}:8123"]
+    environment:
+      <<: *env
+      REGION: us-east-1
+      DYNAMODB_ENDPOINT: http://dynamodb-us:8000
+      LISTEN_ADDR: ":8123"
+      INLINE_VIEWS: "true"
+    depends_on:
+      dynamodb-us: {condition: service_healthy}
+
+  chserver-eu:
+    <<: [*image, *server-health]
+    command: ["chserver"]
+    ports: ["${EU_HTTP_PORT:-8124}:8123"]
+    environment:
+      <<: *env
+      REGION: eu-west-1
+      DYNAMODB_ENDPOINT: http://dynamodb-eu:8000
+      LISTEN_ADDR: ":8123"
+      INLINE_VIEWS: "true"
+    depends_on:
+      dynamodb-eu: {condition: service_healthy}
+
+  mvworker-us:
+    <<: *image
+    command: ["mvworker"]
+    environment:
+      <<: *env
+      REGION: us-east-1
+      DYNAMODB_ENDPOINT: http://dynamodb-us:8000
+      STREAM_LEASE_DURATION: 10s
+    depends_on:
+      dynamodb-us: {condition: service_healthy}
+
+  mvworker-eu:
+    <<: *image
+    command: ["mvworker"]
+    environment:
+      <<: *env
+      REGION: eu-west-1
+      DYNAMODB_ENDPOINT: http://dynamodb-eu:8000
+      STREAM_LEASE_DURATION: 10s
+    depends_on:
+      dynamodb-eu: {condition: service_healthy}
+
+  replicator:
+    <<: *image
+    command: ["replicator"]
+    environment:
+      <<: *env
+      REGION: replicator
+      REGIONS: us-east-1=http://dynamodb-us:8000,eu-west-1=http://dynamodb-eu:8000
+      REPLICATION_DELAY: ${REPLICATION_DELAY:-0s}
+      # Apply materialized views to replicated versions a region rejects as
+      # superseded, so regional rollups converge (DESIGN.md §1, §6).
+      APPLY_CONFLICT_VIEWS: ${APPLY_CONFLICT_VIEWS:-true}
+      STREAM_LEASE_DURATION: 10s
+    depends_on:
+      dynamodb-us: {condition: service_healthy}
+      dynamodb-eu: {condition: service_healthy}
+
+  # Reference ClickHouse for differential compatibility tests (tests/compat).
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8-alpine
+    profiles: ["compat"]
+    ports: ["${CH_REF_PORT:-18123}:8123"]
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8123/ping || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Single region without replication, stream worker in-process.
+  dynamodb-single:
+    <<: *ddb
+    profiles: ["single"]
+    ports: ["${DDB_SINGLE_PORT:-18002}:8000"]
+
+  chserver-single:
+    <<: [*image, *server-health]
+    profiles: ["single"]
+    command: ["chserver"]
+    ports: ["${SINGLE_HTTP_PORT:-8125}:8123"]
+    environment:
+      TABLE_PREFIX: chddb_
+      GLOBAL_MODE: none
+      REGION: us-east-1
+      DYNAMODB_ENDPOINT: http://dynamodb-single:8000
+      LISTEN_ADDR: ":8123"
+      INLINE_VIEWS: "true"
+      RUN_STREAM_WORKER: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      dynamodb-single: {condition: service_healthy}
