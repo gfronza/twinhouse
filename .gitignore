@@ -1,0 +1,15 @@
+# Build outputs
+/bin/
+/chserver
+/mvworker
+/replicator
+*.test
+*.out
+
+# Go fuzz cache / coverage
+coverage*.txt
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

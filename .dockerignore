@@ -1,0 +1,12 @@
+# Only the Go sources are needed to build the image.
+.git
+.github
+.idea
+.vscode
+**/*.test
+**/*.out
+**/coverage*
+bin/
+dist/
+deploy/
+!deploy/Dockerfile
