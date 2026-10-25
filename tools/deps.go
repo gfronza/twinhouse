@@ -11,6 +11,8 @@ import (
 	_ "github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	_ "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	_ "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
+	_ "github.com/aws/aws-sdk-go-v2/service/lambda"
+	_ "github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 	_ "github.com/google/uuid"
 	_ "github.com/klauspost/compress/zstd"
 	_ "github.com/pierrec/lz4/v4"
