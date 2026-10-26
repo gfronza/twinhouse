@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"dynamodb-eventstream/internal/catalog"
 	"dynamodb-eventstream/internal/chtype"
+	"dynamodb-eventstream/internal/config"
 	"dynamodb-eventstream/internal/replicator"
 )
 
@@ -85,5 +87,32 @@ func TestEnvBool(t *testing.T) {
 	t.Setenv("X_BOOL", "maybe")
 	if _, err := envBool("X_BOOL", true); err == nil {
 		t.Error("invalid boolean accepted")
+	}
+}
+
+func TestValidateLambda(t *testing.T) {
+	aws := config.Config{Region: "us-east-1", GlobalMode: config.GlobalAWS, ReplicaRegions: []string{"eu-west-1"}}
+	if err := validateLambda(aws); err != nil {
+		t.Fatalf("valid aws config rejected: %v", err)
+	}
+	cases := map[string]func(c *config.Config){
+		"emulated":       func(c *config.Config) { c.GlobalMode = config.GlobalEmulated },
+		"none":           func(c *config.Config) { c.GlobalMode = config.GlobalNone },
+		"local endpoint": func(c *config.Config) { c.DynamoDBEndpoint = "http://localhost:8000" },
+		"no replicas":    func(c *config.Config) { c.ReplicaRegions = nil },
+		"region local":   func(c *config.Config) { c.Region = "local" },
+		"foreign home":   func(c *config.Config) { c.HomeRegion = "ap-south-1" },
+	}
+	for name, mutate := range cases {
+		c := aws
+		mutate(&c)
+		err := validateLambda(c)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if (name == "emulated" || name == "none") && !strings.Contains(err.Error(), "GLOBAL_MODE=aws") {
+			t.Errorf("%s: unexpected error %v", name, err)
+		}
 	}
 }

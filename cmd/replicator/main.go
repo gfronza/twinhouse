@@ -1,5 +1,16 @@
 // Command replicator emulates DynamoDB global tables between independent
-// DynamoDB endpoints for local multi-region development (DESIGN.md §6).
+// DynamoDB endpoints for local multi-region development, and copies the
+// ReplacingMergeTree tables of a GLOBAL_MODE=aws deployment between its
+// regions (DESIGN.md §6).
+//
+// It runs as a long-lived stream poller tailing every region it lists in
+// REGIONS, or as an AWS Lambda function (-lambda, or automatically when
+// AWS_LAMBDA_RUNTIME_API is set) consuming the DynamoDB stream event-source
+// mappings of this region's ReplacingMergeTree tables and copying the rows
+// written here to every region in REPLICA_REGIONS. Lambda mode requires
+// GLOBAL_MODE=aws and uses REGION/REPLICA_REGIONS (and GLOBAL_HOME_REGION)
+// instead of REGIONS; its catalog snapshot is refreshed when older than
+// CATALOG_REFRESH.
 //
 // Configuration (environment):
 //
@@ -32,6 +43,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -41,6 +53,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-lambda-go/lambda"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"dynamodb-eventstream/internal/awsx"
@@ -53,7 +66,12 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	lambdaMode := flag.Bool("lambda", false, "run as an AWS Lambda DynamoDB-stream handler (GLOBAL_MODE=aws)")
+	flag.Parse()
+	if os.Getenv("AWS_LAMBDA_RUNTIME_API") != "" {
+		*lambdaMode = true
+	}
+	if err := run(*lambdaMode); err != nil {
 		slog.Error("replicator failed", "err", err)
 		os.Exit(1)
 	}
@@ -88,12 +106,15 @@ func parseRegions(s string) ([]regionSpec, error) {
 	return out, nil
 }
 
-func run() error {
+func run(lambdaMode bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	slog.SetDefault(newLogger(cfg.LogLevel))
+	if lambdaMode {
+		return runLambda(cfg)
+	}
 	specs, err := parseRegions(os.Getenv("REGIONS"))
 	if err != nil {
 		return err
@@ -152,7 +173,7 @@ func run() error {
 			appliers[s.name] = a
 		}
 	}
-	var onConflict func(ctx context.Context, region, table, seq string, image map[string]ddbtypes.AttributeValue) error
+	var onConflict replicator.ConflictHook
 	if conflictViews {
 		onConflict = func(ctx context.Context, region, table, seq string, image map[string]ddbtypes.AttributeValue) error {
 			return appliers[region].Apply(ctx, table, seq, image)
@@ -189,6 +210,86 @@ func run() error {
 	err = r.Run(ctx)
 	slog.Info("replicator stopped", "stats", fmt.Sprintf("%+v", r.Stats()))
 	return err
+}
+
+// validateLambda checks the configuration of Lambda mode: GLOBAL_MODE=aws
+// (the poller's REGIONS list and the emulated catalog copy have no Lambda
+// equivalent) with the usual aws-mode checks (a real REGION, no
+// DYNAMODB_ENDPOINT, at least one REPLICA_REGIONS entry).
+func validateLambda(cfg config.Config) error {
+	if cfg.GlobalMode != config.GlobalAWS {
+		return fmt.Errorf("replicator: Lambda mode requires GLOBAL_MODE=aws, got %q", cfg.GlobalMode)
+	}
+	return cfg.Validate()
+}
+
+// runLambda serves this region's ReplacingMergeTree streams as a Lambda
+// function: rows written in REGION are copied to every REPLICA_REGIONS
+// region with the replicator's conditions; clients, catalogs and the
+// conflict-view engines are built once per execution environment.
+func runLambda(cfg config.Config) error {
+	if err := validateLambda(cfg); err != nil {
+		return err
+	}
+	conflictViews, err := envBool("APPLY_CONFLICT_VIEWS", true)
+	if err != nil {
+		return err
+	}
+	if os.Getenv("REGIONS") != "" {
+		slog.Warn("REGIONS is ignored in Lambda mode; using REGION and REPLICA_REGIONS")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// This region's catalog resolves the streams' tables and their version
+	// columns (the catalog is a real global table in this mode).
+	local, err := awsx.New(ctx, cfg.Region, "")
+	if err != nil {
+		return fmt.Errorf("aws clients for %s: %w", cfg.Region, err)
+	}
+	store, err := dynamo.New(local, dynamo.Options{Prefix: cfg.TablePrefix, Region: cfg.Region, GlobalMode: config.GlobalEmulated})
+	if err != nil {
+		return fmt.Errorf("dynamo store for %s: %w", cfg.Region, err)
+	}
+	lookup := replicator.CatalogLookup(store.NewCatalog(), cfg.CatalogRefresh, slog.Default())
+
+	var targets []replicator.Target
+	appliers := map[string]*mvworker.ImageApplier{}
+	for _, name := range cfg.ReplicaRegions {
+		c, err := awsx.New(ctx, name, "")
+		if err != nil {
+			return fmt.Errorf("aws clients for %s: %w", name, err)
+		}
+		targets = append(targets, replicator.Target{Name: name, Client: c.DynamoDB})
+		if conflictViews {
+			st, err := dynamo.New(c, dynamo.Options{Prefix: cfg.TablePrefix, Region: name, GlobalMode: config.GlobalEmulated})
+			if err != nil {
+				return fmt.Errorf("dynamo store for %s: %w", name, err)
+			}
+			a, err := newConflictApplier(cfg, name, c, st, st.NewCatalog())
+			if err != nil {
+				return err
+			}
+			appliers[name] = a
+		}
+	}
+	var onConflict replicator.ConflictHook
+	if conflictViews {
+		onConflict = func(ctx context.Context, region, table, seq string, image map[string]ddbtypes.AttributeValue) error {
+			return appliers[region].Apply(ctx, table, seq, image)
+		}
+	}
+	l, err := replicator.NewLambda(replicator.LambdaConfig{
+		Region: cfg.Region, Targets: targets, Tables: lookup, OnConflict: onConflict,
+		Logger: slog.Default().With("from", cfg.Region),
+	})
+	if err != nil {
+		return err
+	}
+	slog.Info("replicator lambda ready", "region", cfg.Region, "targets", strings.Join(cfg.ReplicaRegions, ","),
+		"prefix", cfg.TablePrefix, "conflict_views", conflictViews)
+	lambda.StartWithOptions(l.Handle, lambda.WithContext(ctx))
+	return nil
 }
 
 // newConflictApplier builds the engine that applies materialized views, in
