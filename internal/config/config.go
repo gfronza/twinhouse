@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -76,7 +77,38 @@ type Config struct {
 	// MaxExecutionTime is chserver's default max_execution_time for every
 	// query (0: unlimited); a query's own setting overrides it.
 	MaxExecutionTime time.Duration
+
+	// MVWorkerFunctionARN (MVWORKER_FUNCTION_ARN) is the Lambda function
+	// (ARN or name) the reconciler wires every source table's DynamoDB
+	// stream to with an event-source mapping (the serverless deployment,
+	// DESIGN.md §5). Empty: event-source-mapping management is disabled
+	// (long-running stream workers, local/emulated mode).
+	MVWorkerFunctionARN string
+	// ReplicatorFunctionARN (REPLICATOR_FUNCTION_ARN, optional) is the
+	// replicator Lambda the streams of ReplacingMergeTree tables are wired
+	// to with GLOBAL_MODE=aws (they are not AWS global tables, DESIGN.md §1).
+	ReplicatorFunctionARN string
+	// ReconcilerFunctionARN (RECONCILER_FUNCTION_ARN, optional) is the
+	// reconciler Lambda the {prefix}__catalog stream is wired to, so a DDL
+	// in any region triggers a reconcile round at once. Inside Lambda it
+	// defaults to AWS_LAMBDA_FUNCTION_NAME (the reconciler wires the catalog
+	// stream to itself).
+	ReconcilerFunctionARN string
+	// ESMBatchSize (ESM_BATCH_SIZE, default 100) is the BatchSize of the
+	// event-source mappings the reconciler creates.
+	ESMBatchSize int32
 }
+
+// DefaultESMBatchSize is the default ESM_BATCH_SIZE.
+const DefaultESMBatchSize = 100
+
+// MaxESMBatchSize is the largest batch size a DynamoDB stream event-source
+// mapping accepts.
+const MaxESMBatchSize = 10000
+
+// ManagesEventSourceMappings reports whether this process manages Lambda
+// event-source mappings (MVWORKER_FUNCTION_ARN is set).
+func (c Config) ManagesEventSourceMappings() bool { return c.MVWorkerFunctionARN != "" }
 
 // Load reads configuration from the environment.
 //
@@ -102,6 +134,13 @@ type Config struct {
 //	                       with "-<REGION>" unless REGION is "local" or empty)
 //	MAX_EXECUTION_TIME     chserver only: default max_execution_time, seconds or a Go
 //	                       duration (default 0 = unlimited)
+//	MVWORKER_FUNCTION_ARN  reconciler: Lambda (ARN or name) wired to every source table's
+//	                       stream with an event-source mapping (default "": disabled)
+//	REPLICATOR_FUNCTION_ARN  reconciler, GLOBAL_MODE=aws: Lambda wired to the streams of
+//	                       ReplacingMergeTree tables (default "")
+//	RECONCILER_FUNCTION_ARN  reconciler: Lambda wired to the {prefix}__catalog stream
+//	                       (default: AWS_LAMBDA_FUNCTION_NAME, i.e. itself inside Lambda)
+//	ESM_BATCH_SIZE         batch size of the event-source mappings (default 100)
 //
 // Load only checks values in isolation; processes that talk to DynamoDB
 // through REGION/DYNAMODB_ENDPOINT also call Validate.
@@ -156,6 +195,15 @@ func Load() (Config, error) {
 	if c.DisplayName = os.Getenv("DISPLAY_NAME"); c.DisplayName == "" {
 		c.DisplayName = defaultDisplayName(c.Region)
 	}
+	c.MVWorkerFunctionARN = strings.TrimSpace(env("MVWORKER_FUNCTION_ARN", ""))
+	c.ReplicatorFunctionARN = strings.TrimSpace(env("REPLICATOR_FUNCTION_ARN", ""))
+	c.ReconcilerFunctionARN = strings.TrimSpace(env("RECONCILER_FUNCTION_ARN", ""))
+	if c.ReconcilerFunctionARN == "" {
+		c.ReconcilerFunctionARN = strings.TrimSpace(os.Getenv("AWS_LAMBDA_FUNCTION_NAME"))
+	}
+	if c.ESMBatchSize, err = envInt32("ESM_BATCH_SIZE", DefaultESMBatchSize, 1, MaxESMBatchSize); err != nil {
+		return c, err
+	}
 	switch c.GlobalMode {
 	case GlobalNone, GlobalAWS, GlobalEmulated:
 	default:
@@ -173,7 +221,10 @@ func Load() (Config, error) {
 //   - GLOBAL_MODE=aws runs against real AWS (no DYNAMODB_ENDPOINT, whose
 //     dummy credentials are for DynamoDB Local) and names at least one other
 //     region in REPLICA_REGIONS (otherwise global tables silently stay
-//     regional).
+//     regional);
+//   - event-source-mapping management (MVWORKER_FUNCTION_ARN) needs real
+//     AWS Lambda, so it is rejected with DYNAMODB_ENDPOINT, and
+//     REPLICATOR_FUNCTION_ARN is meaningless without MVWORKER_FUNCTION_ARN.
 func (c Config) Validate() error {
 	if c.DynamoDBEndpoint == "" && (c.Region == "" || c.Region == "local") {
 		return fmt.Errorf("config: REGION (or AWS_REGION) must name an AWS region when DYNAMODB_ENDPOINT is empty, got %q", c.Region)
@@ -189,6 +240,15 @@ func (c Config) Validate() error {
 	if c.HomeRegion != "" && c.HomeRegion != c.Region && !slices.Contains(c.ReplicaRegions, c.HomeRegion) {
 		return fmt.Errorf("config: GLOBAL_HOME_REGION (%s) must be REGION (%s) or one of REPLICA_REGIONS (%s)",
 			c.HomeRegion, c.Region, strings.Join(c.ReplicaRegions, ","))
+	}
+	if c.MVWorkerFunctionARN != "" && c.DynamoDBEndpoint != "" {
+		return fmt.Errorf("config: MVWORKER_FUNCTION_ARN manages Lambda event-source mappings on real AWS; unset it with DYNAMODB_ENDPOINT (%s)", c.DynamoDBEndpoint)
+	}
+	if c.ReplicatorFunctionARN != "" && c.MVWorkerFunctionARN == "" {
+		return errors.New("config: REPLICATOR_FUNCTION_ARN needs MVWORKER_FUNCTION_ARN (event-source mappings are managed only when it is set)")
+	}
+	if c.ESMBatchSize < 0 || c.ESMBatchSize > MaxESMBatchSize { // 0: default
+		return fmt.Errorf("config: ESM_BATCH_SIZE must be between 1 and %d, got %d", MaxESMBatchSize, c.ESMBatchSize)
 	}
 	return nil
 }
@@ -233,6 +293,22 @@ func envDuration(k string, def time.Duration) (time.Duration, error) {
 		return def, fmt.Errorf("config: %s: %w", k, err)
 	}
 	return d, nil
+}
+
+// envInt32 reads an integer within [lo, hi]; unset or empty is def.
+func envInt32(k string, def, lo, hi int32) (int32, error) {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return def, fmt.Errorf("config: %s: %w", k, err)
+	}
+	if n < int64(lo) || n > int64(hi) {
+		return def, fmt.Errorf("config: %s must be between %d and %d, got %d", k, lo, hi, n)
+	}
+	return int32(n), nil
 }
 
 // envSeconds reads a duration given as seconds ("1.5") or a Go duration

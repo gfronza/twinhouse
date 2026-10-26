@@ -158,3 +158,72 @@ func TestMaxExecutionTimeEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestEventSourceMappingSettings(t *testing.T) {
+	t.Setenv("REGION", "eu-west-1")
+	for _, k := range []string{"MVWORKER_FUNCTION_ARN", "REPLICATOR_FUNCTION_ARN", "RECONCILER_FUNCTION_ARN", "AWS_LAMBDA_FUNCTION_NAME", "ESM_BATCH_SIZE"} {
+		t.Setenv(k, "")
+	}
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ManagesEventSourceMappings() || c.MVWorkerFunctionARN != "" || c.ReplicatorFunctionARN != "" || c.ReconcilerFunctionARN != "" {
+		t.Errorf("defaults: %+v", c)
+	}
+	if c.ESMBatchSize != DefaultESMBatchSize {
+		t.Errorf("ESMBatchSize %d, want %d", c.ESMBatchSize, DefaultESMBatchSize)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("defaults must validate: %v", err)
+	}
+
+	t.Setenv("MVWORKER_FUNCTION_ARN", " arn:aws:lambda:eu-west-1:123456789012:function:mvworker ")
+	t.Setenv("REPLICATOR_FUNCTION_ARN", "replicator")
+	t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "chddb-reconciler")
+	t.Setenv("ESM_BATCH_SIZE", "250")
+	if c, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !c.ManagesEventSourceMappings() || c.MVWorkerFunctionARN != "arn:aws:lambda:eu-west-1:123456789012:function:mvworker" ||
+		c.ReplicatorFunctionARN != "replicator" || c.ESMBatchSize != 250 {
+		t.Errorf("settings not honoured: %+v", c)
+	}
+	if c.ReconcilerFunctionARN != "chddb-reconciler" {
+		t.Errorf("RECONCILER_FUNCTION_ARN must default to AWS_LAMBDA_FUNCTION_NAME, got %q", c.ReconcilerFunctionARN)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("aws settings must validate: %v", err)
+	}
+	t.Setenv("RECONCILER_FUNCTION_ARN", "explicit")
+	if c, _ = Load(); c.ReconcilerFunctionARN != "explicit" {
+		t.Errorf("RECONCILER_FUNCTION_ARN must win over AWS_LAMBDA_FUNCTION_NAME, got %q", c.ReconcilerFunctionARN)
+	}
+
+	for _, v := range []string{"0", "-1", "10001", "many"} {
+		t.Setenv("ESM_BATCH_SIZE", v)
+		if _, err := Load(); err == nil {
+			t.Errorf("ESM_BATCH_SIZE=%q accepted", v)
+		}
+	}
+	t.Setenv("ESM_BATCH_SIZE", "")
+
+	// ESM management is for real AWS; the replicator target needs the worker target.
+	cases := []struct {
+		name string
+		c    Config
+		ok   bool
+	}{
+		{"esm with local endpoint", Config{Region: "local", DynamoDBEndpoint: "http://ddb:8000", GlobalMode: GlobalNone, MVWorkerFunctionARN: "mvworker"}, false},
+		{"esm on aws", Config{Region: "eu-west-1", GlobalMode: GlobalNone, MVWorkerFunctionARN: "mvworker"}, true},
+		{"replicator target without worker target", Config{Region: "eu-west-1", GlobalMode: GlobalNone, ReplicatorFunctionARN: "replicator"}, false},
+		{"reconciler target alone (Lambda default)", Config{Region: "eu-west-1", GlobalMode: GlobalNone, ReconcilerFunctionARN: "self"}, true},
+		{"batch size too large", Config{Region: "eu-west-1", GlobalMode: GlobalNone, ESMBatchSize: MaxESMBatchSize + 1}, false},
+		{"batch size default (zero)", Config{Region: "eu-west-1", GlobalMode: GlobalNone}, true},
+	}
+	for _, tc := range cases {
+		if err := tc.c.Validate(); (err == nil) != tc.ok {
+			t.Errorf("%s: err %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}
