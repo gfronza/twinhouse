@@ -1,9 +1,10 @@
-# Developer entry points. The local stack is deploy/docker-compose.yml.
+# Developer entry points. The local stack is deploy/local/docker-compose.yml.
 
 GO              ?= go
 COMPOSE_PROJECT ?= dhdev
 PROFILES        ?=
-COMPOSE         := docker compose -p $(COMPOSE_PROJECT) -f deploy/docker-compose.yml
+COMPOSE_YML     ?= deploy/local/docker-compose.yml
+COMPOSE         := docker compose -p $(COMPOSE_PROJECT) -f $(COMPOSE_YML)
 COMPOSE_UP      := $(COMPOSE) $(foreach p,$(PROFILES),--profile $(p))
 
 # Endpoints of the running stack, exported to the e2e/compat/multiregion tests.

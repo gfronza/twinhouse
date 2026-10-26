@@ -61,7 +61,7 @@ func TestMain(m *testing.M) {
 		ddbUS:    envOr("MR_DDB_US", "http://localhost:28000"),
 		ddbEU:    envOr("MR_DDB_EU", "http://localhost:28001"),
 		project:  envOr("MR_COMPOSE_PROJECT", "dhmr"),
-		compose:  envOr("MR_COMPOSE_FILE", filepath.Join(root, "deploy", "docker-compose.yml")),
+		compose:  envOr("MR_COMPOSE_FILE", filepath.Join(root, "deploy", "local", "docker-compose.yml")),
 		repoRoot: root,
 		prefix:   envOr("MR_TABLE_PREFIX", "chddb_"),
 		converge: 60 * time.Second,

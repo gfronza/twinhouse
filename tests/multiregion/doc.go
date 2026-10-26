@@ -43,7 +43,7 @@
 //	MR_DDB_US            DynamoDB Local of us-east-1 (http://localhost:28000)
 //	MR_DDB_EU            DynamoDB Local of eu-west-1 (http://localhost:28001)
 //	MR_COMPOSE_PROJECT   compose project driven by fault tests (dhmr)
-//	MR_COMPOSE_FILE      compose file (deploy/docker-compose.yml under the repo root)
+//	MR_COMPOSE_FILE      compose file (deploy/local/docker-compose.yml under the repo root)
 //	MR_TABLE_PREFIX      physical table prefix of the stack (chddb_)
 //	MR_CONVERGE_TIMEOUT  convergence deadline per check, Go duration (60s)
 //	MR_PARALLEL          max scenario tests running at once (4)
@@ -59,7 +59,7 @@
 // consecutive runs on a freshly created stack pass. If convergence deadlines
 // or insert timeouts start failing, recreate the stack first:
 //
-//	docker compose -p dhmr -f deploy/docker-compose.yml down -v
+//	docker compose -p dhmr -f deploy/local/docker-compose.yml down -v
 //	COMPOSE_PROJECT=dhmr US_HTTP_PORT=28123 ... make up
 //
 // Every test creates its own databases named mr_<scenario>_<random> and drops

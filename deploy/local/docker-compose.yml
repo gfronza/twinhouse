@@ -1,7 +1,10 @@
 # Local multi-region stack (DESIGN.md §6):
 #   two DynamoDB Local instances standing in for us-east-1 and eu-west-1,
 #   one ClickHouse-compatible server + one stream worker per region, and the
-#   replicator emulating global tables between them.
+#   replicator emulating global tables between them. The serverless AWS
+#   deployment of the same binaries lives in deploy/aws (SAM).
+#
+#   Run from the repository root (the build context is the repository):
 #
 #   make up                  # multi-region stack: :8123 (us), :8124 (eu)
 #   make up PROFILES=compat  # also the reference ClickHouse on :18123
@@ -17,7 +20,7 @@ name: dynamodb-eventstream
 x-image: &image
   image: ${CHDDB_IMAGE:-dynamodb-eventstream:dev}
   build:
-    context: ..
+    context: ../..
     dockerfile: deploy/Dockerfile
   restart: unless-stopped
 
