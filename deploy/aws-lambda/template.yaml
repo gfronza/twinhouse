@@ -457,15 +457,14 @@ Resources:
                 - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
                 - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
             # DescribeTable before every merge target (table status, physical
-            # names); CreateTable/UpdateTimeToLive for the regional
-            # __dead_letters table on first use (mvworker.DeadLetterTableName).
+            # names); CreateTable for the regional __dead_letters table on
+            # first use (mvworker.DeadLetterTableName). That table has no TTL,
+            # and Lambda mode makes no TTL call.
             - Sid: Tables
               Effect: Allow
               Action:
                 - dynamodb:DescribeTable
                 - dynamodb:CreateTable
-                - dynamodb:DescribeTimeToLive
-                - dynamodb:UpdateTimeToLive
               Resource:
                 - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
             # Lambda's event-source mapping poller reads the source-table
@@ -542,8 +541,6 @@ Resources:
               Action:
                 - dynamodb:DescribeTable
                 - dynamodb:CreateTable
-                - dynamodb:DescribeTimeToLive
-                - dynamodb:UpdateTimeToLive
               Resource:
                 - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
             # The event-source mapping poller reads this region's
