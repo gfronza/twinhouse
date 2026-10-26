@@ -1,0 +1,1186 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  dynamodb-eventstream on ECS Fargate, one region: chserver (the
+  ClickHouse-compatible HTTP server) behind an internal Application Load
+  Balancer on port 8123, the materialized-view stream worker (cmd/mvworker,
+  or in-process in chserver) and, once per deployment, the
+  ReplacingMergeTree replicator (cmd/replicator). One stack per region in an
+  existing VPC; no DynamoDB tables are declared here, the services create
+  them at runtime.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  ImageUri:
+    Type: String
+    Description: >-
+      The image built from deploy/Dockerfile, in ECR
+      (<account>.dkr.ecr.<region>.amazonaws.com/<repository>:<tag> or
+      @sha256:<digest>). It must contain the architecture CpuArchitecture
+      names. A new tag (or digest) rolls out a new version.
+    AllowedPattern: '^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/[a-z0-9._/-]+(:[A-Za-z0-9._-]{1,128}|@sha256:[0-9a-f]{64})$'
+  CpuArchitecture:
+    Type: String
+    Default: ARM64
+    AllowedValues: [ARM64, X86_64]
+    Description: >-
+      Fargate CPU architecture of every task (ARM64 = linux/arm64, X86_64 =
+      linux/amd64). Build and push the image for it (make image-push
+      PLATFORM=linux/arm64 or linux/amd64).
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The existing VPC.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Private subnets (two or more Availability Zones) for the load balancer
+      and the tasks. They need a NAT gateway (or other internet egress): the
+      stream consumers (mvworker, or chserver with WorkerMode=in-process,
+      and the replicator) read DynamoDB Streams, which the DynamoDB gateway
+      endpoint does not cover, and the replicator reaches DynamoDB in the
+      other regions. VPC endpoints for DynamoDB, ECR, CloudWatch Logs and
+      Secrets Manager are optional.
+  AllowedCidr:
+    Type: String
+    Default: ''
+    Description: >-
+      Client CIDR allowed to reach the load balancer (port 8123, and 8443
+      with CertificateArn). Empty: none (use ClientSecurityGroupId).
+    AllowedPattern: '^$|^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$'
+  ClientSecurityGroupId:
+    Type: String
+    Default: ''
+    Description: >-
+      Security group of the clients allowed to reach the load balancer.
+      Empty: none (use AllowedCidr). Set at least one of the two (a stack
+      rule enforces it).
+    AllowedPattern: '^$|^sg-[0-9a-f]{8,17}$'
+  ExistingClusterName:
+    Type: String
+    Default: ''
+    Description: >-
+      Run the services in this existing ECS cluster. Empty: the stack
+      creates a cluster.
+  ContainerInsights:
+    Type: String
+    Default: disabled
+    AllowedValues: [enabled, disabled]
+    Description: Container Insights of the cluster the stack creates.
+  TablePrefix:
+    Type: String
+    Default: chddb_
+    Description: >-
+      TABLE_PREFIX: prefix of every physical DynamoDB table. The task roles
+      are scoped to tables with this prefix. Use the same value in every
+      region.
+    AllowedPattern: '^[A-Za-z0-9_.-]{1,64}$'
+  GlobalMode:
+    Type: String
+    Default: aws
+    AllowedValues: [aws, none]
+    Description: >-
+      GLOBAL_MODE: aws (multi-region, real DynamoDB global tables plus the
+      replicator for ReplacingMergeTree tables) or none (single region, no
+      replicator).
+  ReplicaRegions:
+    Type: CommaDelimitedList
+    Default: us-east-1,eu-west-1
+    Description: >-
+      Every region of the deployment, this one included (at least two; a
+      stack rule checks both); use the same value in every stack. REPLICA_REGIONS drops the current region itself, and
+      the replicator's REGIONS lists them all with empty endpoints (real
+      AWS). Ignored with GlobalMode=none.
+  HomeRegion:
+    Type: String
+    Default: us-east-1
+    Description: >-
+      GLOBAL_HOME_REGION: the region that creates the global system tables
+      ({prefix}__catalog) and adds their replicas. Deploy this region's
+      stack first. Ignored with GlobalMode=none.
+  ChUsersSecretArn:
+    Type: String
+    Description: >-
+      ARN of the Secrets Manager secret whose SecretString is the CH_USERS
+      value ("user:password,user2:password2"; "default:" = user default
+      without a password). ECS injects it into chserver at task start; it
+      never appears in the task definition. The secret ARN only (full, or
+      without the random suffix); select a JSON key with ChUsersSecretJsonKey.
+    AllowedPattern: '^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$'
+    ConstraintDescription: >-
+      must be a Secrets Manager secret ARN with no ":<json-key>::" selector
+      (use ChUsersSecretJsonKey for that).
+  ChUsersSecretJsonKey:
+    Type: String
+    Default: ''
+    Description: >-
+      Key of a JSON secret whose value is CH_USERS (ECS ValueFrom
+      <arn>:<key>::). Empty: the whole SecretString is CH_USERS.
+    AllowedPattern: '^[^:]*$'
+  SecretKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Customer managed KMS key that encrypts the CH_USERS secret (the
+      execution role is allowed kms:Decrypt on it). Empty: the secret uses
+      the AWS managed key.
+    AllowedPattern: '^(|arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/.+)$'
+  WorkerMode:
+    Type: String
+    Default: service
+    AllowedValues: [service, in-process]
+    Description: >-
+      service: a separate mvworker ECS service applies the materialized
+      views (shard leases split the work between its tasks). in-process:
+      every chserver task also runs the stream worker
+      (RUN_STREAM_WORKER=true) and no mvworker service is created.
+  RunReplicator:
+    Type: String
+    Default: auto
+    AllowedValues: [auto, 'true', 'false']
+    Description: >-
+      Whether this stack runs the replicator (GlobalMode=aws only). It runs
+      once per deployment and tails every region in ReplicaRegions. auto:
+      only in HomeRegion.
+  LogLevel:
+    Type: String
+    Default: info
+    AllowedValues: [debug, info, warn, error]
+  InlineViews:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: INLINE_VIEWS of chserver (read-your-writes for rollups in the writing region).
+  CatalogRefresh:
+    Type: String
+    Default: 2s
+    Description: >-
+      CATALOG_REFRESH (Go duration): catalog reload and reconcile interval of
+      chserver, table discovery interval of the worker and the replicator.
+    AllowedPattern: '^[0-9]+(ms|s|m|h)$'
+  MaxExecutionTime:
+    Type: String
+    Default: '100'
+    Description: >-
+      MAX_EXECUTION_TIME of chserver (seconds or a Go duration, 0 =
+      unlimited). Keep it below LoadBalancerIdleTimeout so a slow query
+      fails with ClickHouse's TIMEOUT_EXCEEDED instead of a load balancer
+      504. Queries may lower or raise it with their own setting.
+    AllowedPattern: '^[0-9]+(\.[0-9]+)?(ms|s|m|h)?$'
+  MvPoisonPolicy:
+    Type: String
+    Default: deadletter
+    AllowedValues: [deadletter, block]
+    Description: >-
+      MV_POISON_POLICY of the stream worker and the replicator's conflict
+      views: deadletter writes a record that keeps failing deterministically
+      to {prefix}__dead_letters and skips it; block retries it forever.
+  ChserverCpu:
+    Type: Number
+    Default: 1024
+    AllowedValues: [256, 512, 1024, 2048, 4096, 8192, 16384]
+    Description: CPU units of a chserver task (1024 = 1 vCPU); must be a valid Fargate pair with ChserverMemory.
+  ChserverMemory:
+    Type: Number
+    Default: 2048
+    MinValue: 512
+    MaxValue: 122880
+    Description: Memory (MiB) of a chserver task.
+  ChserverDesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 1000
+    Description: >-
+      chserver tasks (the minimum when autoscaling is on). Two or more spread
+      over Availability Zones.
+  ChserverMaxCount:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 1000
+    Description: >-
+      Maximum chserver tasks for CPU target-tracking autoscaling. 0: no
+      autoscaling (ChserverDesiredCount tasks).
+  ChserverTargetCpu:
+    Type: Number
+    Default: 60
+    MinValue: 10
+    MaxValue: 90
+    Description: Average CPU utilization (percent) the autoscaling policy keeps chserver at.
+  MvWorkerCpu:
+    Type: Number
+    Default: 512
+    AllowedValues: [256, 512, 1024, 2048, 4096, 8192, 16384]
+  MvWorkerMemory:
+    Type: Number
+    Default: 1024
+    MinValue: 512
+    MaxValue: 122880
+  MvWorkerDesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 100
+    Description: >-
+      mvworker tasks (WorkerMode=service). Shard leases split the streams'
+      shards between tasks; a second task gives fail-over within the lease
+      duration (30 s).
+  ReplicatorCpu:
+    Type: Number
+    Default: 512
+    AllowedValues: [256, 512, 1024, 2048, 4096, 8192, 16384]
+  ReplicatorMemory:
+    Type: Number
+    Default: 1024
+    MinValue: 512
+    MaxValue: 122880
+  ReplicatorDesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 10
+    Description: Replicator tasks (shard leases keep several from conflicting).
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ACM certificate for an HTTPS listener on port 8443 (ClickHouse's HTTPS
+      port). Empty: HTTP on 8123 only. Clients must use a DNS name the
+      certificate covers (an alias of the load balancer).
+    AllowedPattern: '^(|arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+)$'
+  KeepHttpListener:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Keep the plain HTTP listener on 8123 when CertificateArn is set
+      (false: HTTPS only). Without a certificate the HTTP listener is always
+      created.
+  LoadBalancerIdleTimeout:
+    Type: Number
+    Default: 110
+    MinValue: 1
+    MaxValue: 115
+    Description: >-
+      Idle timeout (seconds) of the load balancer: a query that sends no
+      bytes for this long is cut with a 504. Keep MaxExecutionTime below it.
+      It must stay below chserver's keep-alive idle timeout (120 s), or the
+      load balancer may reuse a connection chserver just closed (502).
+  DeregistrationDelay:
+    Type: Number
+    Default: 110
+    MinValue: 0
+    MaxValue: 3600
+    Description: >-
+      Seconds a stopping chserver task keeps serving its in-flight requests
+      after it is taken out of the load balancer, before ECS sends SIGTERM.
+      Keep it at or above MaxExecutionTime.
+  HealthCheckGracePeriod:
+    Type: Number
+    Default: 600
+    MinValue: 0
+    MaxValue: 2147483647
+    Description: >-
+      Seconds ECS ignores the load balancer and container health checks of
+      a new chserver task. chserver listens only after the system tables
+      are ready. On the first start of a GlobalMode=aws deployment that
+      includes adding the __catalog replicas: the home region adds them and
+      waits until they are ACTIVE (minutes), and another region waits for
+      its replica. Later starts are fast.
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+
+# The rule-specific functions (Fn::Contains, Fn::EachMemberEquals) are
+# written in the long form used by the CloudFormation Rules documentation.
+Rules:
+  GlobalRegions:
+    RuleCondition: !Equals [!Ref GlobalMode, aws]
+    Assertions:
+      - Assert:
+          Fn::Contains: [!Ref ReplicaRegions, !Ref HomeRegion]
+        AssertDescription: HomeRegion must be one of ReplicaRegions.
+      - Assert:
+          Fn::Contains: [!Ref ReplicaRegions, !Ref 'AWS::Region']
+        AssertDescription: ReplicaRegions must include this stack's region.
+      - Assert: !Not
+          - Fn::EachMemberEquals: [!Ref ReplicaRegions, !Ref 'AWS::Region']
+        AssertDescription: >-
+          ReplicaRegions must list at least one region other than this
+          stack's region (GlobalMode=aws needs two or more regions).
+  ClientAccess:
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref AllowedCidr, '']]
+          - !Not [!Equals [!Ref ClientSecurityGroupId, '']]
+        AssertDescription: >-
+          Set AllowedCidr or ClientSecurityGroupId (or both); with neither,
+          nothing can reach the load balancer.
+
+Conditions:
+  IsGlobal: !Equals [!Ref GlobalMode, aws]
+  IsHomeRegion: !Equals [!Ref 'AWS::Region', !Ref HomeRegion]
+  IsGlobalHome: !And [!Condition IsGlobal, !Condition IsHomeRegion]
+  SeparateWorker: !Equals [!Ref WorkerMode, service]
+  InProcessWorker: !Equals [!Ref WorkerMode, in-process]
+  RunsReplicator: !And
+    - !Condition IsGlobal
+    - !Or
+      - !Equals [!Ref RunReplicator, 'true']
+      - !And [!Equals [!Ref RunReplicator, auto], !Condition IsHomeRegion]
+  CreateCluster: !Equals [!Ref ExistingClusterName, '']
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+  CreateHttpListener: !Or [!Not [!Condition HasCertificate], !Equals [!Ref KeepHttpListener, 'true']]
+  HasCidr: !Not [!Equals [!Ref AllowedCidr, '']]
+  HasClientSg: !Not [!Equals [!Ref ClientSecurityGroupId, '']]
+  CidrHttp: !And [!Condition HasCidr, !Condition CreateHttpListener]
+  CidrHttps: !And [!Condition HasCidr, !Condition HasCertificate]
+  ClientSgHttp: !And [!Condition HasClientSg, !Condition CreateHttpListener]
+  ClientSgHttps: !And [!Condition HasClientSg, !Condition HasCertificate]
+  Autoscale: !Not [!Equals [!Ref ChserverMaxCount, 0]]
+  HasSecretKmsKey: !Not [!Equals [!Ref SecretKmsKeyArn, '']]
+  HasChUsersJsonKey: !Not [!Equals [!Ref ChUsersSecretJsonKey, '']]
+
+Resources:
+  # -------------------------------------------------------------------------
+  # Cluster (unless ExistingClusterName names one).
+  # -------------------------------------------------------------------------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Condition: CreateCluster
+    Properties:
+      ClusterName: !Ref 'AWS::StackName'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: !Ref ContainerInsights
+      Tags:
+        - Key: Application
+          Value: dynamodb-eventstream
+
+  # -------------------------------------------------------------------------
+  # Network: the load balancer accepts the allowed clients and talks only to
+  # the tasks; the tasks accept only the load balancer and reach AWS APIs
+  # over HTTPS.
+  # -------------------------------------------------------------------------
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName} load balancer (ClickHouse HTTP 8123 / HTTPS 8443)'
+      VpcId: !Ref VpcId
+      # Replaces the default allow-all egress; LoadBalancerEgressToTasks is
+      # the only real egress rule.
+      SecurityGroupEgress:
+        - CidrIp: 127.0.0.1/32
+          IpProtocol: '-1'
+          Description: no egress besides the explicit rules
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-alb'
+
+  LoadBalancerIngressCidrHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CidrHttp
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8123
+      ToPort: 8123
+      CidrIp: !Ref AllowedCidr
+      Description: ClickHouse HTTP from AllowedCidr
+
+  LoadBalancerIngressCidrHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CidrHttps
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8443
+      ToPort: 8443
+      CidrIp: !Ref AllowedCidr
+      Description: ClickHouse HTTPS from AllowedCidr
+
+  LoadBalancerIngressSgHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: ClientSgHttp
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8123
+      ToPort: 8123
+      SourceSecurityGroupId: !Ref ClientSecurityGroupId
+      Description: ClickHouse HTTP from ClientSecurityGroupId
+
+  LoadBalancerIngressSgHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: ClientSgHttps
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8443
+      ToPort: 8443
+      SourceSecurityGroupId: !Ref ClientSecurityGroupId
+      Description: ClickHouse HTTPS from ClientSecurityGroupId
+
+  LoadBalancerEgressToTasks:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8123
+      ToPort: 8123
+      DestinationSecurityGroupId: !Ref TaskSecurityGroup
+      Description: chserver tasks (requests and /ping health checks)
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName} tasks (chserver, mvworker, replicator)'
+      VpcId: !Ref VpcId
+      # DynamoDB, DynamoDB Streams, ECR, CloudWatch Logs and Secrets Manager
+      # are HTTPS endpoints (NAT, or VPC endpoints except for Streams). The
+      # task role credentials come from the Fargate credentials endpoint,
+      # not over this rule.
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          Description: AWS APIs over HTTPS
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-tasks'
+
+  TaskIngressFromLoadBalancer:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8123
+      ToPort: 8123
+      SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      Description: chserver from the load balancer
+
+  # -------------------------------------------------------------------------
+  # Internal Application Load Balancer: ClickHouse's HTTP port 8123, so a
+  # client switches by host and port only; HTTPS on 8443 with a certificate.
+  # -------------------------------------------------------------------------
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internal
+      Subnets: !Ref SubnetIds
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref LoadBalancerIdleTimeout
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+      Tags:
+        - Key: Application
+          Value: dynamodb-eventstream
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8123
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /ping
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: !Ref DeregistrationDelay
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: CreateHttpListener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 8123
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTPS
+      Port: 8443
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # -------------------------------------------------------------------------
+  # Logs (JSON lines on stderr, the awslogs driver).
+  # -------------------------------------------------------------------------
+  ChserverLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}/chserver'
+      RetentionInDays: !Ref LogRetentionDays
+
+  MvWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: SeparateWorker
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}/mvworker'
+      RetentionInDays: !Ref LogRetentionDays
+
+  ReplicatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: RunsReplicator
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}/replicator'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # -------------------------------------------------------------------------
+  # Task execution role: pulls the image, writes the logs and resolves the
+  # CH_USERS secret at task start. The task roles below are what the
+  # binaries call AWS with.
+  # -------------------------------------------------------------------------
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      ManagedPolicyArns:
+        # ECR pull and CloudWatch Logs.
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+      Policies:
+        - PolicyName: ch-users-secret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # IAM matches the secret's own ARN. The trailing * covers its
+              # random suffix when ChUsersSecretArn omits it; the JSON key
+              # selector is not part of this resource (ChUsersSecretJsonKey
+              # goes only into ValueFrom).
+              - Sid: ReadChUsersSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub '${ChUsersSecretArn}*'
+              - !If
+                - HasSecretKmsKey
+                - Sid: DecryptChUsersSecret
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Ref SecretKmsKeyArn
+                - !Ref 'AWS::NoValue'
+
+  # -------------------------------------------------------------------------
+  # chserver task role. The server reads and writes rows (exec ->
+  # storage/dynamo), runs DDL synchronously (Store.EnsureTable / DropTable /
+  # TruncateTable: Create/Describe/Update/Delete, TTL on __mv_markers), runs
+  # the reconciler (EnsureSystemTables, EnsureTable / DropTable of every
+  # catalog entry, ListPhysicalTables) and, with GLOBAL_MODE=aws, adds and
+  # removes the replicas of the global tables homed in this region
+  # (UpdateTable ReplicaUpdates). The in-process worker also reads the
+  # source-table streams.
+  # -------------------------------------------------------------------------
+  ChserverTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: dynamodb
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Items
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:ConditionCheckItem
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+              - Sid: Tables
+                Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:CreateTable
+                  - dynamodb:UpdateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:UpdateTimeToLive
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+              # Store.ListPhysicalTables (reconciler orphan discovery).
+              # ListTables cannot be scoped to a resource.
+              - Sid: ListTables
+                Effect: Allow
+                Action: dynamodb:ListTables
+                Resource: '*'
+              - !If
+                - InProcessWorker
+                - Sid: Streams
+                  Effect: Allow
+                  Action:
+                    - dynamodb:DescribeStream
+                    - dynamodb:GetShardIterator
+                    - dynamodb:GetRecords
+                  Resource:
+                    - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/stream/*'
+                - !Ref 'AWS::NoValue'
+              # Adding a replica needs these actions on the table in the
+              # replica's region, removing one DeleteTable(Replica) there
+              # (DynamoDB global tables security guide); limited to the
+              # deployment's regions.
+              - !If
+                - IsGlobal
+                - Sid: Replicas
+                  Effect: Allow
+                  Action:
+                    - dynamodb:DescribeTable
+                    - dynamodb:CreateTable
+                    - dynamodb:UpdateTable
+                    - dynamodb:DeleteTable
+                    - dynamodb:CreateTableReplica
+                    - dynamodb:DeleteTableReplica
+                    - dynamodb:Query
+                    - dynamodb:Scan
+                    - dynamodb:GetItem
+                    - dynamodb:PutItem
+                    - dynamodb:UpdateItem
+                    - dynamodb:DeleteItem
+                    - dynamodb:BatchWriteItem
+                  Resource:
+                    - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+                  Condition:
+                    StringEquals:
+                      aws:RequestedRegion: !Ref ReplicaRegions
+                - !Ref 'AWS::NoValue'
+              - !If
+                - IsGlobal
+                - Sid: ReplicationServiceLinkedRole
+                  Effect: Allow
+                  Action: iam:CreateServiceLinkedRole
+                  Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/replication.dynamodb.amazonaws.com/AWSServiceRoleForDynamoDBReplication'
+                  Condition:
+                    StringEquals:
+                      iam:AWSServiceName: replication.dynamodb.amazonaws.com
+                - !Ref 'AWS::NoValue'
+
+  ChserverTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-chserver'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref ChserverCpu
+      Memory: !Ref ChserverMemory
+      RuntimePlatform:
+        CpuArchitecture: !Ref CpuArchitecture
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ChserverTaskRole.Arn
+      ContainerDefinitions:
+        - Name: chserver
+          Image: !Ref ImageUri
+          Command: [chserver]
+          Essential: true
+          ReadonlyRootFilesystem: true
+          # chserver drains in-flight requests for up to 15 s on SIGTERM.
+          StopTimeout: 30
+          PortMappings:
+            - Name: http
+              ContainerPort: 8123
+              Protocol: tcp
+          Environment:
+            - Name: REGION
+              Value: !Ref 'AWS::Region'
+            - Name: LISTEN_ADDR
+              Value: ':8123'
+            - Name: TABLE_PREFIX
+              Value: !Ref TablePrefix
+            - Name: GLOBAL_MODE
+              Value: !Ref GlobalMode
+            - !If
+              - IsGlobal
+              - Name: REPLICA_REGIONS
+                Value: !Join [',', !Ref ReplicaRegions]
+              - !Ref 'AWS::NoValue'
+            - !If
+              - IsGlobal
+              - Name: GLOBAL_HOME_REGION
+                Value: !Ref HomeRegion
+              - !Ref 'AWS::NoValue'
+            - Name: LOG_LEVEL
+              Value: !Ref LogLevel
+            - Name: CATALOG_REFRESH
+              Value: !Ref CatalogRefresh
+            - Name: INLINE_VIEWS
+              Value: !Ref InlineViews
+            # A stream worker (the mvworker service or the in-process one)
+            # always runs: a failed inline view application is logged and
+            # the worker applies it.
+            - Name: STREAM_VIEWS
+              Value: 'true'
+            - Name: MAX_EXECUTION_TIME
+              Value: !Ref MaxExecutionTime
+            - Name: RUN_STREAM_WORKER
+              Value: !If [InProcessWorker, 'true', 'false']
+            - Name: MV_POISON_POLICY
+              Value: !Ref MvPoisonPolicy
+          Secrets:
+            - Name: CH_USERS
+              ValueFrom: !If
+                - HasChUsersJsonKey
+                - !Sub '${ChUsersSecretArn}:${ChUsersSecretJsonKey}::'
+                - !Ref ChUsersSecretArn
+          HealthCheck:
+            Command: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8123/ping || exit 1']
+            Interval: 10
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ChserverLogGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: chserver
+
+  ChserverService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-chserver'
+      Cluster: !If [CreateCluster, !Ref Cluster, !Ref ExistingClusterName]
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      TaskDefinition: !Ref ChserverTaskDefinition
+      DesiredCount: !Ref ChserverDesiredCount
+      HealthCheckGracePeriodSeconds: !Ref HealthCheckGracePeriod
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      LoadBalancers:
+        - ContainerName: chserver
+          ContainerPort: 8123
+          TargetGroupArn: !Ref TargetGroup
+      PropagateTags: SERVICE
+      # The target group must be attached to a listener before the service
+      # registers tasks; a DependsOn cannot name a conditional resource, so
+      # the tag's conditional Ref orders the service after the listener that
+      # exists (at least one always does).
+      Tags:
+        - Key: Listener
+          Value: !If [CreateHttpListener, !Ref HttpListener, !Ref HttpsListener]
+        - Key: Application
+          Value: dynamodb-eventstream
+
+  # CPU target tracking (ChserverMaxCount > 0). Application Auto Scaling uses
+  # its ECS service-linked role.
+  ChserverScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: Autoscale
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub
+        - 'service/${ClusterName}/${ServiceName}'
+        - ClusterName: !If [CreateCluster, !Ref Cluster, !Ref ExistingClusterName]
+          ServiceName: !GetAtt ChserverService.Name
+      MinCapacity: !Ref ChserverDesiredCount
+      MaxCapacity: !Ref ChserverMaxCount
+
+  ChserverScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: Autoscale
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-chserver-cpu'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ChserverScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: !Ref ChserverTargetCpu
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 300
+
+  # -------------------------------------------------------------------------
+  # mvworker task role (WorkerMode=service). The worker reads this region's
+  # source-table streams, merges view output into the rollups (items,
+  # __mv_markers), keeps shard leases and checkpoints in __checkpoints and
+  # dead letters in __dead_letters (created on first use), and runs
+  # EnsureSystemTables at startup: in the home region with GLOBAL_MODE=aws
+  # that may add the replicas of __catalog, which is the only replica
+  # operation it can make.
+  # -------------------------------------------------------------------------
+  MvWorkerTaskRole:
+    Type: AWS::IAM::Role
+    Condition: SeparateWorker
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: dynamodb
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Items
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:ConditionCheckItem
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+              - Sid: Tables
+                Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:CreateTable
+                  - dynamodb:UpdateTable
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:UpdateTimeToLive
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+              - Sid: Streams
+                Effect: Allow
+                Action:
+                  - dynamodb:DescribeStream
+                  - dynamodb:GetShardIterator
+                  - dynamodb:GetRecords
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/stream/*'
+              - !If
+                - IsGlobalHome
+                - Sid: CatalogReplicas
+                  Effect: Allow
+                  Action:
+                    - dynamodb:DescribeTable
+                    - dynamodb:CreateTable
+                    - dynamodb:UpdateTable
+                    - dynamodb:CreateTableReplica
+                    - dynamodb:Query
+                    - dynamodb:Scan
+                    - dynamodb:GetItem
+                    - dynamodb:PutItem
+                    - dynamodb:UpdateItem
+                    - dynamodb:DeleteItem
+                    - dynamodb:BatchWriteItem
+                  Resource:
+                    - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}__catalog'
+                  Condition:
+                    StringEquals:
+                      aws:RequestedRegion: !Ref ReplicaRegions
+                - !Ref 'AWS::NoValue'
+              - !If
+                - IsGlobalHome
+                - Sid: ReplicationServiceLinkedRole
+                  Effect: Allow
+                  Action: iam:CreateServiceLinkedRole
+                  Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/replication.dynamodb.amazonaws.com/AWSServiceRoleForDynamoDBReplication'
+                  Condition:
+                    StringEquals:
+                      iam:AWSServiceName: replication.dynamodb.amazonaws.com
+                - !Ref 'AWS::NoValue'
+
+  MvWorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: SeparateWorker
+    Properties:
+      Family: !Sub '${AWS::StackName}-mvworker'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref MvWorkerCpu
+      Memory: !Ref MvWorkerMemory
+      RuntimePlatform:
+        CpuArchitecture: !Ref CpuArchitecture
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt MvWorkerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: mvworker
+          Image: !Ref ImageUri
+          Command: [mvworker]
+          Essential: true
+          ReadonlyRootFilesystem: true
+          # On SIGTERM the worker stops its shard consumers and logs its
+          # final stats; an unreleased lease expires after 30 s.
+          StopTimeout: 30
+          Environment:
+            - Name: REGION
+              Value: !Ref 'AWS::Region'
+            - Name: TABLE_PREFIX
+              Value: !Ref TablePrefix
+            - Name: GLOBAL_MODE
+              Value: !Ref GlobalMode
+            - !If
+              - IsGlobal
+              - Name: REPLICA_REGIONS
+                Value: !Join [',', !Ref ReplicaRegions]
+              - !Ref 'AWS::NoValue'
+            - !If
+              - IsGlobal
+              - Name: GLOBAL_HOME_REGION
+                Value: !Ref HomeRegion
+              - !Ref 'AWS::NoValue'
+            - Name: LOG_LEVEL
+              Value: !Ref LogLevel
+            - Name: CATALOG_REFRESH
+              Value: !Ref CatalogRefresh
+            - Name: MV_POISON_POLICY
+              Value: !Ref MvPoisonPolicy
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref MvWorkerLogGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: mvworker
+
+  MvWorkerService:
+    Type: AWS::ECS::Service
+    Condition: SeparateWorker
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-mvworker'
+      Cluster: !If [CreateCluster, !Ref Cluster, !Ref ExistingClusterName]
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      TaskDefinition: !Ref MvWorkerTaskDefinition
+      DesiredCount: !Ref MvWorkerDesiredCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      PropagateTags: SERVICE
+      Tags:
+        - Key: Application
+          Value: dynamodb-eventstream
+
+  # -------------------------------------------------------------------------
+  # Replicator (GLOBAL_MODE=aws, RunsReplicator): tails the
+  # ReplacingMergeTree tables' streams in every region of ReplicaRegions and
+  # copies the rows with version-aware conditional puts to the other
+  # regions; the conflict hook applies the target region's views to
+  # rejected versions. Leases and checkpoints live in each source region's
+  # __checkpoints, dead letters in the target region's __dead_letters.
+  # -------------------------------------------------------------------------
+  ReplicatorTaskRole:
+    Type: AWS::IAM::Role
+    Condition: RunsReplicator
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: dynamodb
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Items
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:ConditionCheckItem
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref ReplicaRegions
+              - Sid: Tables
+                Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:CreateTable
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref ReplicaRegions
+              - Sid: Streams
+                Effect: Allow
+                Action:
+                  - dynamodb:DescribeStream
+                  - dynamodb:GetShardIterator
+                  - dynamodb:GetRecords
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*/stream/*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref ReplicaRegions
+
+  ReplicatorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: RunsReplicator
+    Properties:
+      Family: !Sub '${AWS::StackName}-replicator'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref ReplicatorCpu
+      Memory: !Ref ReplicatorMemory
+      RuntimePlatform:
+        CpuArchitecture: !Ref CpuArchitecture
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ReplicatorTaskRole.Arn
+      ContainerDefinitions:
+        - Name: replicator
+          Image: !Ref ImageUri
+          Command: [replicator]
+          Essential: true
+          ReadonlyRootFilesystem: true
+          StopTimeout: 30
+          Environment:
+            # "us-east-1=,eu-west-1=": every region, empty endpoint = AWS.
+            - Name: REGIONS
+              Value: !Join ['', [!Join ['=,', !Ref ReplicaRegions], '=']]
+            - Name: GLOBAL_MODE
+              Value: aws
+            - Name: TABLE_PREFIX
+              Value: !Ref TablePrefix
+            - Name: LOG_LEVEL
+              Value: !Ref LogLevel
+            - Name: CATALOG_REFRESH
+              Value: !Ref CatalogRefresh
+            - Name: APPLY_CONFLICT_VIEWS
+              Value: 'true'
+            - Name: MV_POISON_POLICY
+              Value: !Ref MvPoisonPolicy
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ReplicatorLogGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: replicator
+
+  ReplicatorService:
+    Type: AWS::ECS::Service
+    Condition: RunsReplicator
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-replicator'
+      Cluster: !If [CreateCluster, !Ref Cluster, !Ref ExistingClusterName]
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      TaskDefinition: !Ref ReplicatorTaskDefinition
+      DesiredCount: !Ref ReplicatorDesiredCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      PropagateTags: SERVICE
+      Tags:
+        - Key: Application
+          Value: dynamodb-eventstream
+
+# ---------------------------------------------------------------------------
+Outputs:
+  LoadBalancerDnsName:
+    Description: DNS name of the internal load balancer (resolves inside the VPC)
+    Value: !GetAtt LoadBalancer.DNSName
+  ClickHouseUrl:
+    Condition: CreateHttpListener
+    Description: ClickHouse HTTP URL for clients (clickhouse-go Addr host:8123, curl)
+    Value: !Sub 'http://${LoadBalancer.DNSName}:8123'
+  ClickHouseHttpsPort:
+    Condition: HasCertificate
+    Description: HTTPS listener port; use a DNS name the certificate covers, aliased to LoadBalancerDnsName
+    Value: '8443'
+  ClusterName:
+    Value: !If [CreateCluster, !Ref Cluster, !Ref ExistingClusterName]
+  ChserverServiceName:
+    Value: !GetAtt ChserverService.Name
+  MvWorkerServiceName:
+    Condition: SeparateWorker
+    Value: !GetAtt MvWorkerService.Name
+  ReplicatorServiceName:
+    Condition: RunsReplicator
+    Value: !GetAtt ReplicatorService.Name
+  TaskSecurityGroupId:
+    Description: Security group of the tasks (for VPC endpoint policies or extra rules)
+    Value: !Ref TaskSecurityGroup
+  LoadBalancerSecurityGroupId:
+    Value: !Ref LoadBalancerSecurityGroup

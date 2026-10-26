@@ -1,5 +1,8 @@
-# Developer entry points. The local stack is deploy/local/docker-compose.yml;
-# the serverless AWS deployment (SAM) is deploy/aws-lambda (targets aws-*).
+# Developer entry points.
+#   deploy/local/docker-compose.yml  the local stack (targets up, down, e2e, ...)
+#   deploy/aws-lambda/               serverless AWS deployment, SAM (targets aws-*)
+#   deploy/aws-ecs/                  container AWS deployment, ECS Fargate,
+#                                    plain CloudFormation (targets ecs-*, image-push)
 
 GO              ?= go
 COMPOSE_PROJECT ?= dhdev
@@ -24,7 +27,8 @@ ITEST_PORT_B   ?= 18102
 DDB_LOCAL_IMG  ?= amazon/dynamodb-local:latest
 
 .PHONY: all build image test vet fmt test-integration up up-single down logs ps e2e compat multiregion \
-        aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy
+        aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy \
+        ecs-validate ecs-local image-push ecs-deploy
 
 all: build test
 
@@ -112,8 +116,10 @@ aws-build:
 # session on the host would otherwise stop the Lambda containers from starting.
 # The API Lambda only checks that the system tables exist (the reconciler
 # creates them), so one reconciler round runs first against the same
-# DynamoDB Local (host port $(DDB_US_ENDPOINT)), with the settings of
-# $(SAM_DIR)/local-env.json.
+# DynamoDB Local ($(DDB_US_ENDPOINT), from the host). It does not read
+# $(SAM_LOCAL_ENV): its settings below repeat those of local-env.json, and
+# TABLE_PREFIX comes from make, so an env file with another TABLE_PREFIX
+# needs the same TABLE_PREFIX=... on the make command line.
 SAM_LOCAL_ENV   ?= local-env.json
 aws-local-reconcile:
 	env -u AWS_PROFILE -u AWS_SESSION_TOKEN AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local \
@@ -137,3 +143,44 @@ aws-local-e2e:
 aws-deploy: aws-build
 	$(if $(findstring --parameter-overrides,$(SAM_DEPLOY_ARGS)),$(error SAM_DEPLOY_ARGS must not contain --parameter-overrides: it REPLACES every parameter of [$(ENV).deploy.parameters]; edit $(SAM_DIR)/$(SAM_CONFIG) or deploy a git-ignored copy with SAM_CONFIG=samconfig.local.toml))
 	cd $(SAM_DIR) && $(SAM) deploy --config-file $(SAM_CONFIG) --config-env $(ENV) $(SAM_DEPLOY_ARGS)
+
+# ---------------------------------------------------------------------------
+# Container AWS deployment (deploy/aws-ecs, plain CloudFormation deployed
+# with `sam deploy`): chserver on ECS Fargate behind an internal ALB on
+# :8123, the mvworker service and the replicator (home region).
+#   make ecs-validate                      # sam validate --lint (no credentials needed)
+#   make ecs-local                         # the rendered task definitions as local
+#                                          # containers against the dhdev DynamoDB Local,
+#                                          # plus tests/e2e against them (make up first)
+#   make image-push IMAGE_REPO=<account>.dkr.ecr.<region>.amazonaws.com/<repo> \
+#        [IMAGE_TAG=v1] [PLATFORM=linux/arm64|linux/amd64]
+#                                          # build and push (docker login to ECR first)
+#   make ecs-deploy ENV=us                 # home region first, then ENV=eu; fill in the
+#                                          # CHANGE_ME values of deploy/aws-ecs/samconfig.toml
+#   make ecs-deploy ENV=us ECS_CONFIG=samconfig.local.toml   # a git-ignored copy
+ECS_DIR         ?= deploy/aws-ecs
+ECS_CONFIG      ?= samconfig.toml
+ECS_DEPLOY_ARGS ?=
+IMAGE_REPO      ?=
+IMAGE_TAG       ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+# linux/arm64 matches the template's default CpuArchitecture=ARM64;
+# linux/amd64 for X86_64.
+PLATFORM        ?= linux/arm64
+
+ecs-validate:
+	cd $(ECS_DIR) && $(SAM) validate --lint --template-file template.yaml
+
+ecs-local:
+	$(GO) test -tags ecslocal -count=1 -v -timeout 30m ./$(ECS_DIR)/
+
+# Never run by the test suites: it pushes to a registry.
+image-push:
+	$(if $(IMAGE_REPO),,$(error IMAGE_REPO=<account>.dkr.ecr.<region>.amazonaws.com/<repository> is required))
+	docker buildx build --platform $(PLATFORM) -f deploy/Dockerfile -t $(IMAGE_REPO):$(IMAGE_TAG) --push .
+
+# Never run by the test suites: it needs AWS credentials and creates
+# resources. As for aws-deploy, every parameter comes from $(ECS_CONFIG) and
+# `--parameter-overrides` is refused (it would replace the whole list).
+ecs-deploy:
+	$(if $(findstring --parameter-overrides,$(ECS_DEPLOY_ARGS)),$(error ECS_DEPLOY_ARGS must not contain --parameter-overrides: it REPLACES every parameter of [$(ENV).deploy.parameters]; edit $(ECS_DIR)/$(ECS_CONFIG) or deploy a git-ignored copy with ECS_CONFIG=samconfig.local.toml))
+	cd $(ECS_DIR) && $(SAM) deploy --config-file $(ECS_CONFIG) --config-env $(ENV) $(ECS_DEPLOY_ARGS)

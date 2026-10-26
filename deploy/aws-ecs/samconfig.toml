@@ -1,0 +1,126 @@
+# SAM CLI configuration of the container deployment: one plain
+# CloudFormation stack per region (template.yaml has no SAM transform;
+# `sam deploy` deploys it like `aws cloudformation deploy` would), run from
+# this directory.
+#
+#   make ecs-validate                 # sam validate --lint
+#   make image-push IMAGE_REPO=...    # build and push the image (see README.md)
+#   make ecs-deploy ENV=us            # home region first (us-east-1)
+#   make ecs-deploy ENV=eu            # then eu-west-1
+#
+# Each stack's parameters are set in its [<env>.deploy.parameters] section
+# below. The list covers the common ones; a template parameter it leaves out
+# (ClientSecurityGroupId, ExistingClusterName, ContainerInsights,
+# ChUsersSecretJsonKey, SecretKmsKeyArn, MvPoisonPolicy, ChserverTargetCpu,
+# ReplicatorDesiredCount, CertificateArn, KeepHttpListener,
+# HealthCheckGracePeriod) takes its template default; add a "Key=Value"
+# entry to change it (README.md lists every parameter). The CHANGE_ME placeholders (ImageUri, VpcId, SubnetIds,
+# AllowedCidr, ChUsersSecretArn) are account-specific and CloudFormation
+# rejects them, so a forgotten one cannot deploy: replace them, here or in
+# a git-ignored copy (samconfig.local.toml, deployed with
+# `make ecs-deploy ENV=us ECS_CONFIG=samconfig.local.toml`). No secret is
+# set here: CH_USERS lives in the Secrets Manager secret ChUsersSecretArn
+# names. Do NOT pass `--parameter-overrides` on the command line: the SAM
+# CLI then REPLACES this whole list for the run, so every parameter left
+# out falls back to the template default (first deploy) or keeps the
+# stack's previous value (update). A new image is a new ImageUri tag here.
+version = 0.1
+
+[default.global.parameters]
+template_file = "template.yaml"
+
+[default.validate.parameters]
+lint = true
+
+# ---------------------------------------------------------------------------
+# us-east-1: the home region (creates the global system tables, runs the
+# replicator). Deploy first.
+# ---------------------------------------------------------------------------
+[us.deploy.parameters]
+stack_name = "dynamodb-eventstream-ecs"
+region = "us-east-1"
+# The template is uploaded to the SAM-managed bucket. It is under the
+# 51,200 bytes CloudFormation accepts inline; S3 leaves room to grow.
+resolve_s3 = true
+s3_prefix = "dynamodb-eventstream-ecs"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+disable_rollback = false
+tags = "Application=dynamodb-eventstream"
+parameter_overrides = [
+  "ImageUri=ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream:CHANGE_ME",
+  "CpuArchitecture=ARM64",
+  "VpcId=vpc-CHANGE_ME",
+  "SubnetIds=subnet-CHANGE_ME_A,subnet-CHANGE_ME_B",
+  "AllowedCidr=CHANGE_ME",          # e.g. the application VPC's CIDR, or "" with ClientSecurityGroupId below
+  # "ClientSecurityGroupId=sg-CHANGE_ME",   # uncomment to admit a client security group (needed if AllowedCidr is "")
+  "ChUsersSecretArn=arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:CHANGE_ME",
+  "TablePrefix=chddb_",
+  "GlobalMode=aws",
+  "ReplicaRegions=us-east-1,eu-west-1",
+  "HomeRegion=us-east-1",
+  "WorkerMode=service",
+  "RunReplicator=auto",             # auto: runs here, the home region
+  "LogLevel=info",
+  "InlineViews=true",
+  "CatalogRefresh=2s",
+  "MaxExecutionTime=100",
+  "LoadBalancerIdleTimeout=110",
+  "DeregistrationDelay=110",
+  "ChserverCpu=1024",
+  "ChserverMemory=2048",
+  "ChserverDesiredCount=2",
+  "ChserverMaxCount=0",             # > 0 enables CPU target tracking up to this many tasks
+  "MvWorkerCpu=512",
+  "MvWorkerMemory=1024",
+  "MvWorkerDesiredCount=1",
+  "ReplicatorCpu=512",
+  "ReplicatorMemory=1024",
+  "LogRetentionDays=30",
+]
+
+# ---------------------------------------------------------------------------
+# eu-west-1: a replica region. Deploy after the home region's stack is up.
+# ---------------------------------------------------------------------------
+[eu.deploy.parameters]
+stack_name = "dynamodb-eventstream-ecs"
+region = "eu-west-1"
+resolve_s3 = true
+s3_prefix = "dynamodb-eventstream-ecs"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+disable_rollback = false
+tags = "Application=dynamodb-eventstream"
+parameter_overrides = [
+  "ImageUri=ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/dynamodb-eventstream:CHANGE_ME",
+  "CpuArchitecture=ARM64",
+  "VpcId=vpc-CHANGE_ME",
+  "SubnetIds=subnet-CHANGE_ME_A,subnet-CHANGE_ME_B",
+  "AllowedCidr=CHANGE_ME",
+  # "ClientSecurityGroupId=sg-CHANGE_ME",
+  "ChUsersSecretArn=arn:aws:secretsmanager:eu-west-1:ACCOUNT_ID:secret:CHANGE_ME",
+  "TablePrefix=chddb_",
+  "GlobalMode=aws",
+  "ReplicaRegions=us-east-1,eu-west-1",
+  "HomeRegion=us-east-1",
+  "WorkerMode=service",
+  "RunReplicator=auto",             # auto: not here (the home region runs it)
+  "LogLevel=info",
+  "InlineViews=true",
+  "CatalogRefresh=2s",
+  "MaxExecutionTime=100",
+  "LoadBalancerIdleTimeout=110",
+  "DeregistrationDelay=110",
+  "ChserverCpu=1024",
+  "ChserverMemory=2048",
+  "ChserverDesiredCount=2",
+  "ChserverMaxCount=0",
+  "MvWorkerCpu=512",
+  "MvWorkerMemory=1024",
+  "MvWorkerDesiredCount=1",
+  "ReplicatorCpu=512",
+  "ReplicatorMemory=1024",
+  "LogRetentionDays=30",
+]

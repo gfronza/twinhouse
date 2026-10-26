@@ -1,8 +1,9 @@
 # Local multi-region stack (DESIGN.md §6):
 #   two DynamoDB Local instances standing in for us-east-1 and eu-west-1,
 #   one ClickHouse-compatible server + one stream worker per region, and the
-#   replicator emulating global tables between them. The serverless AWS
-#   deployment of the same binaries lives in deploy/aws (SAM).
+#   replicator emulating global tables between them. The AWS deployments of
+#   the same binaries live in deploy/aws-lambda (serverless, SAM) and
+#   deploy/aws-ecs (containers on ECS Fargate).
 #
 #   Run from the repository root (the build context is the repository):
 #
