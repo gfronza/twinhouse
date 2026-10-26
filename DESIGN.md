@@ -21,6 +21,9 @@ This file is the contract for all contributors. Code-level contracts live in:
 | Formats API | `internal/format/format.go` |
 | Engine API | `internal/exec/api.go` |
 | Config / AWS clients | `internal/config/config.go`, `internal/awsx/awsx.go` |
+| Reconciler hooks (stream consumers, discovery) | `internal/server/reconcile.go` |
+| Lambda event-source mappings | `internal/esm/manager.go`, `consumers.go` |
+| Serverless deployment (SAM) | `deploy/aws/template.yaml`, `deploy/aws/README.md` |
 
 When a change alters behaviour described here, update this file in the
 same change. User-facing documentation is in `README.md`.
@@ -57,6 +60,18 @@ same change. User-facing documentation is in `README.md`.
 AWS global tables: every region has its own copy and `cmd/replicator`
 copies rows between them with a version-aware condition (see "Consistency
 model" below and §6).
+
+The diagram shows the long-running processes of the local stack
+(`deploy/local`). The **serverless deployment** (`deploy/aws`, one AWS SAM
+stack per region) runs the same roles as Lambda functions and changes no
+storage contract: `cmd/chserver-lambda` serves the HTTP API behind a
+private REST API Gateway (§2 "Lambda API mode"), `cmd/mvworker` and
+`cmd/replicator` consume DynamoDB streams through Lambda event-source
+mappings instead of polling (§5 "Stream worker as a Lambda", §6
+"Replicator as a Lambda"), and `cmd/reconciler-lambda` runs the reconciler
+on the `__catalog` stream and a one-minute schedule, creating tables and
+the event-source mappings at runtime (§2). No DynamoDB table is declared
+in the stack.
 
 ### Why rollups are regional
 
@@ -147,9 +162,10 @@ Override: `SETTINGS dynamodb_replication = 'global' | 'regional'` on CREATE TABL
 
 ---
 
-## 2. HTTP protocol (`internal/server`, `cmd/chserver`)
+## 2. HTTP protocol (`internal/server`, `cmd/chserver`, `cmd/chserver-lambda`)
 
-Implements the ClickHouse HTTP interface on `LISTEN_ADDR` (default `:8123`):
+Implements the ClickHouse HTTP interface on `LISTEN_ADDR` (default `:8123`;
+in the serverless deployment behind API Gateway, see "Lambda API mode"):
 
 * `GET /ping` and `HEAD /ping` → `Ok.\n`; `GET /` (no query) → `Ok.\n`;
   `GET /replicas_status` → `Ok.\n`.
@@ -235,6 +251,44 @@ Implements the ClickHouse HTTP interface on `LISTEN_ADDR` (default `:8123`):
   `Timeout exceeded: elapsed <x> ms, maximum: <y> ms`. Unparseable values
   fail like ClickHouse (27 / 72). `MAX_EXECUTION_TIME` (seconds or a Go
   duration, default 0) is the server-wide default a query may override.
+* **Lambda API mode** (`cmd/chserver-lambda`, `deploy/aws`): the same
+  `server.Server` wired exactly like `cmd/chserver` (same `exec.Config` and
+  `server.Config`), served to API Gateway REST proxy events through
+  `aws-lambda-go-api-proxy/httpadapter`, with these additive differences:
+  * `server.Config.RejectSessions` (set only here): a request naming
+    `session_id`, `session_check` or `session_timeout` fails, after
+    authentication and before settings or body are read, with
+    `NOT_IMPLEMENTED` (48, HTTP 501) and the message `sessions are not
+    supported by this deployment`; no process outlives a request, so
+    `SET`/`USE` state cannot be kept. `query_id`, settings and `database`
+    work as usual.
+  * No background goroutines and no DynamoDB call at initialization: at
+    the start of every request (`App.Prepare`) the function checks once
+    per execution environment that the system tables exist
+    (`Store.CheckSystemTables`: `DescribeTable` only, `UPDATING` counts as
+    ready; the reconciler creates them; failure answers `UNAVAILABLE` and
+    is retried by the next request) and reloads the catalog snapshot when
+    it is older than `CATALOG_REFRESH` (a failed reload logs and serves
+    the previous snapshot; with no snapshot yet the request fails). The
+    engine's miss-triggered reloads (§4 "Catalog items") work unchanged.
+  * Bodies: the API has `BinaryMediaTypes */*`, so every request body
+    arrives base64-encoded and the adapter decodes it; a `Content-Length`
+    header is restored for POST events (API Gateway does not always
+    forward it and the server requires it). Responses are base64-encoded
+    (`isBase64Encoded`) when the adapter finds invalid UTF-8 **or** when
+    the response has a `Content-Encoding` or a non-text `Content-Type`
+    (Native, `compress=1`, compressed output that happens to be valid
+    UTF-8), so API Gateway returns the exact bytes. Error bodies, headers
+    (`X-ClickHouse-Exception-Code`, …) and HTTP statuses are those above.
+  * Limits: request and response bodies are bounded by the Lambda payload
+    (6 MB; the whole response is buffered, so the server's streaming
+    commit logic only decides the status of a late error); a query is
+    bounded by the API Gateway integration timeout (29 s by default; set
+    `MAX_EXECUTION_TIME` below it so a slow query fails with 159 rather
+    than a 504). DDL runs with `dynamo.Options.AsyncDDL` (below).
+  * Configuration is `internal/config` without `LISTEN_ADDR` and
+    `RUN_STREAM_WORKER`; the reconciler and the stream worker are separate
+    functions.
 * The server process also (a) refreshes the catalog every `CATALOG_REFRESH`,
   (b) runs the **reconciler**: ensures every catalog table exists physically
   in this region (`Store.EnsureTable`), drops physical tables whose catalog
@@ -259,7 +313,68 @@ Implements the ClickHouse HTTP interface on `LISTEN_ADDR` (default `:8123`):
   one is dropped through the missing/`DropAfter` path. The reconciler never
   drops the physical table of a catalog entry it cannot decode
   (quarantined, §4 "Catalog items"), and drops nothing while an unreadable
-  item of unknown physical name exists.
+  item of unknown physical name exists. Besides the entries it observed
+  itself, the reconciler discovers drop candidates from durable state
+  (`ReconcilerConfig.Physical`, default the store's `PhysicalTables`
+  capability, and `ConsumedTables` of the stream consumers), every
+  `DiscoverInterval` (1 min): the region's physical row tables of this
+  deployment (`ListTables`, filtered to the `<prefix><db>.<table>.<inc>`
+  shape of §4) and the tables whose streams still have event-source
+  mappings; those the current catalog does not name enter the same
+  missing/`DropAfter`/re-read path (`DropPhysicalTable` by name, replicas
+  and side table included) so a process that starts after a `DROP` (a new
+  Lambda execution environment, a restarted server) still cleans up.
+  Deployments sharing an account must therefore not use prefixes that are
+  prefixes of one another. A deletion DynamoDB refuses because the table
+  was the source of a replica within the last 24 hours
+  (`storage.ErrDeleteDeferred`, `UNAVAILABLE`) is success for the DDL
+  once the catalog entry is gone (`exec` logs it) and is retried by the
+  reconciler every round at debug level until the window passes.
+* **Asynchronous DDL** (`dynamo.Options.AsyncDDL`, the API Lambda): a
+  request bounded by the API Gateway timeout (29 s) cannot wait for a
+  global-table replica (minutes). With the option `EnsureTable` creates
+  the table and waits for it to be `ACTIVE` but skips `ensureReplicas`
+  (the home region's reconciler adds them through its own `EnsureTable`),
+  and `DropTable` issues the deletion of a table without replicas without
+  awaiting it and reports a replicated table as deferred (the reconcilers
+  remove replicas and table). `CheckSystemTables` (DescribeTable only,
+  `UPDATING` counts as ready) replaces `EnsureSystemTables` there.
+* **Stream consumers** (`ReconcilerConfig.Consumers`, the serverless
+  deployment): when `MVWORKER_FUNCTION_ARN` is set, the reconciler also
+  manages the Lambda event-source mappings (ESMs) of the tables' DynamoDB
+  streams (`internal/esm`, §5 "Stream worker as a Lambda"). After a table
+  is ensured it resolves the table's stream ARN (`DescribeTable`; rollups
+  have no stream and get nothing) and calls `EnsureConsumers`, once per
+  table definition (re-done on every catalog version, retried next round
+  on failure without re-ensuring the table); right before a physical
+  table is dropped it calls `RemoveConsumers` (by stream ARN, or by table
+  name when the table is already gone) and postpones the drop while that
+  fails, so no mapping outlives its table. Which functions consume a
+  stream is decided by `esm.Consumers` from the engine and `GLOBAL_MODE`:
+  the stream worker for every table views can read from (MergeTree,
+  ReplacingMergeTree, Memory, Log), plus the replicator
+  (`REPLICATOR_FUNCTION_ARN`) for global ReplacingMergeTree tables with
+  `GLOBAL_MODE=aws` (they are not AWS global tables, §1); regional
+  rollups and system tables get none. Without `MVWORKER_FUNCTION_ARN`
+  (long-running workers, DynamoDB Local) nothing changes: the workers
+  discover streams from the catalog themselves.
+* `cmd/reconciler-lambda` runs the reconciler as a Lambda function: each
+  invocation, triggered by the `{prefix}__catalog` stream (a DDL in any
+  region) or by an EventBridge schedule (`rate(1 minute)`, the safety net;
+  both shapes are detected from the event, anything else also runs a
+  round), does `EnsureSystemTables` (idempotent; with `GLOBAL_MODE=aws`
+  only the home region creates `__catalog`, the others wait for their
+  replica as always), wires the catalog stream to itself
+  (`RECONCILER_FUNCTION_ARN`, default `AWS_LAMBDA_FUNCTION_NAME`; once per
+  execution environment) and runs `Reconciler.RunOnce` under the
+  invocation deadline minus `RECONCILER_DEADLINE_MARGIN` (5s). The
+  invocation fails only when the system tables are unavailable (so the
+  catalog batch is redelivered); per-table failures are logged and retried
+  on the next round. `ESM_BATCH_SIZE` (default 100) sets the mappings'
+  batch size. It needs `lambda:ListEventSourceMappings`,
+  `CreateEventSourceMapping`, `UpdateEventSourceMapping` and
+  `DeleteEventSourceMapping`, plus `dynamodb:ListTables` for the
+  discovery above, on top of the table permissions below.
 * `DISPLAY_NAME` sets `displayName()` / `X-ClickHouse-Server-Display-Name`
   (default: hostname, suffixed with `-<REGION>` unless `REGION=local`). Like
   every other variable it is read by `config.Load`. `REGION` defaults to
@@ -295,6 +410,21 @@ Implements the ClickHouse HTTP interface on `LISTEN_ADDR` (default `:8123`):
   also needs `dynamodb:CreateTableReplica` and `DeleteTableReplica`, the
   table and item actions in every replica region, and
   `iam:CreateServiceLinkedRole` for `replication.dynamodb.amazonaws.com`.
+  The serverless deployment (`deploy/aws/template.yaml`, one inline policy
+  per function, every DynamoDB statement scoped to `table/{prefix}*`,
+  `/index/*` and `/stream/*`) narrows this per function: the API Lambda
+  gets the item actions plus `DescribeTable`, `CreateTable`, `UpdateTable`
+  and `DeleteTable` (with `AsyncDDL` it never adds or removes replicas and
+  never touches TTL); the stream-worker Lambda the item actions in its own
+  region, `DescribeTable`, `CreateTable` and the TTL actions (its
+  `__dead_letters` table; in Lambda mode it does not run
+  `EnsureSystemTables`) and the stream actions; the replicator Lambda the
+  same with item and table actions in every region (its write targets);
+  the reconciler Lambda the full set including the replica actions, the
+  service-linked role, `dynamodb:ListTables` and the
+  `lambda:*EventSourceMapping` actions (create/update/delete conditioned on
+  `lambda:FunctionArn` naming the three target functions; `List` cannot be
+  scoped). `go test ./deploy/aws/` asserts the scoping.
 
 ---
 
@@ -1049,14 +1179,63 @@ without a stream logs once and keeps polling for one instead of failing).
   `AWS_LAMBDA_RUNTIME_API` is set) consuming `events.DynamoDBEvent` from an
   event-source mapping.
 
+### Stream worker as a Lambda (`internal/esm`, `cmd/reconciler-lambda`)
+
+In the serverless deployment (`deploy/aws`) no process polls streams: Lambda
+event-source mappings (ESMs) deliver each table's stream records to the
+worker. Tables are created at runtime, so their ESMs are too: the
+**reconciler** (§2) owns them, idempotently, in every region.
+
+* One ESM per source-table stream → `MVWORKER_FUNCTION_ARN` (MergeTree,
+  ReplacingMergeTree, Memory, Log tables, i.e. every table a view can read
+  from), with `StartingPosition TRIM_HORIZON` (a new table's stream is read
+  from the start; exactly-once markers make replays no-ops), `BatchSize
+  ESM_BATCH_SIZE` (100), `FunctionResponseTypes ReportBatchItemFailures`
+  (the handler reports the first failed record and Lambda retries from
+  there, §5 "Stream worker"), `BisectBatchOnFunctionError false` (the
+  handler isolates poison records itself) and `MaximumRetryAttempts -1`
+  (retry until the record expires from the stream, 24 h, like the
+  long-running worker). With `GLOBAL_MODE=aws`, a second ESM per global
+  ReplacingMergeTree table → `REPLICATOR_FUNCTION_ARN` (§6: those tables
+  are copied by the replicator, not by AWS). The `{prefix}__catalog` stream
+  → the reconciler itself. Regional rollups (no stream) and the other
+  system tables get none.
+* `esm.Manager.Ensure` lists the mappings of (stream, function), creates
+  the mapping when absent, enables it when disabled and updates it when
+  its settings drifted; a mapping that already matches costs one
+  `ListEventSourceMappings` call, and the reconciler calls it once per
+  table definition per process (a cold start re-checks everything). A
+  concurrent creation (`ResourceConflictException`: two regions'
+  reconcilers never race, each manages its own region, but a schedule
+  and a catalog-stream invocation can overlap) converges on the existing
+  mapping; a mapping in transition (`Creating`/`Updating`/`Deleting`,
+  `ResourceInUseException`) is reported as pending and retried next
+  round; throttling (`TooManyRequestsException`) is retried with backoff.
+  `Remove` deletes the mapping(s) of a stream, `RemoveByTable` those of a
+  table name (used once the table, and its stream ARN, is gone).
+* Regional stream ARNs: with `GLOBAL_MODE=aws` every replica of a global
+  table has its own stream in its region, so each region's reconciler
+  wires its own region's streams to its own region's functions.
+* A mapping deleted by hand is recreated by the next cold start of the
+  reconciler (or when the table's definition changes); the schedule
+  guarantees a round at least every minute. Conversely, the mappings of a
+  table dropped while no reconciler of the region was running are found
+  by `esm.Consumers.ConsumedTables` (the two functions' mapping lists,
+  table name from the stream ARN) and removed by the reconciler's
+  discovery path (§2) after the usual `DropAfter` rounds and catalog
+  re-read.
+
 ---
 
-## 6. Local multi-region (`cmd/replicator`, `deploy/`)
+## 6. Multi-region: local emulation and AWS (`cmd/replicator`, `deploy/local`, `deploy/aws`)
+
+The local stack (`deploy/local/docker-compose.yml`, `make up`):
 
 * Two DynamoDB Local containers (`dynamodb-us`, `dynamodb-eu`) represent
   `us-east-1` and `eu-west-1`.
-* `chserver-us` (:8123) and `chserver-eu` (:8124), each with an in-process or
-  separate `mvworker`, `GLOBAL_MODE=emulated`.
+* `chserver-us` (:8123) and `chserver-eu` (:8124), each with a separate
+  `mvworker` service, `GLOBAL_MODE=emulated` (the `single` profile runs
+  one region on :8125 with the worker in-process, `RUN_STREAM_WORKER=true`).
 * `cmd/replicator` emulates global tables: for each ordered region pair
   (A→B) and each **global** table (including `__catalog`), it tails A's stream
   and applies records whose image has `_origin == A` to B:
@@ -1091,7 +1270,11 @@ without a stream logs once and keeps polling for one instead of failing).
   `EnsureSystemTables` waits for the `__catalog` replica. AWS refuses to add
   a replica where a table of that name already exists, so a region creating
   its own copy first would leave the regions unreplicated for good; that
-  refusal is reported with the region holding the stray table. The replicator
+  refusal is reported with the region holding the stray table. `DropTable`
+  removes the other regions' replicas first and then deletes the table;
+  AWS refuses that deletion within 24 hours of adding a replica, which
+  the store reports as deferred (§2) so `DROP TABLE` still succeeds and
+  the reconciler deletes the table once allowed. The replicator
   then runs with `GLOBAL_MODE=aws` and `REGIONS` naming the real regions
   (empty endpoints): it skips `__catalog` and the AWS global tables and
   copies only the ReplacingMergeTree tables, with the version-aware
@@ -1102,10 +1285,64 @@ without a stream logs once and keeps polling for one instead of failing).
   for availability. While it is down, ReplacingMergeTree rows written in
   one region are not visible in the others; they catch up from the streams
   (24 h retention) when it restarts.
+* **Replicator as a Lambda** (the serverless deployment, `deploy/aws`):
+  `cmd/replicator -lambda` (automatic when `AWS_LAMBDA_RUNTIME_API` is set)
+  runs the same per-record logic without a poller. The per-record logic is
+  `replicator.Applier` (`NewApplier(source, target, table, conflict hook)`,
+  `Apply(ctx, Record)`), shared by the poller's pipes and the Lambda entry
+  point `replicator.Lambda`; a `Record` is normalised from either the
+  Streams API or a Lambda event (`RecordFromStream`, `RecordFromLambda`,
+  images converted with `mvworker.FromLambdaItem`). One function per
+  region, with `GLOBAL_MODE=aws` (validated: `REGION`, `REPLICA_REGIONS`,
+  no `DYNAMODB_ENDPOINT`; `REGIONS` is not used), fed by the event-source
+  mappings the reconciler keeps on that region's ReplacingMergeTree table
+  streams (`REPLICATOR_FUNCTION_ARN`, `ReportBatchItemFailures`). For each
+  record it derives the table from `eventSourceARN`, resolves the version
+  column through this region's catalog (`replicator.CatalogLookup`:
+  snapshot refreshed when older than `CATALOG_REFRESH`, and once more when
+  the table is missing; a table still missing was dropped and its records
+  are skipped; only global ReplacingMergeTree tables are copied), skips
+  images whose `_origin` is not `REGION` (replicas written by the other
+  regions' functions), and applies the conditional put / delete above to
+  every `REPLICA_REGIONS` region through SDK clients built once per
+  execution environment (`awsx.New` per region, standard endpoints). The
+  conflict hook keeps its behaviour: a losing row version feeds the target
+  region's views through that region's `mvworker.ImageApplier`. Records of
+  one item are applied in stream order, distinct items concurrently; a
+  failed write (or hook) is reported as a batch item failure for the
+  earliest record not applied to every target, so Lambda retries from
+  there (`MaximumRetryAttempts -1`: until the records expire): every
+  earlier record is applied, and re-applying a later one is a no-op under
+  the conditions (a redelivered row version finds itself in the target,
+  same `_rid`, and skips the hook). No checkpoints table is used: Lambda
+  tracks the shard position. `REPLICATION_DELAY` and the stats log do not
+  apply in this mode.
 
-`deploy/docker-compose.yml` also has a `clickhouse` service
+`deploy/local/docker-compose.yml` also has a `clickhouse` service
 (`clickhouse/clickhouse-server:25.8-alpine`, port 18123) used by the
 differential compatibility tests.
+
+* **Serverless stack** (`deploy/aws`, AWS SAM, `GLOBAL_MODE=aws`): one
+  CloudFormation stack per region with four functions (API, stream
+  worker, replicator, reconciler), a private REST API (resource policy
+  allowing one `execute-api` VPC endpoint, `BinaryMediaTypes */*`), the
+  reconciler's `rate(1 minute)` schedule, log groups and parameters
+  (`TablePrefix`, `GlobalMode`, `ReplicaRegions`, `HomeRegion`,
+  `VpcEndpointId`, `ChUsers`, timeouts, memory sizes, …). Each function's
+  IAM role is scoped to `table/{prefix}*` (§2 "IAM"). The template
+  declares no DynamoDB tables: the reconciler's `EnsureSystemTables` and
+  `EnsureTable` create them, as the long-running binaries do, which is why
+  the **home region's stack is deployed first** (its first reconciler run
+  creates `__catalog` with replicas; a replica region's `EnsureSystemTables`
+  waits for its replica before creating the regional system tables). The
+  reconciler keeps the event-source mappings in step with the tables (§5),
+  so no stack resource depends on the schema. `samconfig.toml` has the
+  `us` (home) and `eu` environments; `sam build` compiles each `cmd`
+  directory in place (`BuildMethod go1.x`, cache disabled because it hashes
+  only the function directory). `sam local start-api` runs the API Lambda
+  against the local stack's DynamoDB Local (`make aws-local-api`,
+  `GLOBAL_MODE=emulated`, event-source mapping management off because
+  `MVWORKER_FUNCTION_ARN` is rejected together with `DYNAMODB_ENDPOINT`).
 
 ---
 
@@ -1123,7 +1360,27 @@ differential compatibility tests.
   and database/sql) and plain net/http against a running chserver
   (`CHDDB_URL`) — DDL, inserts with parameters, MV rollups, FINAL, tuple-IN
   probes, latest-wins replays, JSONEachRow bulk insert over raw HTTP. One
-  region only, so it also runs against `make up-single`.
+  region only, so it also runs against `make up-single`. Against the
+  serverless API (`make aws-local-api` then `make aws-local-e2e`, or a
+  real deployment) the suite detects Lambda mode (a `session_id` probe
+  answered with code 48, or `E2E_LAMBDA=1`), sends `Accept: */*` so API
+  Gateway returns binary responses decoded, and skips the session test;
+  every other assertion is unchanged.
+* Serverless deployment: `cmd/chserver-lambda` unit tests drive the real
+  engine and server (memstore) with synthetic API Gateway proxy events and
+  compare each response byte for byte with the same server over
+  `httptest` (text and base64 bodies, Native, `compress`/`decompress`,
+  gzip/zstd, errors, sessions, the stale-catalog reload, the
+  `Content-Length` shim); `cmd/reconciler-lambda` and `internal/esm` test
+  event classification, deadline handling and the mapping state machine
+  with a fake Lambda API; `go test ./deploy/aws/` checks `template.yaml`
+  against the binaries (function code directories, every environment
+  variable set is read by some binary, IAM scoped to `TablePrefix`,
+  private endpoint, schedule, `samconfig.toml` environments, Makefile
+  targets) and runs `sam validate --lint` when the SAM CLI is installed.
+  `go test -tags samlocal ./cmd/chserver-lambda/` exercises the API
+  through `sam local start-api` (API Gateway emulation: base64 handling,
+  compression, error headers). Nothing runs against real AWS.
 * `tests/compat` (build tag `compat`): differential tests — the scenario
   corpus `tests/compat/testdata/*.sql` (DDL + inserts + queries) runs
   against real ClickHouse 25.8 (`CLICKHOUSE_REF_URL`) and against this
