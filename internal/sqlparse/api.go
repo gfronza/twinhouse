@@ -1,7 +1,5 @@
 package sqlparse
 
-// API CONTRACT (stubs; implemented by the sqlparse owner).
-
 // Parse parses exactly one statement. A trailing ';' and trailing
 // whitespace/comments are allowed. `--`, `#!`/`# ` and `/* */` comments are
 // supported, and are recognised only outside string literals. Errors are

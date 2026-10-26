@@ -172,7 +172,7 @@ func rec(seq, rid, v string) change {
 	return change{EventName: eventInsert, Seq: seq, NewImage: img(rid, v)}
 }
 
-// The reviewer's scenario: [a, b(oops), c, a2] in one batch, then [d]. The
+// A poison record mid-batch: [a, b(oops), c, a2] in one batch, then [d]. The
 // good rows are applied at once, the batch is retried while the error may
 // still be transient, then the poison record is dead-lettered, the batch
 // succeeds (so the checkpoint advances) and the next batch is applied.

@@ -101,7 +101,7 @@ func cmpInt(a, b int) int {
 	return 0
 }
 
-// numParts classifies a numeric value as an exact integer (neg, magnitude)
+// numVal classifies a numeric value as an exact integer (neg, magnitude)
 // or a float.
 type numVal struct {
 	isFloat bool
@@ -231,9 +231,6 @@ func cmpIntFloat(x numVal, f float64) int {
 	if x.neg != fneg {
 		if x.neg {
 			return -1
-		}
-		if x.mag == 0 {
-			return 1 // 0 vs negative float
 		}
 		return 1
 	}

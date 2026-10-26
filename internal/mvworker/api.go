@@ -1,7 +1,5 @@
 // Package mvworker tails the DynamoDB streams of materialized-view source
 // tables and applies the views to region-local target tables (DESIGN.md §5).
-//
-// API CONTRACT (stubs until implemented by the streams owner).
 package mvworker
 
 import (

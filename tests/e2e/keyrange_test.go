@@ -93,7 +93,6 @@ func TestKeyRangePushdown(t *testing.T) {
 		{"p = 'a' AND n = 1 AND f = 1.5", func(r row) bool { return r.p == "a" && r.n == 1 }},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.where, func(t *testing.T) {
 			t.Parallel()
 			var want []string

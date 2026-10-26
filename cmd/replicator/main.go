@@ -328,8 +328,7 @@ type regionCatalog struct {
 // every region's catalog (the union covers catalog replication lag). With
 // versionedOnly (GLOBAL_MODE=aws) it lists only ReplacingMergeTree tables
 // (catalog.CopiedByReplicator), the ones real global tables do not
-// replicate. It fails only if no
-// region's catalog can be read.
+// replicate. It fails only if no region's catalog can be read.
 func globalTables(cats []regionCatalog, versionedOnly bool) replicator.TableSource {
 	return func(ctx context.Context) ([]replicator.TableSpec, error) {
 		set := map[string]string{} // physical name -> version column

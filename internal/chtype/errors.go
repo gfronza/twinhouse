@@ -16,7 +16,6 @@ const (
 	codeCannotParseNumber         = 72
 	codeCannotReadArrayFromText   = 130
 	codeTooLargeStringSize        = 131
-	codeCannotInsertNull          = 349
 	codeCannotParseUUID           = 376
 	codeNoCommonType              = 386
 	codeDecimalOverflow           = 407

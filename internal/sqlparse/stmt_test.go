@@ -467,5 +467,5 @@ func TestDeepNestingIsBounded(t *testing.T) {
 	deep := strings.Repeat("(", 100000) + "1" + strings.Repeat(")", 100000)
 	expectErr(t, "SELECT "+deep, cherr.SyntaxError, "depth")
 	mustParse(t, "SELECT "+strings.Repeat("(", 100)+"1"+strings.Repeat(")", 100))
-	mustParse(t, "SELECT "+strings.Repeat("-", 0)+strings.Repeat("NOT ", 100)+"1")
+	mustParse(t, "SELECT "+strings.Repeat("NOT ", 100)+"1")
 }

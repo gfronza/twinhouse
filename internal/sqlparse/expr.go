@@ -716,11 +716,8 @@ func canStartExpr(t token) bool {
 // parseIdentifierOrCall parses a compound identifier, qualified asterisk or
 // function call.
 func (p *parser) parseIdentifierOrCall() Expr {
-	name, first := p.parseIdentName()
-	if first.kind == tIdent && p.atOp("(") {
-		return p.parseCall(name)
-	}
-	if first.kind == tQIdent && p.atOp("(") {
+	name, _ := p.parseIdentName()
+	if p.atOp("(") {
 		return p.parseCall(name)
 	}
 	parts := []string{name}
@@ -779,7 +776,7 @@ func (p *parser) parseCall(name string) Expr {
 			return &ArrayExpr{Elems: nonNil(p.parseExprList(")")), Func: true}
 		}
 	case "extract":
-		if u := p.peekN(1); u.kind == tIdent && isKw(p.peekN(2), "FROM") {
+		if p.peekN(1).kind == tIdent && isKw(p.peekN(2), "FROM") {
 			return p.parseExtract()
 		}
 	case "position":

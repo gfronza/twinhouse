@@ -53,19 +53,7 @@ func displayTypes(cols []Column, tz string) []chtype.Type {
 }
 
 // baseKind is t's kind with Nullable / LowCardinality / SimpleAggregateFunction stripped.
-func baseKind(t chtype.Type) chtype.Kind {
-	for {
-		switch t.Kind {
-		case chtype.Nullable, chtype.LowCardinality, chtype.SimpleAggregateFunction:
-			if t.Elem == nil {
-				return t.Kind
-			}
-			t = *t.Elem
-		default:
-			return t.Kind
-		}
-	}
-}
+func baseKind(t chtype.Type) chtype.Kind { return unwrapAll(t).Kind }
 
 // rawText renders a non-NULL value without escaping (TSVRaw, Pretty,
 // JSON*Strings): strings and enum names verbatim, everything else in the

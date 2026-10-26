@@ -199,21 +199,14 @@ type Catalog interface {
 	ViewsFrom(db, table string) []*View
 }
 
-// VersionedReplacing reports a ReplacingMergeTree(ver) table: replicas of it
-// must let the highest version win, which item-level last-writer-wins (AWS
-// global tables) does not do. With GLOBAL_MODE=aws such a table is therefore
-// physically regional and copied between regions by cmd/replicator's
-// version-aware applier (DESIGN.md §1, §6).
-func VersionedReplacing(t *Table) bool {
-	return t != nil && t.Engine == EngineReplacingMergeTree && t.VersionColumn != ""
-}
-
 // CopiedByReplicator reports a global table that, with GLOBAL_MODE=aws, is
 // physically regional and copied between regions by cmd/replicator instead
-// of being an AWS global table: every ReplacingMergeTree table. A versioned
-// one needs the version-aware applier (VersionedReplacing); for one without
-// a version, AWS's internal last-writer-wins would silently drop the losing
-// version of a concurrent write in one region, so that region's views
+// of being an AWS global table: every ReplacingMergeTree table. Replicas of
+// a ReplacingMergeTree(ver) table must let the highest version win, which
+// item-level last-writer-wins (AWS global tables) does not do, so it needs
+// the replicator's version-aware applier; for one without a version, AWS's
+// internal last-writer-wins would silently drop the losing version of a
+// concurrent write in one region, so that region's views
 // (regional rollups built from its own stream) would never see it, while
 // the replicator reports the loser to its conflict hook, which applies the
 // views (DESIGN.md §1, §6). A table cannot change its physical replication

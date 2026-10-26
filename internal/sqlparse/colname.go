@@ -363,10 +363,6 @@ func literalName(v any) string {
 		return strconv.FormatInt(x, 10)
 	case int:
 		return strconv.Itoa(x)
-	case uint32:
-		return strconv.FormatUint(uint64(x), 10)
-	case int32:
-		return strconv.FormatInt(int64(x), 10)
 	case float64:
 		return formatFloat(x)
 	case float32:

@@ -1,7 +1,5 @@
 // Package format implements ClickHouse input/output formats.
 //
-// API CONTRACT (constructors are stubs until implemented by the format owner).
-//
 // Output formats: Native, TabSeparated (TSV), TabSeparatedRaw (TSVRaw),
 // TabSeparatedWithNames, TabSeparatedWithNamesAndTypes, CSV, CSVWithNames,
 // CSVWithNamesAndTypes, JSON, JSONCompact, JSONEachRow, JSONCompactEachRow,

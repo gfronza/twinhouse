@@ -9,7 +9,6 @@ package streams
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -147,9 +146,6 @@ type Reader struct {
 
 // New validates cfg and creates a Reader.
 func New(cfg Config) (*Reader, error) {
-	if cfg.DynamoDB == nil {
-		return nil, errors.New("streams: DynamoDB client is required")
-	}
 	return newReader(cfg, &dynamoLeases{ddb: cfg.DynamoDB, table: cfg.CheckpointTable, now: time.Now})
 }
 
@@ -808,9 +804,4 @@ func sleep(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
-}
-
-// String describes the reader (for logs).
-func (r *Reader) String() string {
-	return fmt.Sprintf("streams.Reader(%s, consumer=%s)", r.cfg.Table, r.cfg.Consumer)
 }

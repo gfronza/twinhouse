@@ -3,8 +3,6 @@ package chtype
 import (
 	"math"
 	"testing"
-
-	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // TestConvertNumberErrorCodes: CAST from String to a number reports the
@@ -27,8 +25,7 @@ func TestConvertNumberErrorCodes(t *testing.T) {
 	}
 	for _, c := range cases {
 		_, err := Convert(c.s, TString, MustParse(c.typ))
-		var ce *cherr.Error
-		if !asCherr(err, &ce) || ce.Code != c.code {
+		if errCodeOf(err) != c.code {
 			t.Errorf("CAST(%q AS %s): got %v, want code %d", c.s, c.typ, err, c.code)
 		}
 	}
@@ -59,12 +56,4 @@ func TestNegativeNaNKeepsSign(t *testing.T) {
 			t.Errorf("FormatText(-nan) = %q, want nan", got)
 		}
 	}
-}
-
-func asCherr(err error, out **cherr.Error) bool {
-	ce, ok := err.(*cherr.Error)
-	if ok {
-		*out = ce
-	}
-	return ok
 }

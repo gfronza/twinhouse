@@ -46,8 +46,6 @@ func run() error {
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
 
-	runWorker, displayName := cfg.RunStreamWorker, cfg.DisplayName
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -84,7 +82,7 @@ func run() error {
 		ConsistentReads: cfg.ConsistentReads,
 		ServerVersion:   cfg.ServerVersion,
 		ServerRevision:  server.ServerRevision,
-		DisplayName:     displayName,
+		DisplayName:     cfg.DisplayName,
 		Timezone:        cfg.Timezone,
 		MultiRegion:     cfg.GlobalMode != config.GlobalNone,
 	})
@@ -97,7 +95,7 @@ func run() error {
 		Catalog:       cat,
 		Users:         cfg.Users,
 		ServerVersion: cfg.ServerVersion,
-		DisplayName:   displayName,
+		DisplayName:   cfg.DisplayName,
 		Timezone:      cfg.Timezone,
 		Logger:        log,
 
@@ -124,7 +122,7 @@ func run() error {
 	rec := server.NewReconciler(rcfg)
 	wg.Go(func() { rec.Run(bg) })
 
-	if runWorker {
+	if cfg.RunStreamWorker {
 		host, _ := os.Hostname()
 		w, err := mvworker.New(mvworker.Config{
 			Clients:        clients,
@@ -159,8 +157,8 @@ func run() error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", cfg.ListenAddr, "region", cfg.Region, "display_name", displayName,
-			"version", cfg.ServerVersion, "global_mode", cfg.GlobalMode, "stream_worker", runWorker)
+		log.Info("listening", "addr", cfg.ListenAddr, "region", cfg.Region, "display_name", cfg.DisplayName,
+			"version", cfg.ServerVersion, "global_mode", cfg.GlobalMode, "stream_worker", cfg.RunStreamWorker)
 		errc <- httpSrv.ListenAndServe()
 	}()
 
@@ -220,7 +218,7 @@ func startupErr(ctx context.Context, err error) error {
 }
 
 // retry calls f with capped exponential backoff until it succeeds, fails
-// with a permanent error, or ctx ends.
+// with a permanent error (awsx.PermanentError), or ctx ends.
 func retry(ctx context.Context, log *slog.Logger, what string, f func() error) error {
 	delay := retryInitialDelay
 	for attempt := 1; ; attempt++ {
@@ -231,7 +229,7 @@ func retry(ctx context.Context, log *slog.Logger, what string, f func() error) e
 		if ctx.Err() != nil {
 			return fmt.Errorf("%s: %w", what, ctx.Err())
 		}
-		if permanentError(err) {
+		if awsx.PermanentError(err) {
 			return fmt.Errorf("%s: %w", what, err)
 		}
 		log.Warn("retrying", "op", what, "attempt", attempt, "error", err, "in", delay)
@@ -244,10 +242,6 @@ func retry(ctx context.Context, log *slog.Logger, what string, f func() error) e
 
 // retryInitialDelay is the first startup retry backoff (tests shorten it).
 var retryInitialDelay = 500 * time.Millisecond
-
-// permanentError reports whether a startup error will not go away by
-// retrying (see awsx.PermanentError).
-func permanentError(err error) bool { return awsx.PermanentError(err) }
 
 func sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)

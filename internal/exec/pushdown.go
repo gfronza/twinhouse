@@ -178,7 +178,7 @@ func (q *query) pushdown(c *compiler, src *source, where sqlparse.Expr) ([]stora
 		return nil, nil
 	}
 	var lower, upper *storage.Bound
-	if depth < len(keyNames) && depth >= npk {
+	if depth < len(keyNames) {
 		lower, upper = bounds[depth].lower, bounds[depth].upper
 		if lower != nil && upper != nil {
 			if c := chtype.CompareTyped(lower.Value, upper.Value, keyTypes[depth]); c > 0 || (c == 0 && !(lower.Inclusive && upper.Inclusive)) {
@@ -277,7 +277,7 @@ func (q *query) inConstraint(c *compiler, n *sqlparse.BinaryExpr, keyOf func(sql
 	switch l := n.Left.(type) {
 	case *sqlparse.TupleExpr:
 		fields := make([]chtype.Field, len(l.Elems))
-		any := false
+		hasKey := false
 		for i, e := range l.Elems {
 			p, ok := keyOf(e)
 			if !ok {
@@ -289,11 +289,11 @@ func (q *query) inConstraint(c *compiler, n *sqlparse.BinaryExpr, keyOf func(sql
 				fields[i] = chtype.Field{Type: x.t}
 				continue
 			}
-			any = true
+			hasKey = true
 			positions = append(positions, p)
 			fields[i] = chtype.Field{Type: keyTypes[p]}
 		}
-		if !any {
+		if !hasKey {
 			return keyConstraint{}, false, nil
 		}
 		leftType = chtype.NewTuple(fields...)

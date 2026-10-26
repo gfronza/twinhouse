@@ -61,7 +61,7 @@ func (s *Store) merge(ctx context.Context, t *catalog.Table, rows []storage.Merg
 // different stream shards in any order, therefore converges to the row
 // ClickHouse keeps; re-application of the same output is a no-op rewrite.
 // Output whose source write time is unknown (ids without one) is ordered by
-// application time, as before.
+// application time.
 func (s *storeImpl) mergeReplacing(ctx context.Context, l *layout, ms []mergeSource) error {
 	writes := make([]replWrite, len(ms))
 	for i := range ms {
@@ -357,7 +357,6 @@ func (s *storeImpl) planAggState(ctx context.Context, p *rowPlan, c *colSpec, v 
 	if st.Func != "" && st.Func != c.agg.Func {
 		return cherr.New(cherr.TypeMismatch, "cannot merge a %s state into AggregateFunction(%s, ...)", st.Func, c.agg.Func)
 	}
-	trueAV := attrTrue
 	switch c.agg.Func {
 	case catalog.AggCount:
 		if st.Count > 0 {
@@ -384,7 +383,7 @@ func (s *storeImpl) planAggState(ctx context.Context, p *rowPlan, c *colSpec, v 
 		if c.agg.Func == catalog.AggAnyLast {
 			kind = opSet
 		}
-		p.ops = append(p.ops, attrOp{attr: c.name + sufValue, kind: kind, av: av}, attrOp{attr: c.name + sufHas, kind: opSet, av: trueAV})
+		p.ops = append(p.ops, attrOp{attr: c.name + sufValue, kind: kind, av: av}, attrOp{attr: c.name + sufHas, kind: opSet, av: attrTrue})
 	case catalog.AggMin, catalog.AggMax:
 		if !st.HasValue || st.Value == nil {
 			return nil
@@ -395,7 +394,7 @@ func (s *storeImpl) planAggState(ctx context.Context, p *rowPlan, c *colSpec, v 
 		}
 		p.extrema = append(p.extrema, extremumOp{
 			cmpAttr: c.name + sufValue, existAttr: c.name + sufHas, cmpType: c.agg.Args[0], cmpVal: st.Value, cmpAV: av,
-			set:     map[string]types.AttributeValue{c.name + sufValue: av, c.name + sufHas: trueAV},
+			set:     map[string]types.AttributeValue{c.name + sufValue: av, c.name + sufHas: attrTrue},
 			greater: c.agg.Func == catalog.AggMax,
 		})
 	case catalog.AggArgMin, catalog.AggArgMax:
@@ -412,7 +411,7 @@ func (s *storeImpl) planAggState(ctx context.Context, p *rowPlan, c *colSpec, v 
 		}
 		p.extrema = append(p.extrema, extremumOp{
 			cmpAttr: c.name + sufKey, existAttr: c.name + sufHas, cmpType: c.agg.Args[1], cmpVal: st.Key, cmpAV: kav,
-			set:     map[string]types.AttributeValue{c.name + sufValue: vav, c.name + sufKey: kav, c.name + sufHas: trueAV},
+			set:     map[string]types.AttributeValue{c.name + sufValue: vav, c.name + sufKey: kav, c.name + sufHas: attrTrue},
 			greater: c.agg.Func == catalog.AggArgMax,
 		})
 	case catalog.AggUniq, catalog.AggUniqExact, catalog.AggGroupUniqArray:
@@ -798,10 +797,8 @@ func (s *storeImpl) applyMarked(ctx context.Context, l *layout, pk, sk []byte, k
 			return err
 		})
 		if err == nil {
-			if next != nil {
-				for a, av := range next {
-					cas.item[a] = av
-				}
+			for a, av := range next {
+				cas.item[a] = av
 			}
 			return append(applied, pending...), existing, nil
 		}

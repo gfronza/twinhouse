@@ -155,11 +155,7 @@ func (s *inputSettings) jsonCoerce(t chtype.Type, v any) any {
 		if base.Kind == chtype.Array && base.Elem != nil {
 			out := make([]any, len(x))
 			for i, e := range x {
-				if e == nil {
-					out[i] = nil
-				} else {
-					out[i] = s.jsonCoerce(*base.Elem, e)
-				}
+				out[i] = s.jsonCoerce(*base.Elem, e)
 			}
 			return out
 		}

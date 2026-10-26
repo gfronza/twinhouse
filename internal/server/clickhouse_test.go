@@ -130,19 +130,6 @@ func (m *miniEngine) Execute(ctx context.Context, req *exec.Request) (*exec.Resu
 	return nil, cherr.New(cherr.NotImplemented, "fake engine: unsupported query %q", q)
 }
 
-func requireNative(t *testing.T) {
-	t.Helper()
-	requireEncoders(t)
-	var b strings.Builder
-	enc, err := format.NewEncoder("Native", &b, []format.Column{{Name: "x", Type: chtype.TString}}, format.Options{ClientProtocolVersion: 54460})
-	if err != nil || enc.WriteRows([][]any{{"a"}}) != nil || enc.Finish(format.Stats{}) != nil {
-		t.Skip("Native encoder not ready")
-	}
-	if _, err := format.NewDecoder("Native", strings.NewReader(""), tCols, format.Options{}); err != nil {
-		t.Skip("Native decoder not ready")
-	}
-}
-
 func newCHServer(t *testing.T) (*miniEngine, string) {
 	t.Helper()
 	me := &miniEngine{}
@@ -156,7 +143,6 @@ func newCHServer(t *testing.T) (*miniEngine, string) {
 }
 
 func TestClickHouseGoClient(t *testing.T) {
-	requireNative(t)
 	compressions := []*clickhouse.Compression{
 		nil,
 		{Method: clickhouse.CompressionLZ4},
@@ -305,7 +291,6 @@ func TestClickHouseGoClient(t *testing.T) {
 }
 
 func TestClickHouseGoDatabaseSQL(t *testing.T) {
-	requireNative(t)
 	me, addr := newCHServer(t)
 	db := clickhouse.OpenDB(&clickhouse.Options{Addr: []string{addr}, Protocol: clickhouse.HTTP})
 	defer db.Close()
@@ -359,7 +344,6 @@ func TestClickHouseGoDatabaseSQL(t *testing.T) {
 // TestRawHTTPJSONEachRowInsert drives the server the way Python's requests
 // (or curl) typically does.
 func TestRawHTTPJSONEachRowInsert(t *testing.T) {
-	requireNative(t)
 	me, addr := newCHServer(t)
 	base := "http://" + addr
 	body := `{"id": 1, "name": "a", "score": 1.5, "ts": "2026-01-02 03:04:05"}` + "\n" +

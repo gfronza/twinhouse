@@ -150,7 +150,6 @@ func (sc *scenario) query(t *testing.T, s *stmt, sql, loc string) {
 		formats = []string{"(explicit " + m[1] + ")"}
 	}
 	for _, f := range formats {
-		f := f
 		t.Run(f, func(t *testing.T) {
 			var want, got string
 			if f == "Native" {
@@ -222,7 +221,7 @@ func (sc *scenario) errorCase(t *testing.T, s *stmt, sql, loc string) {
 		return
 	}
 	if g.code != w.code || g.status != w.status {
-		t.Errorf("%s: error mismatch\nquery:\n%s\nreference: code=%d HTTP %d: %s\ntwinhouse:     code=%d HTTP %d: %s",
+		t.Errorf("%s: error mismatch\nquery:\n%s\nreference: code=%d HTTP %d: %s\ntwinhouse: code=%d HTTP %d: %s",
 			loc, indent(sql), w.code, w.status, firstLine(w.body), g.code, g.status, firstLine(g.body))
 	}
 	// clickhouse-go must surface the same code.

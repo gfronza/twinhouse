@@ -348,8 +348,10 @@ func insertEvents(r *region, db string, evs []event, batch int, log *eventLog) e
 func newRNG(t testing.TB) *rand.Rand {
 	seed := uint64(time.Now().UnixNano())
 	t.Logf("random seed %d", seed)
-	return rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
+	return newSeeded(seed)
 }
+
+func newSeeded(seed uint64) *rand.Rand { return rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)) }
 
 // checkConverged waits until both regions hold exactly evs in db.events and
 // the matching rollup (also cross-checked against an aggregation over each
@@ -375,5 +377,3 @@ func checkConverged(t testing.TB, db string, evs []event, timeout time.Duration)
 		},
 	)
 }
-
-func newSeeded(seed uint64) *rand.Rand { return rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)) }

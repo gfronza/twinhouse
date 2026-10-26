@@ -20,7 +20,7 @@ const (
 )
 
 // incInsert inserts n rows with keys prefixed by tag (v = weight each).
-func incInsert(t *testing.T, r *region, db, tag string, from, n int, weight int) {
+func incInsert(t *testing.T, r *region, db, tag string, from, n, weight int) {
 	t.Helper()
 	var vals []string
 	for i := from; i < from+n; i++ {

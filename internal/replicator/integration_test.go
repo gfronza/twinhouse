@@ -108,9 +108,7 @@ func (e *env) start(delay time.Duration) *Replicator {
 	return e.startWith(delay, nil)
 }
 
-type conflictHook = func(ctx context.Context, region, table, seq string, image map[string]ddbtypes.AttributeValue) error
-
-func (e *env) startWith(delay time.Duration, onConflict conflictHook) *Replicator {
+func (e *env) startWith(delay time.Duration, onConflict ConflictHook) *Replicator {
 	e.t.Helper()
 	e.logs = &syncBuffer{}
 	e.t.Cleanup(func() { checkNoDuplicateLogKeys(e.t, e.logs.String()) })

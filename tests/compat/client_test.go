@@ -13,7 +13,6 @@ import (
 	"io"
 	"math"
 	"math/big"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -198,17 +197,7 @@ func (tg *target) mustExec(t testing.TB, ctx context.Context, sql string, o reqO
 // --- clickhouse-go (Native over HTTP) ---------------------------------------
 
 func (tg *target) open(db string) (driver.Conn, error) {
-	host := tg.base.Host
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = net.JoinHostPort(host, "8123")
-	}
-	return clickhouse.Open(&clickhouse.Options{
-		Addr:        []string{host},
-		Protocol:    clickhouse.HTTP,
-		Auth:        clickhouse.Auth{Database: db, Username: "default"},
-		DialTimeout: 10 * time.Second,
-		ReadTimeout: 60 * time.Second,
-	})
+	return clickhouse.Open(openOpts(tg, db, nil))
 }
 
 type nativeResult struct {

@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -341,9 +340,6 @@ func eventually(t testing.TB, timeout time.Duration, f func() error) {
 		time.Sleep(250 * time.Millisecond)
 	}
 }
-
-// newScanDest returns a pointer to a new value of the column's scan type.
-func newScanDest(t reflect.Type) any { return reflect.New(t).Interface() }
 
 // heavySlots bounds how many write-heavy tests run at once: DynamoDB Local
 // is single-process and its throughput collapses under many concurrent

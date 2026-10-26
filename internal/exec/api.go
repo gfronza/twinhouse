@@ -2,8 +2,6 @@
 // storage (turning sorting-key predicates into DynamoDB Query ranges),
 // evaluates expressions and aggregates, executes DDL and INSERTs, and applies
 // materialized views.
-//
-// API CONTRACT (stubs until implemented by the exec owner).
 package exec
 
 import (

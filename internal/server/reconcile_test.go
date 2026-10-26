@@ -425,7 +425,7 @@ func TestReconcilerKeepsQuarantinedTables(t *testing.T) {
 	}
 }
 
-// streams gives the fake store the optional StreamARNs capability.
+// StreamARN gives the fake store the optional StreamARNs capability.
 func (f *fakeStore) StreamARN(_ context.Context, physical string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

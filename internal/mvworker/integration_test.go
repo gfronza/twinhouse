@@ -226,7 +226,7 @@ func TestIntegrationWorkerAppliesViewsExactlyOnce(t *testing.T) {
 	}
 }
 
-// The reviewer's scenario with the real engine: a view that cannot evaluate
+// A poison record with the real engine: a view that cannot evaluate
 // one source row (toUInt64('oops')) must not hold back the other rows of
 // its batch or later batches; the row is dead-lettered and the checkpoint
 // advances. A second view of the same source, which can evaluate the row,

@@ -316,8 +316,7 @@ func (m *memLeases) get(_ context.Context, key string) (checkpoint, bool, error)
 func (m *memLeases) set(key string, cp checkpoint) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	c := cp
-	m.items[key] = &c
+	m.items[key] = &cp
 }
 
 func (m *memLeases) snapshot(key string) checkpoint {

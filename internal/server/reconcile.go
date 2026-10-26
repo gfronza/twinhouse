@@ -294,7 +294,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) {
 		}
 		t := r.known[name]
 		if !r.unwire(ctx, name, t) {
-			continue // retried next round; the table is dropped only after
+			continue // retried next round: no drop while consumers remain
 		}
 		if err := r.drop(ctx, name, t); err != nil {
 			switch {

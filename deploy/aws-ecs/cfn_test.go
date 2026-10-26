@@ -160,7 +160,7 @@ func (p *yparser) block(indent int) (node, error) {
 	if l.text == "-" || strings.HasPrefix(l.text, "- ") {
 		return p.sequence(indent)
 	}
-	return p.mapping(indent, nil)
+	return p.mapping(indent)
 }
 
 func (p *yparser) sequence(indent int) (node, error) {
@@ -186,9 +186,8 @@ func (p *yparser) sequence(indent int) (node, error) {
 			if k, v, ok := splitKey(rest); ok {
 				// "- key: value" starts a mapping whose other keys are
 				// indented to the first key's column.
-				first := map[string]any{}
 				p.lines[p.i] = yline{no: p.lines[p.i].no, indent: indent + 2, text: k + ":" + prefixSpace(v)}
-				m, err := p.mapping(indent+2, first)
+				m, err := p.mapping(indent + 2)
 				if err != nil {
 					return nil, err
 				}
@@ -222,10 +221,8 @@ func (p *yparser) child(parentIndent int) (node, error) {
 	return p.block(p.lines[p.i].indent)
 }
 
-func (p *yparser) mapping(indent int, out map[string]any) (node, error) {
-	if out == nil {
-		out = map[string]any{}
-	}
+func (p *yparser) mapping(indent int) (node, error) {
+	out := map[string]any{}
 	for p.i < len(p.lines) && p.lines[p.i].indent == indent {
 		l := p.lines[p.i]
 		if strings.HasPrefix(l.text, "- ") || l.text == "-" {
@@ -668,11 +665,7 @@ func (s *stack) eval(t testing.TB, v node) node {
 					return s.eval(t, a[2])
 				case "Fn::Join":
 					a := arg.([]any)
-					var parts []string
-					for _, e := range toStrings(t, s.eval(t, a[1])) {
-						parts = append(parts, e)
-					}
-					return strings.Join(parts, a[0].(string))
+					return strings.Join(toStrings(t, s.eval(t, a[1])), a[0].(string))
 				case "Fn::Sub":
 					return s.sub(t, arg)
 				}

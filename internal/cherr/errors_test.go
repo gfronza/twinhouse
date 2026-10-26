@@ -1,13 +1,11 @@
 package cherr
 
 import (
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -119,9 +117,6 @@ func TestRaisedCodesHaveNames(t *testing.T) {
 	for _, dir := range []string{"internal", "cmd"} {
 		pkgFiles := map[string][]*ast.File{}
 		fset := token.NewFileSet()
-		if _, err := os.Stat(filepath.Join(root, dir)); errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
 		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
 				return err

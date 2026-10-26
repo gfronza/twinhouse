@@ -143,7 +143,6 @@ func TestConcurrentRollupWriters(t *testing.T) {
 	var all []adEvent
 	errs := make(chan string, writers)
 	for w := 0; w < writers; w++ {
-		w := w
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

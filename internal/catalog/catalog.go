@@ -159,9 +159,7 @@ const incarnationIDLen = 8
 // incarnationID returns a random physical-name suffix for a new table.
 func incarnationID() string {
 	var b [5]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("catalog: crypto/rand failed: " + err.Error())
-	}
+	rand.Read(b[:]) // never returns an error (crypto/rand since Go 1.24)
 	return strings.ToLower(base32.StdEncoding.EncodeToString(b[:]))
 }
 
@@ -172,7 +170,7 @@ func incarnationID() string {
 // a suffix ("t", "t.members", from older builds) are returned unchanged.
 func StripIncarnation(rel string) string {
 	parts := strings.Split(rel, ".")
-	if len(parts) > 1 && isIncarnationID(parts[1]) {
+	if len(parts) > 1 && IsIncarnationID(parts[1]) {
 		parts = append(parts[:1], parts[2:]...)
 	}
 	return strings.Join(parts, ".")
@@ -180,9 +178,7 @@ func StripIncarnation(rel string) string {
 
 // IsIncarnationID reports whether s is a per-incarnation physical-name
 // suffix as CreateTable generates it (8 lowercase base32 characters).
-func IsIncarnationID(s string) bool { return isIncarnationID(s) }
-
-func isIncarnationID(s string) bool {
+func IsIncarnationID(s string) bool {
 	if len(s) != incarnationIDLen {
 		return false
 	}
@@ -334,11 +330,9 @@ func (s *store) CreateDatabase(ctx context.Context, db *Database, ifNotExists bo
 }
 
 func (s *store) DropDatabase(ctx context.Context, name string, ifExists bool) error {
-	if s.backend != nil {
-		// Pick up objects created elsewhere so none is left orphaned.
-		if err := s.Refresh(ctx); err != nil {
-			return err
-		}
+	// Pick up objects created elsewhere so none is left orphaned.
+	if err := s.Refresh(ctx); err != nil {
+		return err
 	}
 	s.mu.RLock()
 	exists := s.snap.hasDB(name)

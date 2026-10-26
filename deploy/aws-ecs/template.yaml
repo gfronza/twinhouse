@@ -88,9 +88,10 @@ Parameters:
     Default: us-east-1,eu-west-1
     Description: >-
       Every region of the deployment, this one included (at least two; a
-      stack rule checks both); use the same value in every stack. REPLICA_REGIONS drops the current region itself, and
-      the replicator's REGIONS lists them all with empty endpoints (real
-      AWS). Ignored with GlobalMode=none.
+      stack rule checks both); use the same value in every stack.
+      REPLICA_REGIONS drops the current region itself, and the replicator's
+      REGIONS lists them all with empty endpoints (real AWS). Ignored with
+      GlobalMode=none.
   HomeRegion:
     Type: String
     Default: us-east-1

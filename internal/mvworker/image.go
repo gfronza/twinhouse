@@ -67,10 +67,6 @@ func NewImageApplier(cfg ImageApplierConfig) (*ImageApplier, error) {
 // for logs and dead letters. Tables without views, and MV output rows, are
 // skipped. An error means the caller must retry.
 func (a *ImageApplier) Apply(ctx context.Context, physical, seq string, image map[string]ddbtypes.AttributeValue) error {
-	return a.apply(ctx, physical, seq, image)
-}
-
-func (a *ImageApplier) apply(ctx context.Context, physical, seq string, image map[string]ddbtypes.AttributeValue) error {
 	// No shortcut for tables without views in the current snapshot: the
 	// processor first reloads a catalog older than the row's write time, so
 	// a view created just before the write is honoured (rejections are rare:

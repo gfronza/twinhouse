@@ -2,6 +2,7 @@ package format
 
 import (
 	"bytes"
+	"io"
 	"math"
 	"strings"
 	"testing"
@@ -138,10 +139,10 @@ func decodeAll(t *testing.T, format, input string, cols []Column, settings map[s
 	var out [][]any
 	for {
 		r, err := d.Next()
+		if err == io.EOF {
+			return out, nil
+		}
 		if err != nil {
-			if err.Error() == "EOF" {
-				return out, nil
-			}
 			return out, err
 		}
 		out = append(out, r)

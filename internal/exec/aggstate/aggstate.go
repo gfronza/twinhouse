@@ -160,23 +160,6 @@ func argType(dst, src *chtype.AggPartial, i int) chtype.Type {
 	return chtype.Type{}
 }
 
-// Replaces reports whether v replaces the current extremum cur of a min
-// (min=true) or max aggregate. Comparisons with a top-level NaN are false
-// (IEEE semantics, like ClickHouse), so NaN only survives as the first
-// value. Nested NULL/NaN elements (inside arrays and tuples) compare like
-// ClickHouse's compareAt with nan_direction_hint +1 for min and -1 for max
-// (chtype.CompareHint), so they never win the extremum:
-// max([1,NULL],[1,2],[NULL],[1]) = [1,2], min(...) = [1].
-func Replaces(v, cur any, min bool) bool {
-	if isNaN(v) || isNaN(cur) {
-		return false
-	}
-	if min {
-		return chtype.CompareHint(v, cur, 1) < 0
-	}
-	return chtype.CompareHint(v, cur, -1) > 0
-}
-
 func isNaN(v any) bool {
 	f, ok := v.(float64)
 	return ok && math.IsNaN(f)
@@ -413,8 +396,14 @@ func CompareTypedHint(a, b any, t chtype.Type, hint int) int {
 	return chtype.CompareTypedHint(a, b, t, hint)
 }
 
-// ReplacesTyped is Replaces for values of type t (enums compare by value,
-// UUIDs as UInt128).
+// ReplacesTyped reports whether v replaces the current extremum cur of a min
+// (min=true) or max aggregate over values of type t (enums compare by value,
+// UUIDs as UInt128). Comparisons with a top-level NaN are false (IEEE
+// semantics, like ClickHouse), so NaN only survives as the first value.
+// Nested NULL/NaN elements (inside arrays and tuples) compare like
+// ClickHouse's compareAt with nan_direction_hint +1 for min and -1 for max
+// (chtype.CompareTypedHint), so they never win the extremum:
+// max([1,NULL],[1,2],[NULL],[1]) = [1,2], min(...) = [1].
 func ReplacesTyped(v, cur any, t chtype.Type, min bool) bool {
 	if isNaN(v) || isNaN(cur) {
 		return false

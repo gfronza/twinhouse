@@ -49,8 +49,6 @@ func (c *countingCatalog) Refresh(ctx context.Context) error {
 // stack is the server wired to an in-memory store, reachable both through
 // the Lambda handler and directly over HTTP (for byte-for-byte comparison).
 type stack struct {
-	srv    *server.Server
-	app    *App
 	handle Handler
 	direct string
 }
@@ -81,7 +79,7 @@ func newStack(t *testing.T, cat catalog.Catalog, app *App) *stack {
 	app.ServerVersion = "25.8.1.1"
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
-	return &stack{srv: srv, app: app, handle: NewHandler(app.Middleware(srv)), direct: ts.URL}
+	return &stack{handle: NewHandler(app.Middleware(srv)), direct: ts.URL}
 }
 
 // event builds an API Gateway REST proxy event the way API Gateway does
@@ -306,9 +304,6 @@ func TestHandlerRoundTrips(t *testing.T) {
 	if r.status != 200 {
 		t.Fatalf("inline insert: %d %s", r.status, r.body)
 	}
-	// INSERT native-compressed data (decompress=1): the client sends LZ4
-	// frames. Produced by the server itself (compress=1), see below.
-
 	const sel = "SELECT tenant, id, amount FROM ev ORDER BY id"
 	// JSON: text, not base64.
 	r = s.both(t, event{method: "GET", query: q("query", sel+" FORMAT JSON", "query_id", "j1", "output_format_write_statistics", "0")}, "Content-Type", "X-ClickHouse-Format")

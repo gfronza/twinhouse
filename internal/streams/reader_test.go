@@ -132,6 +132,7 @@ func TestNewValidates(t *testing.T) {
 	base := testConfig(f, "o", func(context.Context, *Batch) error { return nil })
 	cases := map[string]func(*Config){
 		"no streams":    func(c *Config) { c.Streams = nil },
+		"no dynamodb":   func(c *Config) { c.DynamoDB = nil },
 		"no table":      func(c *Config) { c.Table = "" },
 		"no checkpoint": func(c *Config) { c.CheckpointTable = "" },
 		"no consumer":   func(c *Config) { c.Consumer = "" },

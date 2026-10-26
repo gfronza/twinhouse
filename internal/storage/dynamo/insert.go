@@ -222,7 +222,7 @@ func (s *storeImpl) writeReplacing(ctx context.Context, l *layout, groups [][]re
 // (from the ALL_OLD values of the failure, else read back).
 func (s *storeImpl) storedTS(ctx context.Context, l *layout, item map[string]types.AttributeValue, condErr error) (int64, error) {
 	var ccf *types.ConditionalCheckFailedException
-	old := map[string]types.AttributeValue(nil)
+	var old map[string]types.AttributeValue
 	if errors.As(condErr, &ccf) {
 		old = ccf.Item
 	}

@@ -2,8 +2,8 @@
 
 package e2e
 
-// Code below was authored from queries whose expected output was verified
-// against ClickHouse 25.8 (the reference server of the compose stack).
+// Every expected output below was verified against ClickHouse 25.8 (the
+// reference server of the compose stack).
 
 // semSetup creates and fills the small hand-made dataset ("{db}" = database).
 var semSetup = []string{

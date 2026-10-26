@@ -82,7 +82,7 @@ func CheckType(t chtype.Type) error {
 		return nil
 	case chtype.Nullable, chtype.LowCardinality, chtype.Array, chtype.SimpleAggregateFunction:
 		if t.Elem == nil {
-			return cherr.New(cherr.IllegalColumn, "malformed type %s: missing element type", kindName(t))
+			return cherr.New(cherr.IllegalColumn, "malformed type %s: missing element type", t.String())
 		}
 		return CheckType(*t.Elem)
 	case chtype.Map:
@@ -101,7 +101,7 @@ func CheckType(t chtype.Type) error {
 		}
 		return nil
 	}
-	return cherr.New(cherr.IllegalColumn, "type %s cannot be used in a sorting key", kindName(t))
+	return cherr.New(cherr.IllegalColumn, "type %s cannot be used in a sorting key", t.String())
 }
 
 // RangeSafe reports whether byte order of encoded values of t equals the
@@ -176,7 +176,7 @@ func appendValue(dst []byte, t chtype.Type, v any, nested bool) ([]byte, error) 
 		return appendValue(dst, *t.Elem, v, nested)
 	}
 	if v == nil {
-		return nil, cherr.New(cherr.TypeMismatch, "NULL value in non-Nullable key column of type %s", kindName(t))
+		return nil, cherr.New(cherr.TypeMismatch, "NULL value in non-Nullable key column of type %s", t.String())
 	}
 	switch t.Kind {
 	case chtype.Bool:
@@ -287,7 +287,7 @@ func appendValue(dst []byte, t chtype.Type, v any, nested bool) ([]byte, error) 
 		}
 		return append(dst, 0x00), nil
 	}
-	return nil, cherr.New(cherr.IllegalColumn, "type %s cannot be used in a sorting key", kindName(t))
+	return nil, cherr.New(cherr.IllegalColumn, "type %s cannot be used in a sorting key", t.String())
 }
 
 func appendNull(dst []byte, nested bool) []byte {
@@ -360,30 +360,9 @@ func asString(v any) (string, bool) {
 }
 
 func mismatch(t chtype.Type, v any) error {
-	return cherr.New(cherr.TypeMismatch, "key value of Go type %T does not match column type %s", v, kindName(t))
+	return cherr.New(cherr.TypeMismatch, "key value of Go type %T does not match column type %s", v, t.String())
 }
 
 func malformed(t chtype.Type) error {
-	return cherr.New(cherr.LogicalError, "malformed type %s: missing element type", kindName(t))
-}
-
-// kindName renders a type for error messages without depending on
-// chtype.Type.String being available.
-func kindName(t chtype.Type) string {
-	if s := t.String(); s != "" && s != "?" {
-		return s
-	}
-	return kindNames[t.Kind]
-}
-
-var kindNames = map[chtype.Kind]string{
-	chtype.Invalid: "Invalid", chtype.Nothing: "Nothing", chtype.Bool: "Bool",
-	chtype.UInt8: "UInt8", chtype.UInt16: "UInt16", chtype.UInt32: "UInt32", chtype.UInt64: "UInt64",
-	chtype.Int8: "Int8", chtype.Int16: "Int16", chtype.Int32: "Int32", chtype.Int64: "Int64",
-	chtype.Float32: "Float32", chtype.Float64: "Float64", chtype.String: "String",
-	chtype.FixedString: "FixedString", chtype.UUID: "UUID", chtype.Date: "Date", chtype.Date32: "Date32",
-	chtype.DateTime: "DateTime", chtype.DateTime64: "DateTime64", chtype.Enum8: "Enum8", chtype.Enum16: "Enum16",
-	chtype.Nullable: "Nullable", chtype.LowCardinality: "LowCardinality", chtype.Array: "Array",
-	chtype.Tuple: "Tuple", chtype.Map: "Map", chtype.AggregateFunction: "AggregateFunction",
-	chtype.SimpleAggregateFunction: "SimpleAggregateFunction",
+	return cherr.New(cherr.LogicalError, "malformed type %s: missing element type", t.String())
 }

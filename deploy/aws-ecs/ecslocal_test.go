@@ -276,7 +276,7 @@ func TestECSLocal(t *testing.T) {
 		"GlobalMode": "none", "TablePrefix": ecsPrefix, "CatalogRefresh": "1s", "WorkerMode": "service", "AllowedCidr": "10.0.0.0/16",
 		"ChserverCpu": "1024", "ChserverMemory": "2048", "MvWorkerCpu": "512", "MvWorkerMemory": "1024",
 	}
-	s := tp.instantiate(t, "us-east-1", withRequired(params))
+	s := render(t, tp, "us-east-1", params)
 	if f := s.failedRules(t); len(f) > 0 {
 		t.Fatalf("the parameters break the stack rules: %q", f)
 	}
@@ -301,7 +301,7 @@ func TestECSLocal(t *testing.T) {
 	t.Run("mvworker applies views", func(t *testing.T) {
 		// Without inline views only the mvworker container can fill the
 		// rollup.
-		s2 := tp.instantiate(t, "us-east-1", withRequired(merge(params, map[string]string{"InlineViews": "false"})))
+		s2 := render(t, tp, "us-east-1", merge(params, map[string]string{"InlineViews": "false"}))
 		if s2.containers(t, "ChserverTaskDefinition")[0].Env["INLINE_VIEWS"] != "false" {
 			t.Fatal("InlineViews=false not rendered")
 		}
@@ -348,7 +348,7 @@ func TestECSLocal(t *testing.T) {
 	})
 
 	t.Run("replicator starts", func(t *testing.T) {
-		rs := tp.instantiate(t, "us-east-1", withRequired(map[string]string{"GlobalMode": "aws", "RunReplicator": "true", "TablePrefix": ecsPrefix, "AllowedCidr": "10.0.0.0/16"}))
+		rs := render(t, tp, "us-east-1", map[string]string{"GlobalMode": "aws", "RunReplicator": "true", "TablePrefix": ecsPrefix, "AllowedCidr": "10.0.0.0/16"})
 		if f := rs.failedRules(t); len(f) > 0 {
 			t.Fatalf("the replicator parameters break the stack rules: %q", f)
 		}
@@ -400,5 +400,3 @@ func merge(a, b map[string]string) map[string]string {
 	}
 	return out
 }
-
-func withRequired(m map[string]string) map[string]string { return merge(required, m) }

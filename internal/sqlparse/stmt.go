@@ -450,9 +450,7 @@ func (p *parser) parseCreateView(start int, orReplace, materialized bool) Statem
 
 func (p *parser) parseDrop() Statement {
 	p.next() // DROP
-	if p.atKw("TEMPORARY") {
-		p.next()
-	}
+	p.acceptKw("TEMPORARY")
 	st := &DropStmt{}
 	switch {
 	case p.acceptKw("TABLE"):
@@ -805,7 +803,7 @@ func (p *parser) parseExplain() Statement {
 		}
 	}
 	// EXPLAIN options (`header = 1, actions = 1`) only affect presentation.
-	for (p.peek().kind == tIdent) && isOp(p.peekN(1), "=") {
+	for p.peek().kind == tIdent && isOp(p.peekN(1), "=") {
 		p.next()
 		p.next()
 		p.parseExpr()

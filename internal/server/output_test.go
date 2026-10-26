@@ -28,7 +28,6 @@ import (
 )
 
 func TestSelectOutput(t *testing.T) {
-	requireEncoders(t)
 	result := func(fmtClause string) *exec.Result {
 		r := stringRows("s", "a", "b")
 		r.Format = fmtClause
@@ -233,7 +232,6 @@ func TestChooseResponseEncoding(t *testing.T) {
 }
 
 func TestResponseCompression(t *testing.T) {
-	requireEncoders(t)
 	for _, enc := range []string{"gzip", "deflate", "br", "zstd", "lz4"} {
 		t.Run(enc, func(t *testing.T) {
 			fe := &fakeExec{fn: func(context.Context, *exec.Request) (*exec.Result, error) {
@@ -272,7 +270,6 @@ func TestResponseCompression(t *testing.T) {
 func cherr404() error { return cherr.New(cherr.UnknownTable, "Table default.t does not exist") }
 
 func TestNativeCompression(t *testing.T) {
-	requireEncoders(t)
 	fe := &fakeExec{fn: func(_ context.Context, req *exec.Request) (*exec.Result, error) {
 		if req.Query == "FAIL" {
 			return nil, cherr404()
@@ -370,7 +367,6 @@ func TestNativeWriterFraming(t *testing.T) {
 }
 
 func TestBufferingAndWaitEndOfQuery(t *testing.T) {
-	requireEncoders(t)
 	many := stringRows("s")
 	for i := 0; i < 2000; i++ {
 		many.Rows = append(many.Rows, []any{strings.Repeat("x", 50)})
@@ -403,7 +399,6 @@ func badRows() *exec.Result {
 }
 
 func TestEncoderErrorBeforeCommit(t *testing.T) {
-	requireEncoders(t)
 	fe := &fakeExec{fn: func(context.Context, *exec.Request) (*exec.Result, error) { return badRows(), nil }}
 	_, ts := newTestServer(t, fe, nil)
 	r := post(t, ts.URL+"/?max_block_size=1", "SELECT n FORMAT Native")
@@ -416,7 +411,6 @@ func TestEncoderErrorBeforeCommit(t *testing.T) {
 }
 
 func TestMidStreamException(t *testing.T) {
-	requireEncoders(t)
 	fe := &fakeExec{fn: func(context.Context, *exec.Request) (*exec.Result, error) { return badRows(), nil }}
 	_, ts := newTestServer(t, fe, func(c *Config) { c.ResponseBufferSize = 1 })
 	r := post(t, ts.URL+"/?max_block_size=1", "SELECT n FORMAT Native")
@@ -443,7 +437,6 @@ func TestMidStreamException(t *testing.T) {
 }
 
 func TestNativeBlocks(t *testing.T) {
-	requireEncoders(t)
 	res := &exec.Result{Columns: []format.Column{{Name: "x", Type: chtype.TUInt8}}, Format: "Native"}
 	for i := 0; i < 5; i++ {
 		res.Rows = append(res.Rows, []any{uint64(i)})
@@ -486,7 +479,6 @@ func nativeBlockRows(t *testing.T, b []byte) []int {
 }
 
 func TestHeadQuery(t *testing.T) {
-	requireEncoders(t)
 	fe := &fakeExec{fn: func(context.Context, *exec.Request) (*exec.Result, error) { return oneRow(), nil }}
 	_, ts := newTestServer(t, fe, nil)
 	req, _ := http.NewRequest(http.MethodHead, ts.URL+"/?query=SELECT+1", nil)
@@ -500,10 +492,6 @@ func TestHeadQuery(t *testing.T) {
 // session settings (ClickHouse: SELECT inf AS a SETTINGS
 // output_format_json_quote_denormals = 1 FORMAT JSONEachRow -> {"a":"inf"}).
 func TestQuerySettingsApplyToOutput(t *testing.T) {
-	requireEncoders(t)
-	if !parserReady() {
-		t.Skip("sqlparse not implemented yet")
-	}
 	res := func() *exec.Result {
 		return &exec.Result{
 			Columns: []format.Column{{Name: "a", Type: chtype.TFloat64}, {Name: "n", Type: chtype.TUInt64}},

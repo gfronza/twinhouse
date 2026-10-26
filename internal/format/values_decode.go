@@ -142,8 +142,10 @@ func (d *valuesDecoder) parseTuple(s string) ([]any, error) {
 		}
 		pos++
 	}
-	if len(d.cols) == 0 && (skipSpaces(s, pos) >= len(s) || s[skipSpaces(s, pos)] != ')') {
-		return nil, rowErr(cherr.New(cherr.CannotParseText, "expected empty Values row"), d.row, "")
+	if len(d.cols) == 0 {
+		if pos = skipSpaces(s, pos); pos >= len(s) || s[pos] != ')' {
+			return nil, rowErr(cherr.New(cherr.CannotParseText, "expected empty Values row"), d.row, "")
+		}
 	}
 	return out, nil
 }

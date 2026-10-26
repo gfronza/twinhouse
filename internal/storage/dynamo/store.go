@@ -159,11 +159,9 @@ func membersTable(physical string) string { return physical + membersSuffix }
 
 func (s *storeImpl) markersTable() string { return s.opts.Prefix + "__mv_markers" }
 
-// randomBytes fills n bytes from crypto/rand.
+// randomBytes returns n bytes from crypto/rand (whose Read never fails).
 func randomBytes(n int) []byte {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic("dynamo: crypto/rand failed: " + err.Error())
-	}
+	rand.Read(b)
 	return b
 }

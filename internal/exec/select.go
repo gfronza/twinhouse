@@ -1055,8 +1055,6 @@ func orderKeyExpr(x *expr) *expr {
 	}}, []*expr{x})
 }
 
-// orderRank places NaN and NULL after (or, with NULLS FIRST, before) all
-// other values regardless of direction, like ClickHouse.
 // compareOrder orders two ORDER BY values like ClickHouse: at every depth
 // (top level and inside arrays/tuples) NULL and NaN go last with NULLS LAST
 // (the default) and first with NULLS FIRST, in both directions, NaN closer

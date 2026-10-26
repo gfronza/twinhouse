@@ -5,6 +5,7 @@ package e2e
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -56,7 +57,7 @@ func TestDDL(t *testing.T) {
 
 	t.Run("show_databases", func(t *testing.T) {
 		got := queryStrings(t, conn, "SHOW DATABASES")
-		if !contains(got, db) || !contains(got, "default") || !contains(got, "system") {
+		if !slices.Contains(got, db) || !slices.Contains(got, "default") || !slices.Contains(got, "system") {
 			t.Errorf("SHOW DATABASES = %v, missing %s/default/system", got, db)
 		}
 		got = queryStrings(t, conn, "SELECT name FROM system.databases WHERE name = ?", db)
@@ -208,7 +209,7 @@ func TestDDL(t *testing.T) {
 			t.Errorf("DROP VIEW: %v", err)
 		}
 		got := queryStrings(t, conn, "SHOW TABLES")
-		if contains(got, "campaigns_copy") || contains(got, "mv_campaign_daily") {
+		if slices.Contains(got, "campaigns_copy") || slices.Contains(got, "mv_campaign_daily") {
 			t.Errorf("dropped objects still listed: %v", got)
 		}
 		var e uint8
@@ -233,7 +234,7 @@ func TestDDL(t *testing.T) {
 		mustExec(t, "", "INSERT INTO "+other+".x VALUES ('a')")
 		mustExec(t, "", "DROP DATABASE "+other)
 		got := queryStrings(t, conn, "SHOW DATABASES")
-		if contains(got, other) {
+		if slices.Contains(got, other) {
 			t.Errorf("dropped database still listed")
 		}
 		_, err := conn.QueryContext(ctx, "SELECT * FROM "+other+".x")
@@ -241,13 +242,4 @@ func TestDDL(t *testing.T) {
 		_, err = conn.ExecContext(ctx, "DROP DATABASE "+other)
 		wantCode(t, err, 81, "drop dropped database")
 	})
-}
-
-func contains(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

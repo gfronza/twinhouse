@@ -159,8 +159,6 @@ func convertDT(t chtype.Type, v any, m dtOutMode) any {
 	return v
 }
 
-var pow10i = [...]int64{1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000}
-
 // appendDTOutput renders an instant with prec fractional digits in the iso
 // or unix_timestamp form, as ClickHouse does:
 //
@@ -173,7 +171,7 @@ func appendDTOutput(b []byte, tm time.Time, prec int, m dtOutMode) []byte {
 		b = u.AppendFormat(b, "2006-01-02T15:04:05")
 		if prec > 0 {
 			b = append(b, '.')
-			b = appendPadded(b, int64(u.Nanosecond())/pow10i[9-prec], prec)
+			b = appendPadded(b, int64(u.Nanosecond())/pow10[9-prec], prec)
 		}
 		return append(b, 'Z')
 	}
@@ -191,7 +189,7 @@ func appendDTOutput(b []byte, tm time.Time, prec int, m dtOutMode) []byte {
 		b = strconv.AppendInt(b, sec, 10)
 	}
 	b = append(b, '.')
-	return appendPadded(b, nsec/pow10i[9-prec], prec)
+	return appendPadded(b, nsec/pow10[9-prec], prec)
 }
 
 func appendPadded(b []byte, v int64, width int) []byte {

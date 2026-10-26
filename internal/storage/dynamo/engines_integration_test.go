@@ -49,10 +49,8 @@ func TestIntegrationMergeTree(t *testing.T) {
 
 	// Partition range: sorted by (ts, id).
 	got := e.scan(tbl, storage.ScanRequest{Ranges: []storage.KeyRange{{Partition: []any{"acme"}}}})
-	if len(got) != 101 { // 100 + duplicate of row 5? row 5 is tenant "a\x00b"
-		if len(got) != 100 {
-			t.Fatalf("acme rows: %d", len(got))
-		}
+	if len(got) != 100 {
+		t.Fatalf("acme rows: %d", len(got))
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i][1].(time.Time).Before(got[i-1][1].(time.Time)) {
@@ -448,7 +446,7 @@ func TestIntegrationAggregating(t *testing.T) {
 	if s := got[0][11].(*chtype.AggPartial).SetSize; s != 1 {
 		t.Fatalf("direct insert set size = %d", s)
 	}
-	if got[0][1].(*chtype.AggPartial).SetLoaded != false && got[0][11].(*chtype.AggPartial).SetLoaded {
+	if got[0][11].(*chtype.AggPartial).SetLoaded {
 		t.Fatal("non-empty set must load lazily")
 	}
 

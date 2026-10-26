@@ -302,7 +302,7 @@ func (q *query) joinTwo(left, right *source, j *sqlparse.JoinClause, where sqlpa
 		if err != nil {
 			return nil, err
 		}
-		return &joinIter{q: q, spec: spec, b: build, in: lit}, nil
+		return &joinIter{spec: spec, b: build, in: lit}, nil
 	}
 	return out, nil
 }
@@ -384,7 +384,6 @@ func (spec *joinSpec) build(q *query, it rowIter) (*joinBuild, error) {
 }
 
 type joinIter struct {
-	q     *query
 	spec  *joinSpec
 	b     *joinBuild
 	in    rowIter
@@ -484,10 +483,11 @@ func (j *joinIter) next() ([]any, error) {
 				if v == nil {
 					continue
 				}
-				if ok, err := truth(v); err != nil || !ok {
-					if err != nil {
-						return nil, err
-					}
+				ok, err := truth(v)
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
 					continue
 				}
 			}

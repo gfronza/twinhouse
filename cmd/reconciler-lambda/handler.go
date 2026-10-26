@@ -44,7 +44,6 @@ type handler struct {
 
 	mu           sync.Mutex // invocations of one environment are sequential; kept for -once and tests
 	catalogWired bool
-	invocations  int
 }
 
 func newHandler(cfg handlerConfig) (*handler, error) {
@@ -99,7 +98,6 @@ func classify(raw json.RawMessage) (kind eventKind, records int) {
 func (h *handler) Handle(ctx context.Context, raw json.RawMessage) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.invocations++
 	kind, records := classify(raw)
 	if kind == kindUnknown {
 		h.log.Warn("unrecognised event; running a reconcile round anyway", "event", truncate(raw, 512))

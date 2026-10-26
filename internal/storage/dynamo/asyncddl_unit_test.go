@@ -34,8 +34,8 @@ func TestAsyncDDLCreateDoesNotWaitForReplicas(t *testing.T) {
 	tbl := globalTable("events")
 
 	// Control: a waiting store under a request deadline times out, which
-	// is what the API Lambda used to answer (TIMEOUT_EXCEEDED after the
-	// catalog entry was committed).
+	// is what the API Lambda would answer without AsyncDDL
+	// (TIMEOUT_EXCEEDED after the catalog entry was committed).
 	sync := awsStore(t, w, "us-east-1")
 	sctx, scancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	err := sync.EnsureTable(sctx, globalTable("control"))

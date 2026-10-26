@@ -104,9 +104,7 @@ func (st *jsonStyle) appendValue(b []byte, t chtype.Type, v any, depth int, pret
 	if st.strings {
 		return st.appendJSONString(b, rawText(t, v))
 	}
-	for t.Kind == chtype.Nullable || t.Kind == chtype.LowCardinality || t.Kind == chtype.SimpleAggregateFunction {
-		t = *t.Elem
-	}
+	t = unwrapAll(t)
 	switch t.Kind {
 	case chtype.Nothing:
 		return append(b, "null"...)

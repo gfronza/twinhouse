@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"io"
 	"time"
 
 	"github.com/gfronza/twinhouse/internal/catalog"
@@ -314,10 +315,8 @@ func mvUniquifier(src storage.SourceRef, index int) []byte {
 	return u
 }
 
-type byteWriter interface{ Write([]byte) (int, error) }
-
 // writeField writes a length-prefixed field so concatenations are unambiguous.
-func writeField(h byteWriter, b []byte) {
+func writeField(h io.Writer, b []byte) {
 	var n [binary.MaxVarintLen64]byte
 	h.Write(n[:binary.PutUvarint(n[:], uint64(len(b)))])
 	h.Write(b)

@@ -72,12 +72,12 @@ func TestTemplateShape(t *testing.T) {
 			t.Errorf("parameter %s is NoEcho: secrets come from Secrets Manager, not parameters", name)
 		}
 	}
-	var missing []string
 	for name := range required {
 		if get(tp.params[name], "Default") != nil {
 			t.Errorf("%s should have no default (account-specific)", name)
 		}
 	}
+	var missing []string
 	for name, p := range tp.params {
 		if get(p, "Default") == nil {
 			if _, ok := required[name]; !ok {
@@ -281,10 +281,8 @@ func TestChUsersFromSecretsManager(t *testing.T) {
 			t.Errorf("parameter %s would carry a secret in plaintext", name)
 		}
 	}
-	exec := s.eval(t, tp.resource(t, "TaskExecutionRole"))
-	stmts := statements(t, exec)
 	found := false
-	for _, st := range stmts {
+	for _, st := range statements(t, s.eval(t, tp.resource(t, "TaskExecutionRole"))) {
 		if slices.Contains(st.actions, "secretsmanager:GetSecretValue") {
 			found = true
 			if len(st.resources) != 1 || st.resources[0] != required["ChUsersSecretArn"]+"*" {
@@ -544,10 +542,6 @@ func actionsOf(sts []statement) map[string][]statement {
 // exactly the operations its binary makes (DESIGN.md §2, §5, §6).
 func TestIAMIsScopedToTablePrefix(t *testing.T) {
 	tp := loadTemplate(t)
-	type role struct {
-		name string
-		sts  []statement
-	}
 	check := func(label string, s *stack) map[string]map[string][]statement {
 		byRole := map[string]map[string][]statement{}
 		for _, r := range []string{"ChserverTaskRole", "MvWorkerTaskRole", "ReplicatorTaskRole"} {
@@ -849,7 +843,7 @@ func TestMakefileTargets(t *testing.T) {
 		!strings.Contains(out, "123456789012.dkr.ecr.us-east-1.amazonaws.com/twinhouse:v1") || !strings.Contains(out, "--push") {
 		t.Errorf("make -n image-push: %v\n%s", err, out)
 	}
-	// The serverless targets keep working from their new directory.
+	// The serverless targets run from deploy/aws-lambda.
 	if out, err := run("aws-validate"); err != nil || !strings.Contains(out, "deploy/aws-lambda") {
 		t.Errorf("make -n aws-validate: %v\n%s", err, out)
 	}

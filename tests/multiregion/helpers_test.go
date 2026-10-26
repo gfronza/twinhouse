@@ -257,8 +257,8 @@ func randSuffix() string {
 	return hex.EncodeToString(b)
 }
 
-// newDB creates a uniquely-named database in us, waits until eu sees it, and
-// drops it when the test ends.
+// newDB creates a uniquely-named database in us and drops it when the test
+// ends.
 func newDB(t testing.TB, scenario string) string {
 	t.Helper()
 	name := fmt.Sprintf("mr_%s_%s", scenario, randSuffix())
@@ -294,16 +294,14 @@ func eventually(t testing.TB, timeout time.Duration, what string, check func() (
 	t.Helper()
 	start := time.Now()
 	deadline := start.Add(timeout)
-	var last string
 	for {
 		ok, desc := check()
 		if ok {
 			t.Logf("%s: converged after %s", what, time.Since(start).Round(10*time.Millisecond))
 			return true
 		}
-		last = desc
 		if time.Now().After(deadline) {
-			t.Errorf("%s: not converged after %s:\n%s", what, timeout, last)
+			t.Errorf("%s: not converged after %s:\n%s", what, timeout, desc)
 			return false
 		}
 		time.Sleep(250 * time.Millisecond)

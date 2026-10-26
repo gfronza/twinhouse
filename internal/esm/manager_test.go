@@ -340,18 +340,12 @@ func TestEnsureConcurrentCreate(t *testing.T) {
 	// another reconciler created the mapping meanwhile.
 	f.failNext("Create", &types.ResourceConflictException{Message: aws.String("already exists")})
 	f.add(streamA, mvworker, "Enabled", DefaultBatchSize)
-	f.mu.Lock()
-	f.fail["List"] = nil
-	f.mu.Unlock()
 	// Make the first List miss it: temporarily hide the mapping.
 	hidden := f.snapshot()
 	f.mu.Lock()
 	f.mappings = nil
 	f.mu.Unlock()
 	listed := 0
-	f.mu.Lock()
-	f.fail["List"] = nil
-	f.mu.Unlock()
 	// Wrap: after the first List, restore the mapping.
 	wrapped := &listHook{fakeLambda: f, onList: func() {
 		listed++

@@ -1,8 +1,7 @@
 package chtype
 
-// API CONTRACT. The bodies here are stubs to be implemented by the owner of
-// package chtype; signatures and documented semantics must not change
-// without updating DESIGN.md and all callers.
+// API CONTRACT. Signatures and documented semantics must not change without
+// updating DESIGN.md and all callers.
 
 // Parse parses a ClickHouse type name such as
 // "Array(Tuple(qualification_id UInt32, precodes Array(String)))",

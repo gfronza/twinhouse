@@ -18,8 +18,6 @@ const mergeBatch = 500
 
 // viewPlan is a materialized view compiled against an in-memory source.
 type viewPlan struct {
-	v       *catalog.View
-	target  *catalog.Table
 	rel     *relation
 	mv      *mvSource
 	mapping []int // output column index -> target column index
@@ -172,7 +170,7 @@ func (q *query) planView(v *catalog.View, sel *sqlparse.SelectStmt, src, target 
 	if err != nil {
 		return nil, err
 	}
-	vp := &viewPlan{v: v, target: target, rel: rel, mv: mv, mapping: make([]int, len(rel.cols))}
+	vp := &viewPlan{rel: rel, mv: mv, mapping: make([]int, len(rel.cols))}
 	seen := map[int]bool{}
 	for i, c := range rel.cols {
 		ti := target.ColumnIndex(c.Name)
@@ -297,7 +295,7 @@ func checkViewKeysDeterministic(sel *sqlparse.SelectStmt, target *catalog.Table)
 // (ClickHouse allows aliases in any clause, e.g. GROUP BY now() AS t).
 func collectInlineAliases(e any, aliases map[string]sqlparse.Expr) {
 	walkAST(reflect.ValueOf(e), func(v reflect.Value) {
-		if a, ok := v.Interface().(*sqlparse.AliasExpr); ok && a != nil && a.Alias != "" {
+		if a, ok := v.Interface().(*sqlparse.AliasExpr); ok && a.Alias != "" {
 			aliases[a.Alias] = a.X
 		}
 	})
@@ -313,11 +311,11 @@ func findVolatile(e sqlparse.Expr, aliases map[string]sqlparse.Expr, seen map[st
 		}
 		switch x := v.Interface().(type) {
 		case *sqlparse.FuncCall:
-			if x != nil && volatileFuncs[strings.ToLower(x.Name)] {
+			if volatileFuncs[strings.ToLower(x.Name)] {
 				found = x.Name
 			}
 		case *sqlparse.Ident:
-			if x == nil || len(x.Parts) != 1 || seen[x.Parts[0]] {
+			if len(x.Parts) != 1 || seen[x.Parts[0]] {
 				return
 			}
 			if a, ok := aliases[x.Parts[0]]; ok {

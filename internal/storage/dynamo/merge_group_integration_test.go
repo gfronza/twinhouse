@@ -72,7 +72,6 @@ func newCountingEnv(t *testing.T) (*env, *callCounter) {
 	var cc *callCounter
 	e := newEnvWith(t, func(*Options) {}, func(api ddbAPI) ddbAPI {
 		cc = &callCounter{ddbAPI: api, calls: map[string]int{}}
-		cc.failUpdates.Store(0)
 		return cc
 	})
 	cc.failUpdates.Store(-1 << 30)
@@ -200,9 +199,9 @@ func TestIntegrationMergeFinishesAfterCrash(t *testing.T) {
 }
 
 // TestIntegrationFloatSums: float sums are added in IEEE arithmetic by
-// compare-and-swap. DynamoDB ADD sums decimals exactly and rejected sums
+// compare-and-swap. DynamoDB ADD sums decimals exactly and rejects sums
 // needing more than 38 significant digits (1500000.25 + 5.55e-17), which
-// dropped the whole row application (count and avg included) and kept
+// would drop the whole row application (count and avg included) and keep
 // failing for the key.
 func TestIntegrationFloatSums(t *testing.T) {
 	e := newEnv(t)

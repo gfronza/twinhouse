@@ -169,15 +169,14 @@ func formatQuoted(t Type, v any) string {
 
 func writeQuoted(b *strings.Builder, t Type, v any) {
 	if v == nil {
-		if t.Kind == Array || t.Kind == Map {
-			if t.Kind == Array {
-				b.WriteString("[]")
-			} else {
-				b.WriteString("{}")
-			}
-			return
+		switch t.Kind {
+		case Array:
+			b.WriteString("[]")
+		case Map:
+			b.WriteString("{}")
+		default:
+			b.WriteString("NULL")
 		}
-		b.WriteString("NULL")
 		return
 	}
 	switch t.Kind {
@@ -338,9 +337,7 @@ func appendJSONValue(dst []byte, t Type, v any, o *JSONOptions, indent int) []by
 		return append(dst, "null"...)
 	}
 	switch t.Kind {
-	case Bool:
-		return appendScalarPlain(dst, t, v)
-	case UInt8, UInt16, UInt32, Int8, Int16, Int32:
+	case Bool, UInt8, UInt16, UInt32, Int8, Int16, Int32:
 		return appendScalarPlain(dst, t, v)
 	case UInt64, Int64:
 		if o.Quote64 {

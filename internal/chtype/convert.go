@@ -413,10 +413,9 @@ func convertFromString(s string, to Type) (any, error) {
 		}
 		v, err := parseDateTime64Text(s, to.Precision, locationOf(to))
 		return v, castParseErr(err, to)
-	case Array, Tuple, Map:
-		if to.Kind == Map {
-			return nil, errf(cherr.TypeMismatch, "Unsupported types to CAST AS Map. Left type: String, right type: %s", to.String())
-		}
+	case Map:
+		return nil, errf(cherr.TypeMismatch, "Unsupported types to CAST AS Map. Left type: String, right type: %s", to.String())
+	case Array, Tuple:
 		return parseCompositeString(s, to)
 	case Nullable, LowCardinality, SimpleAggregateFunction:
 		return convertFromString(s, *to.Elem)

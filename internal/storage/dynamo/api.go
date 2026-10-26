@@ -1,7 +1,5 @@
 // Package dynamo is the DynamoDB implementation of storage.Store and of the
 // catalog backing store. See DESIGN.md §4 for the physical layout.
-//
-// API CONTRACT (stubs until implemented by the storage owner).
 package dynamo
 
 import (

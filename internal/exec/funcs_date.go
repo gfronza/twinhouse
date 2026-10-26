@@ -414,7 +414,7 @@ func buildToDate(c *compiler, name string, args []*expr) (*expr, error) {
 	if name == "toDate32" {
 		to = chtype.Type{Kind: chtype.Date32}
 	}
-	return timeConv(c, name, args, to, 1)
+	return timeConv(c, name, args, to)
 }
 
 func buildToDateTime(c *compiler, name string, args []*expr) (*expr, error) {
@@ -425,7 +425,7 @@ func buildToDateTime(c *compiler, name string, args []*expr) (*expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return timeConv(c, name, args, chtype.Type{Kind: chtype.DateTime, TZ: tz}, 1)
+	return timeConv(c, name, args, chtype.Type{Kind: chtype.DateTime, TZ: tz})
 }
 
 func buildToDateTime64(c *compiler, name string, args []*expr) (*expr, error) {
@@ -440,12 +440,12 @@ func buildToDateTime64(c *compiler, name string, args []*expr) (*expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return timeConv(c, name, args, chtype.NewDateTime64(p, tz), 1)
+	return timeConv(c, name, args, chtype.NewDateTime64(p, tz))
 }
 
 // timeConv converts args[0] to a time type; extra args (precision/tz) are
 // already folded into to.
-func timeConv(c *compiler, name string, args []*expr, to chtype.Type, nargs int) (*expr, error) {
+func timeConv(c *compiler, name string, args []*expr, to chtype.Type) (*expr, error) {
 	a := args[0]
 	from := base(a)
 	k := from.Kind
@@ -459,7 +459,7 @@ func timeConv(c *compiler, name string, args []*expr, to chtype.Type, nargs int)
 		}
 		from = withTZ(from, tz)
 	}
-	return strict(args[:nargs], to, func(v []any) (any, error) {
+	return strict(args[:1], to, func(v []any) (any, error) {
 		return convertToTime(c.q, v[0], from, to)
 	}), nil
 }
@@ -963,14 +963,15 @@ func addIntervalBuilder(unit string, subtract bool) builder {
 		t := base(args[0])
 		rt := t
 		calendar := unit == "DAY" || unit == "WEEK" || unit == "MONTH" || unit == "QUARTER" || unit == "YEAR"
+		prec, subSecond := map[string]int{"MILLISECOND": 3, "MICROSECOND": 6, "NANOSECOND": 9}[unit]
 		if (t.Kind == chtype.Date || t.Kind == chtype.Date32) && !calendar {
 			rt = chtype.TDateTime
-			if unit == "MILLISECOND" || unit == "MICROSECOND" || unit == "NANOSECOND" {
-				rt = chtype.NewDateTime64(map[string]int{"MILLISECOND": 3, "MICROSECOND": 6, "NANOSECOND": 9}[unit], "")
+			if subSecond {
+				rt = chtype.NewDateTime64(prec, "")
 			}
 		}
-		if t.Kind == chtype.DateTime && (unit == "MILLISECOND" || unit == "MICROSECOND" || unit == "NANOSECOND") {
-			rt = chtype.NewDateTime64(map[string]int{"MILLISECOND": 3, "MICROSECOND": 6, "NANOSECOND": 9}[unit], t.TZ)
+		if t.Kind == chtype.DateTime && subSecond {
+			rt = chtype.NewDateTime64(prec, t.TZ)
 		}
 		return strict(args, rt, func(v []any) (any, error) {
 			n := asInt(v[1])

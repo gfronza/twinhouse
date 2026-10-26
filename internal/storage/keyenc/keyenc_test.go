@@ -93,10 +93,6 @@ func cmp3(lt, gt bool) int {
 
 func sign(c int) int { return cmp3(c < 0, c > 0) }
 
-// chtypeReady reports whether the real chtype.Compare is available (it is
-// implemented concurrently; its stub returns 0).
-func chtypeReady() bool { return chtype.Compare(uint64(1), uint64(2)) < 0 }
-
 type gen struct{ r *rand.Rand }
 
 func (g gen) str() string {
@@ -192,7 +188,6 @@ func TestOrderMatchesCompare(t *testing.T) {
 		"Array(Array(String))": tArrArrStr, "Tuple": tTuple, "Map": tMap, "LowCardinality": tLCStr,
 		"Array(Tuple)": tArrTuple,
 	}
-	useChtype := chtypeReady()
 	for name, typ := range types {
 		t.Run(name, func(t *testing.T) {
 			g := gen{rand.New(rand.NewPCG(1, uint64(len(name))))}
@@ -209,7 +204,7 @@ func TestOrderMatchesCompare(t *testing.T) {
 				// NULL first at every depth (changing it would re-key
 				// stored rows); the engine never derives ranges or row
 				// order from nested key elements.
-				if useChtype && !hasNaN(a) && !hasNaN(b) && !hasNestedNull(a) && !hasNestedNull(b) {
+				if !hasNaN(a) && !hasNaN(b) && !hasNestedNull(a) && !hasNestedNull(b) {
 					if c := sign(chtype.Compare(a, b)); c != want {
 						t.Fatalf("chtype.Compare(%#v, %#v) = %d, encoding order %d", a, b, c, want)
 					}

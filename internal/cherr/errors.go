@@ -174,8 +174,8 @@ func Wrap(code int, cause error, format string, args ...any) *Error {
 	return &Error{Code: code, Msg: msg, Cause: cause}
 }
 
-// As returns err as *Error, converting unknown errors to a LOGICAL_ERROR-free
-// generic exception (code 1001 STD_EXCEPTION semantics, rendered as code 1001).
+// As returns err as *Error (nil for nil); any other error becomes a generic
+// STD_EXCEPTION (1001), not a LOGICAL_ERROR.
 func As(err error) *Error {
 	if err == nil {
 		return nil

@@ -24,7 +24,7 @@ func (q *query) runCreateDatabase(s *sqlparse.CreateDatabaseStmt) (*Result, erro
 	if s.Name == "system" || strings.EqualFold(s.Name, "information_schema") {
 		return nil, cherr.New(cherr.DatabaseAlreadyExists, "Database %s already exists", s.Name)
 	}
-	if err := checkName("database", s.Name); err != nil {
+	if err := catalog.ValidateName("database", s.Name); err != nil {
 		return nil, err
 	}
 	engine := s.Engine
@@ -37,9 +37,6 @@ func (q *query) runCreateDatabase(s *sqlparse.CreateDatabaseStmt) (*Result, erro
 	}
 	return &Result{}, nil
 }
-
-// checkName validates a database/table name for DynamoDB physical naming.
-func checkName(kind, name string) error { return catalog.ValidateName(kind, name) }
 
 func (q *query) physicalName(db, table string) string {
 	if f := q.e.cfg.PhysicalName; f != nil {
@@ -57,7 +54,7 @@ func (q *query) runCreateTable(s *sqlparse.CreateTableStmt) (*Result, error) {
 	if db == "system" {
 		return nil, cherr.New(cherr.NotImplemented, "cannot create tables in database system")
 	}
-	if err := checkName("table", s.Name); err != nil {
+	if err := catalog.ValidateName("table", s.Name); err != nil {
 		return nil, err
 	}
 	if _, err := cat.View(db, s.Name); err == nil {
@@ -581,7 +578,7 @@ func (q *query) runCreateView(s *sqlparse.CreateViewStmt) (*Result, error) {
 	if _, err := cat.Database(db); err != nil {
 		return nil, err
 	}
-	if err := checkName("view", s.Name); err != nil {
+	if err := catalog.ValidateName("view", s.Name); err != nil {
 		return nil, err
 	}
 	if s.Select == nil {
@@ -802,7 +799,7 @@ func (q *query) dropTable(t *catalog.Table) error {
 // reconciler deletes the physical table once the service allows it.
 func (q *query) dropPhysical(t *catalog.Table) error {
 	err := q.e.cfg.Store.DropTable(q.ctx, t)
-	if err != nil && errors.Is(err, storage.ErrDeleteDeferred) {
+	if errors.Is(err, storage.ErrDeleteDeferred) {
 		q.e.logger().Info("physical table deletion deferred; the reconciler completes it",
 			"table", t.FullName(), "physical", t.PhysicalName, "reason", err)
 		return nil

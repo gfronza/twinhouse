@@ -26,7 +26,7 @@ type arrayJoinPlan struct {
 	calls  map[string]string // fingerprint of arrayJoin(x) -> generated column
 }
 
-// rewriteArrayJoins replaces arrayJoin(x) calls in e with references to
+// rewrite replaces arrayJoin(x) calls in e with references to
 // generated columns, registering one stage per distinct call.
 func (p *arrayJoinPlan) rewrite(c *compiler, sc *scope, e sqlparse.Expr, pending *[]sqlparse.Expr) sqlparse.Expr {
 	return rewrite(e, func(n sqlparse.Expr) (sqlparse.Expr, bool) {
@@ -117,10 +117,9 @@ func (q *query) planArrayJoin(c *compiler, src *source, clause *sqlparse.ArrayJo
 		stages = append(stages, st)
 	}
 	width := len(sc.cols)
-	base := src
 	out := &source{sc: sc, table: src.table, tableCols: src.tableCols, inner: src, noLimit: true}
 	out.open = func(req *storage.ScanRequest) (rowIter, error) {
-		it, err := base.open(req)
+		it, err := src.open(req)
 		if err != nil {
 			return nil, err
 		}

@@ -96,11 +96,7 @@ func (q *query) databaseNames() []string {
 func (q *query) systemDatabasesRows() [][]any {
 	var rows [][]any
 	for _, n := range q.databaseNames() {
-		engine := "Atomic"
-		if n == "system" {
-			engine = "Atomic"
-		}
-		rows = append(rows, []any{n, engine, "", "", zeroUUID, engine, ""})
+		rows = append(rows, []any{n, "Atomic", "", "", zeroUUID, "Atomic", ""})
 	}
 	return rows
 }
@@ -175,14 +171,6 @@ func (q *query) systemColumnsRows() [][]any {
 			continue
 		}
 		for _, t := range q.cat.Tables(db) {
-			in := func(list []string, n string) uint64 {
-				for _, x := range list {
-					if x == n {
-						return 1
-					}
-				}
-				return 0
-			}
 			for i, c := range t.Columns {
 				var dtp any
 				if u := c.Type.Unwrap(); u.Kind == chtype.DateTime64 {
@@ -190,9 +178,10 @@ func (q *query) systemColumnsRows() [][]any {
 				} else if u.Kind == chtype.DateTime {
 					dtp = uint64(0)
 				}
+				inKey := boolNum(containsStr(t.OrderBy, c.Name))
 				rows = append(rows, []any{t.Database, t.Name, c.Name, c.TypeText, uint64(i + 1), c.DefaultKind, c.DefaultExpr,
-					uint64(0), uint64(0), uint64(0), c.Comment, uint64(0), in(t.OrderBy, c.Name),
-					in(t.OrderBy, c.Name), uint64(0), c.Codec, nil, nil, nil, nil, dtp, nil})
+					uint64(0), uint64(0), uint64(0), c.Comment, uint64(0), inKey,
+					inKey, uint64(0), c.Codec, nil, nil, nil, nil, dtp, nil})
 			}
 		}
 	}

@@ -11,8 +11,8 @@ import (
 )
 
 // prettyEncoder implements Pretty and PrettyCompact (best effort: the layout
-// matches ClickHouse for common results; ClickHouse's colour, digit-group
-// highlighting and vertical fallback are not reproduced). It buffers at most
+// matches ClickHouse for common results; ClickHouse's colour and digit-group
+// highlighting are not reproduced). It buffers at most
 // output_format_pretty_max_rows rows: like ClickHouse it shows the first and
 // last halves of larger results.
 type prettyEncoder struct {
@@ -73,7 +73,7 @@ func (e *prettyEncoder) cell(i int, v any) []string {
 	}
 	lines := strings.Split(s, "\n")
 	for j, l := range lines {
-		if e.maxWidth > 0 && utf8.RuneCountInString(l) > e.maxWidth {
+		if e.maxWidth > 0 && runeLen(l) > e.maxWidth {
 			r := []rune(l)
 			lines[j] = string(r[:e.maxWidth]) + "⋯"
 		}

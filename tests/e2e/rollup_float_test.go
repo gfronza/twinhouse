@@ -8,10 +8,10 @@ import (
 )
 
 // TestRollupFloatSumNoise: float rollup sums whose exact decimal sum needs
-// more than DynamoDB's 38 significant digits (1500000.25 + 5.55e-17) used
-// to fail the view application ("precision up to 38 digits"), dropping the
-// row from count/avg too, and the stream worker dead-lettered it. Now the
-// INSERTs succeed, the rollup matches the source, and the worker's
+// more than DynamoDB's 38 significant digits (1500000.25 + 5.55e-17) must
+// not fail the view application ("precision up to 38 digits"), which would
+// drop the row from count/avg too and make the stream worker dead-letter
+// it: the INSERTs succeed, the rollup matches the source, and the worker's
 // re-application leaves it unchanged.
 func TestRollupFloatSumNoise(t *testing.T) {
 	t.Parallel()

@@ -51,10 +51,10 @@ func parseText(t Type, s string) (any, error) {
 	case DateTime64:
 		return parseDateTime64Text(s, t.Precision, locationOf(t))
 	case Array, Tuple, Map:
-		p := &quotedParser{s: s}
-		if p.pos < len(s) && isSpace(s[0]) {
+		if s != "" && isSpace(s[0]) {
 			return nil, compositeStartErr(t)
 		}
+		p := &quotedParser{s: s}
 		v, err := p.parseValue(t)
 		if err != nil {
 			return nil, err
@@ -664,21 +664,7 @@ func parseDateTime64Text(s string, prec int, loc *time.Location) (any, error) {
 	}
 	nd := j - i
 	dateLayout := !neg && nd == 4 && j < len(s)
-	var t time.Time
-	var fracStart int
-	zeroDate := false
-	if dateLayout {
-		p, n, err := scanDateTimeParts(s)
-		if err != nil {
-			return nil, err
-		}
-		tt, zero, err := civil(p[0], p[1], p[2], p[3], p[4], p[5], loc)
-		if err != nil {
-			return nil, err
-		}
-		t, zeroDate = tt, zero
-		fracStart = n
-	} else {
+	if !dateLayout {
 		if nd == 0 || (nd < 5 && !neg && (j >= len(s) || s[j] != '.')) {
 			return nil, errf(cherr.CannotParseDateTime, "Cannot parse DateTime from '%s'", s)
 		}
@@ -689,22 +675,17 @@ func parseDateTime64Text(s string, prec int, loc *time.Location) (any, error) {
 			return nil, errf(codeDecimalOverflow, "Decimal math overflow parsing DateTime64 from '%s'", s)
 		}
 		var nanos int64
-		if j < len(s) && s[j] == '.' {
-			fracStart = j
-		} else {
-			fracStart = j
-			if whole >= dt64ScaledThreshold && prec > 0 {
-				scale := pow10[prec]
-				nanos = (whole % scale) * pow10[9-prec]
-				whole /= scale
-			}
+		if (j == len(s) || s[j] != '.') && whole >= dt64ScaledThreshold && prec > 0 {
+			scale := pow10[prec]
+			nanos = (whole % scale) * pow10[9-prec]
+			whole /= scale
 		}
 		if whole > maxUnixSec64 && !neg {
 			return nil, errf(codeDecimalOverflow, "Decimal math overflow parsing DateTime64 from '%s'", s)
 		}
-		frac, n := scanFraction(s[fracStart:], prec)
-		if fracStart+n != len(s) {
-			return nil, trailingData(s, fracStart+n, errf(cherr.CannotParseDateTime, "Cannot parse DateTime64 from '%s': unexpected data at position %d", s, fracStart+n))
+		frac, n := scanFraction(s[j:], prec)
+		if j+n != len(s) {
+			return nil, trailingData(s, j+n, errf(cherr.CannotParseDateTime, "Cannot parse DateTime64 from '%s': unexpected data at position %d", s, j+n))
 		}
 		if neg && whole > maxUnixSec64 {
 			whole, nanos, frac = maxUnixSec64, 0, 0
@@ -713,7 +694,7 @@ func parseDateTime64Text(s string, prec int, loc *time.Location) (any, error) {
 		if neg {
 			total = -total
 		}
-		t = time.Unix(0, total).UTC()
+		t := time.Unix(0, total).UTC()
 		if t.Before(minDateTime64) {
 			// ClickHouse clamps to 1900-01-01 00:00:00 in the column's zone.
 			t = time.Date(1900, 1, 1, 0, 0, 0, 0, loc).UTC()
@@ -722,6 +703,14 @@ func parseDateTime64Text(s string, prec int, loc *time.Location) (any, error) {
 			return nil, err
 		}
 		return t, nil
+	}
+	p, fracStart, err := scanDateTimeParts(s)
+	if err != nil {
+		return nil, err
+	}
+	t, zeroDate, err := civil(p[0], p[1], p[2], p[3], p[4], p[5], loc)
+	if err != nil {
+		return nil, err
 	}
 	frac, n := scanFraction(s[fracStart:], prec)
 	if fracStart+n != len(s) {

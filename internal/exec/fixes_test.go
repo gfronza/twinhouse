@@ -45,7 +45,7 @@ func scanWithIDs(t *testing.T, te *testEnv, db, name string) ([]storage.Row, []s
 	return rows, ids
 }
 
-const fixMVSetup = `CREATE TABLE src (k String, ts DateTime, n UInt64, u String) ENGINE = MergeTree ORDER BY (k, ts);
+const mvSetup = `CREATE TABLE src (k String, ts DateTime, n UInt64, u String) ENGINE = MergeTree ORDER BY (k, ts);
 CREATE TABLE agg (k String, c SimpleAggregateFunction(sum, UInt64), s SimpleAggregateFunction(sum, UInt64), uu AggregateFunction(uniqExact, String)) ENGINE = AggregatingMergeTree ORDER BY k`
 
 func execAll(te *testEnv, script string) {
@@ -61,7 +61,7 @@ func execAll(te *testEnv, script string) {
 // a stream worker replaying the same source rows is a no-op.
 func TestPopulateMarkersMatchStreamReplay(t *testing.T) {
 	te := newTestEnv(t)
-	execAll(te, fixMVSetup)
+	execAll(te, mvSetup)
 	te.exec(`INSERT INTO src VALUES ('a', '2024-01-01 00:00:00', 1, 'x'), ('a', '2024-01-01 01:00:00', 2, 'y'), ('b', '2024-01-01 00:00:00', 5, 'x')`)
 	te.exec(`CREATE MATERIALIZED VIEW mv TO agg POPULATE AS SELECT k, count() AS c, sum(n) AS s, uniqExactState(u) AS uu FROM src GROUP BY k`)
 	const want = "a\t2\t3\t2\nb\t1\t5\t1"
@@ -82,7 +82,7 @@ func TestPopulateMarkersMatchStreamReplay(t *testing.T) {
 // eligible for.
 func TestApplyViewList(t *testing.T) {
 	te := newTestEnv(t)
-	execAll(te, fixMVSetup)
+	execAll(te, mvSetup)
 	te.exec(`CREATE TABLE agg2 (k String, c SimpleAggregateFunction(sum, UInt64)) ENGINE = AggregatingMergeTree ORDER BY k`)
 	te.exec(`CREATE MATERIALIZED VIEW mv TO agg AS SELECT k, count() AS c, sum(n) AS s, uniqExactState(u) AS uu FROM src GROUP BY k`)
 	te.exec(`CREATE MATERIALIZED VIEW mv2 TO agg2 AS SELECT k, count() AS c FROM src GROUP BY k`)

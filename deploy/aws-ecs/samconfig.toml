@@ -14,10 +14,11 @@
 # ChUsersSecretJsonKey, SecretKmsKeyArn, MvPoisonPolicy, ChserverTargetCpu,
 # ReplicatorDesiredCount, CertificateArn, KeepHttpListener,
 # HealthCheckGracePeriod) takes its template default; add a "Key=Value"
-# entry to change it (README.md lists every parameter). The CHANGE_ME placeholders (ImageUri, VpcId, SubnetIds,
-# AllowedCidr, ChUsersSecretArn) are account-specific and CloudFormation
-# rejects them, so a forgotten one cannot deploy: replace them, here or in
-# a git-ignored copy (samconfig.local.toml, deployed with
+# entry to change it (README.md lists every parameter). The CHANGE_ME
+# placeholders (ImageUri, VpcId, SubnetIds, AllowedCidr, ChUsersSecretArn)
+# are account-specific and CloudFormation rejects them, so a forgotten one
+# cannot deploy: replace them, here or in a git-ignored copy
+# (samconfig.local.toml, deployed with
 # `make ecs-deploy ENV=us ECS_CONFIG=samconfig.local.toml`). No secret is
 # set here: CH_USERS lives in the Secrets Manager secret ChUsersSecretArn
 # names. Do NOT pass `--parameter-overrides` on the command line: the SAM

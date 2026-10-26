@@ -240,7 +240,7 @@ func TestCreateTableValidation(t *testing.T) {
 		{"duplicate column", func(t *Table) { t.Columns = append(t.Columns, col("id", "String")) }, cherr.IllegalColumn},
 		{"bad table name", func(t *Table) { t.Name = "a.b" }, cherr.BadArguments},
 		{"bad db name", func(t *Table) { t.Database = "a b" }, cherr.BadArguments},
-		{"too long name", func(t *Table) { t.Name = string(make([]byte, 0)) + fmt.Sprintf("%0250d", 0) }, cherr.BadArguments},
+		{"too long name", func(t *Table) { t.Name = fmt.Sprintf("%0250d", 0) }, cherr.BadArguments},
 		{"no columns", func(t *Table) { t.Columns = nil; t.OrderBy = nil }, cherr.EmptyDataPassed},
 		{"unknown engine", func(t *Table) { t.Engine = "Kafka" }, cherr.UnknownStorage},
 		{"order by missing col", func(t *Table) { t.OrderBy = []string{"nope"} }, cherr.UnknownIdentifier},

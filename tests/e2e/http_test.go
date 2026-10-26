@@ -328,8 +328,8 @@ func TestHTTPLoader(t *testing.T) {
 		if r.Header.Get("X-ClickHouse-Exception-Code") != "81" {
 			t.Errorf("unknown database param: %d %q", r.Status, r.Body)
 		}
-		// Unknown settings as URL params are accepted (ClickHouse rejects truly
-		// unknown ones, but common real settings must work).
+		// Common settings passed as URL params are accepted (ClickHouse
+		// rejects truly unknown ones).
 		r = doHTTP(t, req{Method: "GET", Params: url.Values{"max_result_rows": {"1000"}, "output_format_json_quote_64bit_integers": {"0"},
 			"wait_end_of_query": {"1"}, "send_progress_in_http_headers": {"0"}, "query": {"SELECT 7"}}})
 		if r.Status != 200 || r.Body != "7\n" {

@@ -426,12 +426,7 @@ func (p *parser) parseOrderList() []OrderItem {
 			it.NullsFirst = &first
 		}
 		if p.acceptKw("COLLATE") {
-			t := p.peek()
-			if t.kind != tString {
-				p.failExpected("string literal")
-			}
-			p.next()
-			it.Collate = t.val
+			it.Collate = p.expectString()
 		}
 		if p.atKw("WITH", "FILL") {
 			notImplemented("ORDER BY ... WITH FILL is not supported")

@@ -141,8 +141,9 @@ var envVarRe = regexp.MustCompile(`(?m)^\s+([A-Z][A-Z0-9_]+):\s`)
 // (or the sam local env file) sets but no binary reads, i.e. a typo or a
 // stale name.
 func TestEnvironmentVariablesAreReadByTheCode(t *testing.T) {
+	tmpl := readFile(t, "template.yaml")
 	keys := map[string]bool{}
-	for _, m := range envVarRe.FindAllStringSubmatch(readFile(t, "template.yaml"), -1) {
+	for _, m := range envVarRe.FindAllStringSubmatch(tmpl, -1) {
 		keys[m[1]] = true
 	}
 	var local struct {
@@ -177,7 +178,7 @@ func TestEnvironmentVariablesAreReadByTheCode(t *testing.T) {
 		}
 	}
 	// The contract's reconciler variables must reach the reconciler.
-	res := resources(t, readFile(t, "template.yaml"))
+	res := resources(t, tmpl)
 	for _, k := range []string{"MVWORKER_FUNCTION_ARN", "REPLICATOR_FUNCTION_ARN", "ESM_BATCH_SIZE"} {
 		if !strings.Contains(res["ReconcilerFunction"], k+":") {
 			t.Errorf("ReconcilerFunction does not set %s", k)
@@ -193,7 +194,6 @@ func TestEnvironmentVariablesAreReadByTheCode(t *testing.T) {
 	if v, ok := local.Parameters["MVWORKER_FUNCTION_ARN"]; !ok || v != "" || local.Parameters["GLOBAL_MODE"] != "emulated" {
 		t.Errorf("local-env.json must set GLOBAL_MODE=emulated and an empty MVWORKER_FUNCTION_ARN: %v", local.Parameters)
 	}
-	tmpl := readFile(t, "template.yaml")
 	for k := range local.Parameters {
 		if !strings.Contains(tmpl, k+":") {
 			t.Errorf("local-env.json sets %s, which the template does not declare: sam local would ignore it", k)
@@ -231,10 +231,8 @@ func TestIAMIsScopedToTablePrefix(t *testing.T) {
 			t.Errorf("statement %s uses Resource '*'", sid)
 		}
 	}
-	for s := range wildcardOK {
-		if s == "CreateEventSourceMapping" && !strings.Contains(statements[s], "Condition:") {
-			t.Errorf("statement %s has a wildcard resource without a Condition", s)
-		}
+	if !strings.Contains(statements["CreateEventSourceMapping"], "Condition:") {
+		t.Error("statement CreateEventSourceMapping has a wildcard resource without a Condition")
 	}
 	// Stream reads are needed by every stream consumer, and by nobody else.
 	res := resources(t, tmpl)
@@ -322,7 +320,7 @@ func TestPrivateApiAndSchedule(t *testing.T) {
 	}
 	apiFn := res["ApiFunction"]
 	for _, want := range []string{"Path: /\n", "Path: /{proxy+}", "Method: ANY", "TimeoutInMillis: !Ref ApiIntegrationTimeoutMillis"} {
-		if strings.Count(apiFn, want) == 0 {
+		if !strings.Contains(apiFn, want) {
 			t.Errorf("ApiFunction events lack %q", want)
 		}
 	}
@@ -447,8 +445,8 @@ func TestSamValidateLint(t *testing.T) {
 	}
 }
 
-// TestLocalComposeConfig checks the moved compose file still resolves (build
-// context ../.., dockerfile deploy/Dockerfile) with every profile.
+// TestLocalComposeConfig checks the compose file resolves (build context
+// ../.., dockerfile deploy/Dockerfile) with every profile.
 func TestLocalComposeConfig(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")

@@ -125,10 +125,3 @@ func (m *sessionManager) sweepLocked(now time.Time) {
 		}
 	}
 }
-
-// len reports the number of live sessions (tests).
-func (m *sessionManager) len() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.sessions)
-}

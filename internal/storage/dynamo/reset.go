@@ -58,7 +58,7 @@ const (
 )
 
 // resetLease is how long a reset owns the item without renewing it.
-var resetLease = 30 * time.Second
+const resetLease = 30 * time.Second
 
 var errResetLost = errors.New("reset lease lost")
 
@@ -145,15 +145,14 @@ func (s *storeImpl) casReset(ctx context.Context, physical string, prev resetIte
 		item[attrRCutSet] = attrBool(next.cutSet)
 		item[attrRPending] = attrN(itoa64(next.pending))
 	}
-	in := &dynamodb.PutItemInput{TableName: aws.String(s.markersTable()), Item: item,
-		ExpressionAttributeNames: map[string]string{"#p": attrPK}}
+	in := &dynamodb.PutItemInput{TableName: aws.String(s.markersTable()), Item: item}
 	if prev.exists {
 		in.ConditionExpression = aws.String("#v = :v")
-		in.ExpressionAttributeNames["#v"] = attrRVer
+		in.ExpressionAttributeNames = map[string]string{"#v": attrRVer}
 		in.ExpressionAttributeValues = map[string]types.AttributeValue{":v": attrN(itoa64(prev.ver))}
-		delete(in.ExpressionAttributeNames, "#p")
 	} else {
 		in.ConditionExpression = aws.String("attribute_not_exists(#p)")
+		in.ExpressionAttributeNames = map[string]string{"#p": attrPK}
 	}
 	err := withRetry(ctx, func() error {
 		_, err := s.ddb.PutItem(ctx, in)
@@ -343,10 +342,10 @@ func (s *storeImpl) runReset(ctx context.Context, l *layout, cur resetItem, catE
 
 // deleteCopy deletes every row (and set member) of this region's copy.
 func (s *storeImpl) deleteCopy(ctx context.Context, l *layout) error {
-	if err := s.deleteAll(ctx, l.physical, true, nil); err != nil {
+	if err := s.deleteAll(ctx, l.physical, true); err != nil {
 		return err
 	}
-	if err := s.deleteAll(ctx, membersTable(l.physical), true, nil); err != nil && !cherr.Is(err, cherr.UnknownTable) {
+	if err := s.deleteAll(ctx, membersTable(l.physical), true); err != nil && !cherr.Is(err, cherr.UnknownTable) {
 		return err
 	}
 	return nil
@@ -422,10 +421,10 @@ func (s *storeImpl) syncResetOnEnsure(ctx context.Context, l *layout) error {
 			if err != nil {
 				return err
 			}
-			if !ok {
-				continue
+			if ok {
+				return nil
 			}
-			return nil
+			continue
 		}
 		if catE > it.applied {
 			return s.reset(ctx, l, catE, ownsCopy(l.t), false)

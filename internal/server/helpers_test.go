@@ -13,7 +13,6 @@ import (
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec"
 	"github.com/gfronza/twinhouse/internal/format"
-	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // seenRequest is a copy of an exec.Request with Data read into memory.
@@ -151,35 +150,6 @@ func stringRows(name string, vals ...string) *exec.Result {
 		r.Rows = append(r.Rows, []any{v})
 	}
 	return r
-}
-
-func formatCanonical(name string) (string, bool) { return format.Canonical(name) }
-
-// parserReady reports whether sqlparse is implemented (it is developed in
-// parallel; tests that need it skip until then).
-func parserReady() bool {
-	_, err := sqlparse.Parse("SET a = 1")
-	return err == nil
-}
-
-// encodersReady reports whether TSV output works end to end.
-func encodersReady() bool {
-	var b strings.Builder
-	enc, err := format.NewEncoder("TabSeparated", &b, []format.Column{{Name: "x", Type: chtype.TString}}, format.Options{})
-	if err != nil {
-		return false
-	}
-	if enc.WriteRows([][]any{{"a"}}) != nil || enc.Finish(format.Stats{}) != nil {
-		return false
-	}
-	return b.String() == "a\n"
-}
-
-func requireEncoders(t *testing.T) {
-	t.Helper()
-	if !encodersReady() {
-		t.Skip("format/chtype encoders not implemented yet")
-	}
 }
 
 func httpTestServer(t *testing.T, h http.Handler) string {

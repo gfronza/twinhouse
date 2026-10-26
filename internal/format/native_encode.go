@@ -69,10 +69,8 @@ func (e *nativeEncoder) WriteRows(rows [][]any) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	for i, r := range rows {
-		if len(r) != len(e.cols) {
-			return cherr.New(cherr.LogicalError, "row %d has %d values, expected %d", i, len(r), len(e.cols))
-		}
+	if err := checkRowWidth(rows, len(e.cols)); err != nil {
+		return err
 	}
 	b := e.buf[:0]
 	if e.revision > 0 {
@@ -103,10 +101,8 @@ func (e *nativeEncoder) WriteRows(rows [][]any) error {
 	}
 	clear(vals)
 	e.buf = b[:0]
-	if _, err := e.w.Write(b); err != nil {
-		return err
-	}
-	return nil
+	_, err = e.w.Write(b)
+	return err
 }
 
 func (e *nativeEncoder) Finish(Stats) error { return nil }
@@ -511,12 +507,12 @@ func formatUUID(u *[16]byte) string {
 	return string(out[:])
 }
 
-// lcKey normalizes a canonical value into a comparable map key.
 type timeKey struct {
 	sec  int64
 	nsec int
 }
 
+// lcKey normalizes a canonical value into a comparable map key.
 func lcKey(v any) any {
 	switch x := v.(type) {
 	case time.Time:

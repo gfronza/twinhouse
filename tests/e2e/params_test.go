@@ -195,11 +195,7 @@ func TestParams(t *testing.T) {
 		wantCode(t, err, 456, "missing parameter")
 		ctx := clickhouse.Context(ctxT(t), clickhouse.WithParameters(clickhouse.Parameters{"n": "not-a-number"}))
 		_, err = nconn.Query(ctx, "SELECT {n:UInt64}")
-		if err == nil {
-			t.Errorf("bad UInt64 parameter accepted")
-		} else {
-			wantCode(t, err, 457, "bad parameter value")
-		}
+		wantCode(t, err, 457, "bad parameter value")
 		r := doHTTP(t, req{Params: url.Values{"query": {"SELECT {x:String}"}}, Method: "GET"})
 		if r.Status == 200 || r.Header.Get("X-ClickHouse-Exception-Code") != "456" {
 			t.Errorf("missing param over HTTP: %d %v %q", r.Status, r.Header.Get("X-ClickHouse-Exception-Code"), r.Body)

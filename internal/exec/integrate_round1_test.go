@@ -89,7 +89,7 @@ func TestApplyViewsKeepsCause(t *testing.T) {
 	te.exec(`CREATE MATERIALIZED VIEW m2 TO a AS SELECT k, count() AS n FROM s GROUP BY k`)
 	te.e.cfg.Store = failingMergeStore{te.spy}
 	_, err := te.run(`INSERT INTO s VALUES ('x')`)
-	if err == nil || !errors.Is(err, errMergeSentinel) {
+	if !errors.Is(err, errMergeSentinel) {
 		t.Fatalf("err = %v; want the Merge cause in its chain", err)
 	}
 	if !strings.Contains(err.Error(), "sentinel merge failure; ") {

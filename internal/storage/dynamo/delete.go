@@ -133,7 +133,6 @@ func (s *storeImpl) deleteAppend(ctx context.Context, l *layout, rows []storage.
 		}
 		g.rows = append(g.rows, r)
 	}
-	plan := &readPlan{l: l, consistent: true}
 	absent := absentMask(l, nil) // columns added by ALTER match any engine value
 	var keys []map[string]types.AttributeValue
 	for _, g := range groups {
@@ -148,7 +147,7 @@ func (s *storeImpl) deleteAppend(ctx context.Context, l *layout, rows []storage.
 				return ddbError(err, "cannot query DynamoDB table %s", l.physical)
 			}
 			for _, item := range out.Items {
-				got, err := s.decodeRow(ctx, plan.l, item, nil, absent)
+				got, err := s.decodeRow(ctx, l, item, nil, absent)
 				if err != nil {
 					return err
 				}

@@ -727,9 +727,9 @@ func (p *typeParser) parseMap(hasArgs bool) (Type, error) {
 		return Type{}, errArgs
 	}
 	p.next()
-	switch kb := k; {
-	case kb.Kind == Nullable, kb.Kind == LowCardinality && kb.Elem.Kind == Nullable,
-		kb.Kind == AggregateFunction, kb.Kind == SimpleAggregateFunction:
+	switch {
+	case k.Kind == Nullable, k.Kind == LowCardinality && k.Elem.Kind == Nullable,
+		k.Kind == AggregateFunction, k.Kind == SimpleAggregateFunction:
 		return Type{}, errf(cherr.BadArguments, "Map cannot have a key of type %s", k.String())
 	}
 	return Type{Kind: Map, Key: &k, Elem: &v}, nil

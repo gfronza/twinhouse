@@ -477,7 +477,7 @@ func TestJSONFormatException(t *testing.T) {
 		{"JSONStringsEachRow", "{\"exception\": \"" + text + "\"}\n"},
 	}
 	for _, tc := range cases {
-		canon, ok := formatCanonical(tc.format)
+		canon, ok := format.Canonical(tc.format)
 		if !ok {
 			t.Errorf("format %s unknown to the format package", tc.format)
 			continue
@@ -511,7 +511,7 @@ func TestSessions(t *testing.T) {
 		}
 		return &exec.Result{}, nil
 	}}
-	s, ts := newTestServer(t, fe, func(c *Config) {
+	_, ts := newTestServer(t, fe, func(c *Config) {
 		c.Now = clock
 		c.Users = map[string]string{"default": "", "u2": ""}
 	})
@@ -577,7 +577,6 @@ func TestSessions(t *testing.T) {
 	if r := post(t, ts.URL+"/?session_id=s6&session_check=1", "SELECT 1"); r.Header.Get("X-ClickHouse-Exception-Code") != "372" {
 		t.Errorf("session with timeout 0 survived")
 	}
-	_ = s
 }
 
 func TestSessionLocked(t *testing.T) {
@@ -616,9 +615,6 @@ func TestSessionSet(t *testing.T) {
 	}
 	post(t, ts.URL+"/?session_id=st&neg=5", "SELECT 1")
 	got := fe.last(t).Settings
-	if !parserReady() {
-		t.Skip("sqlparse not implemented yet")
-	}
 	if got["max_threads"] != "3" || got["my_s"] != "abc" || got["neg"] != "5" {
 		t.Errorf("session settings %v", got)
 	}
@@ -703,7 +699,6 @@ func TestRejectSessions(t *testing.T) {
 
 	// Everything else is unaffected: queries, settings, database, query_id,
 	// and a session-less USE (no lasting effect, as without sessions).
-	requireEncoders(t)
 	r := post(t, ts.URL+"/?query_id=q1&max_block_size=10&database=default", "SELECT 1")
 	if r.Status != 200 || r.Body != "1\n" || r.Header.Get("X-ClickHouse-Query-Id") != "q1" {
 		t.Errorf("plain query: %d %q %v", r.Status, r.Body, r.Header)

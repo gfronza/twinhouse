@@ -110,7 +110,7 @@ type queryCatalog struct {
 
 func retryLookup[T any](c *queryCatalog, lookup func() (T, error)) (T, error) {
 	v, err := lookup()
-	if err == nil || !isMiss(err) || c.f == nil {
+	if err == nil || !isMiss(err) {
 		return v, err
 	}
 	if rerr := c.f.refreshSince(c.ctx, c.since); rerr != nil {
@@ -151,9 +151,6 @@ func (c *queryCatalog) View(db, name string) (*catalog.View, error) {
 // and returns the table's current entry; used when a statement finds the
 // snapshot's entry stale (e.g. a column added by ALTER on another server).
 func (c *queryCatalog) refreshTable(db, name string) (*catalog.Table, error) {
-	if c.f == nil {
-		return nil, cherr.New(cherr.LogicalError, "catalog reload unavailable")
-	}
 	if err := c.f.refreshSince(c.ctx, c.since); err != nil {
 		return nil, err
 	}

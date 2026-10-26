@@ -36,7 +36,8 @@ import (
 // engineImpl holds engine-wide state.
 type engineImpl struct {
 	started time.Time
-	// viewPlans caches parsed materialized-view SELECTs by view DDL.
+	// viewStmts caches parsed materialized-view SELECTs by view name and
+	// SELECT text.
 	viewMu    sync.Mutex
 	viewStmts map[string]*sqlparse.SelectStmt
 	// fresh reloads the catalog snapshot on lookup misses.

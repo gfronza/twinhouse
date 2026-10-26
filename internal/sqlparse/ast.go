@@ -1,8 +1,6 @@
 // Package sqlparse parses the ClickHouse SQL dialect subset supported by
-// twinhouse into an AST.
-//
-// AST CONTRACT: the node types below are shared by the parser and the query
-// engine. Extend additively; do not rename or change field meanings.
+// twinhouse into an AST. The node types are shared by the parser and the
+// query engine.
 package sqlparse
 
 // Node is any AST node.
@@ -36,9 +34,9 @@ type SelectStmt struct {
 	Distinct bool
 	Columns  []SelectItem
 	From     *TableExpr // nil for SELECT without FROM
-	// ArrayJoin is `[LEFT] ARRAY JOIN expr [AS alias], ...` (optional support).
+	// ArrayJoin is `[LEFT] ARRAY JOIN expr [AS alias], ...`.
 	ArrayJoin *ArrayJoinClause
-	Joins     []JoinClause // optional support; engine may return NOT_IMPLEMENTED
+	Joins     []JoinClause // the engine rejects some join kinds with NOT_IMPLEMENTED
 	Prewhere  Expr
 	Where     Expr
 	GroupBy   []Expr
@@ -47,7 +45,7 @@ type SelectStmt struct {
 	WithTotals bool
 	Having     Expr
 	OrderBy    []OrderItem
-	// LimitBy is `LIMIT n BY expr, ...` (optional support).
+	// LimitBy is `LIMIT n BY expr, ...`.
 	LimitBy  *LimitByClause
 	Limit    Expr // nil if absent
 	Offset   Expr // nil if absent

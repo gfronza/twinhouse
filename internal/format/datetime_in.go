@@ -154,16 +154,10 @@ func bestEffortNumeric(s string, loc *time.Location, dt64 bool) (time.Time, bool
 	case 14:
 		return civilTime(atoi(0, 4), atoi(4, 6), atoi(6, 8), atoi(8, 10), atoi(10, 12), atoi(12, 14), 0, loc)
 	case 9, 10:
-		sec, err := strconv.ParseInt(whole, 10, 64)
-		if err != nil {
-			return time.Time{}, false
-		}
+		sec, _ := strconv.ParseInt(whole, 10, 64)
 		return time.Unix(sec, fracNanos(frac)).UTC(), true
 	case 13:
-		ms, err := strconv.ParseInt(whole, 10, 64)
-		if err != nil {
-			return time.Time{}, false
-		}
+		ms, _ := strconv.ParseInt(whole, 10, 64)
 		return time.UnixMilli(ms).UTC(), true
 	}
 	return time.Time{}, false
@@ -291,7 +285,6 @@ func bestEffortISO(s string, loc *time.Location, us bool) (time.Time, bool) {
 		p.spaces()
 	}
 	if c := p.peek(); c >= '0' && c <= '9' {
-		start := p.i
 		v, k := p.digits(6)
 		switch {
 		case p.peek() == ':' && (k == 1 || k == 2):
@@ -311,7 +304,6 @@ func bestEffortISO(s string, loc *time.Location, us bool) (time.Time, bool) {
 		case hasT && k == 4:
 			h, mi = v/100, v%100
 		default:
-			p.i = start
 			return time.Time{}, false
 		}
 		if p.eat('.') || p.eat(',') {

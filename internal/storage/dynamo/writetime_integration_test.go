@@ -90,7 +90,7 @@ func TestIntegrationTruncateBacklogNotReapplied(t *testing.T) {
 		t.Fatalf("inline: %s", got)
 	}
 
-	// (a) TRUNCATE + rebuild (INSERT INTO roll SELECT ...), then the worker
+	// TRUNCATE + rebuild (INSERT INTO roll SELECT ...), then the worker
 	// catches up with the backlog.
 	if err := e.store.TruncateTable(e.ctx, roll); err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestIntegrationTruncateBacklogNotReapplied(t *testing.T) {
 	if got := sumsOf(t, e, roll); got != "[a 2] [b 1]" {
 		t.Fatalf("backlog after TRUNCATE + rebuild double counted: %s", got)
 	}
-	// (c) TRUNCATE without rebuild: the backlog does not resurrect rows.
+	// TRUNCATE without rebuild: the backlog does not resurrect rows.
 	if err := e.store.TruncateTable(e.ctx, bare); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestIntegrationTruncateBacklogNotReapplied(t *testing.T) {
 		t.Fatalf("POPULATE after TRUNCATE: %s", got)
 	}
 
-	// (a') DROP + CREATE + rebuild, then the backlog — also through a
+	// DROP + CREATE + rebuild, then the backlog — also through a
 	// caller whose catalog snapshot still has the dropped table.
 	old := roll
 	if err := e.store.DropTable(e.ctx, roll); err != nil {

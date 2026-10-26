@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,7 +30,6 @@ func TestClientHandshakeSQL(t *testing.T) {
 	db := newDB(t, "hs_sql")
 	mustExec(t, db, "CREATE TABLE ev (tenant_id String, n UInt64, ts DateTime) ENGINE = MergeTree ORDER BY (tenant_id, ts)")
 	for _, cv := range compressionVariants {
-		cv := cv
 		t.Run(cv.name, func(t *testing.T) {
 			t.Parallel()
 			conn := openSQL(t, db, func(o *clickhouse.Options) { o.Compression = cv.comp })
@@ -113,7 +111,6 @@ func TestClientHandshakeSQL(t *testing.T) {
 func TestClientHandshakeNative(t *testing.T) {
 	t.Parallel()
 	for _, cv := range compressionVariants {
-		cv := cv
 		t.Run(cv.name, func(t *testing.T) {
 			t.Parallel()
 			conn := openNative(t, "default", func(o *clickhouse.Options) { o.Compression = cv.comp })
@@ -290,8 +287,4 @@ func TestClientStructsAndIdioms(t *testing.T) {
 	// Exception details through the native API.
 	err = conn.Exec(ctx, "SELECT sum(count()) FROM numbers(1)")
 	wantCode(t, err, 184, "nested aggregate")
-	var ex *clickhouse.Exception
-	if errors.As(err, &ex) && ex.Name != "" && ex.Name != "DB::Exception" {
-		t.Logf("exception name %q", ex.Name)
-	}
 }

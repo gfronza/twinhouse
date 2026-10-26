@@ -90,7 +90,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 			('globex', '2024-05-02 00:00:00', 'g1', 7, 1e100, ['x'], '', true, {'a':2,'b':3}, '1970-01-01 00:00:00.001')`, reqOpts{db: db})
 	}
 
-	withDB := func(t *testing.T, tg *target, comp *clickhouse.Compression, fn func(*sql.DB) []string) []string {
+	withDB := func(tg *target, comp *clickhouse.Compression, fn func(*sql.DB) []string) []string {
 		conn := clickhouse.OpenDB(openOpts(tg, db, comp))
 		defer conn.Close()
 		if err := conn.PingContext(ctx); err != nil {
@@ -101,7 +101,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 
 	t.Run("scan_types", func(t *testing.T) {
 		diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-			return withDB(t, tg, nil, func(c *sql.DB) []string {
+			return withDB(tg, nil, func(c *sql.DB) []string {
 				rows, err := c.QueryContext(ctx, "SELECT tenant_id, event_time, event_id, n, f, tags, note, ok, attrs, t3 FROM ev ORDER BY tenant_id, event_time")
 				if err != nil {
 					return []string{errString(err)}
@@ -137,7 +137,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 
 	t.Run("positional_bind", func(t *testing.T) {
 		diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-			return withDB(t, tg, nil, func(c *sql.DB) []string {
+			return withDB(tg, nil, func(c *sql.DB) []string {
 				var out []string
 				rows, err := c.QueryContext(ctx, "SELECT event_id, n FROM ev WHERE tenant_id = ? AND event_time >= ? AND n > ? ORDER BY event_id",
 					"acme", time.Date(2024, 5, 1, 10, 0, 0, 0, time.UTC), 0)
@@ -169,7 +169,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 
 	t.Run("named_bind", func(t *testing.T) {
 		diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-			return withDB(t, tg, nil, func(c *sql.DB) []string {
+			return withDB(tg, nil, func(c *sql.DB) []string {
 				var id string
 				var at time.Time
 				err := c.QueryRowContext(ctx, "SELECT event_id, event_time FROM ev WHERE tenant_id = @tenant AND event_id = @id",
@@ -185,7 +185,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 
 	t.Run("server_side_params", func(t *testing.T) {
 		diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-			return withDB(t, tg, nil, func(c *sql.DB) []string {
+			return withDB(tg, nil, func(c *sql.DB) []string {
 				pctx := clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
 					"keys": "[('acme','e1'),('globex','g1'),('acme','nope')]",
 					"from": "2024-05-01 00:00:00",
@@ -211,7 +211,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 
 	t.Run("exec_insert_and_ddl", func(t *testing.T) {
 		diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-			return withDB(t, tg, nil, func(c *sql.DB) []string {
+			return withDB(tg, nil, func(c *sql.DB) []string {
 				var out []string
 				_, err := c.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS kv (k String, v UInt64, ver UInt64) ENGINE = ReplacingMergeTree(ver) ORDER BY k")
 				out = append(out, "create "+errString(err))
@@ -230,7 +230,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 
 	t.Run("transaction_batch_insert", func(t *testing.T) {
 		diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-			return withDB(t, tg, nil, func(c *sql.DB) []string {
+			return withDB(tg, nil, func(c *sql.DB) []string {
 				var out []string
 				_, err := c.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS sqlbatch (id UInt32, s String, t DateTime, arr Array(UInt8), n Nullable(Int64)) ENGINE = MergeTree ORDER BY id")
 				out = append(out, "create "+errString(err))
@@ -274,7 +274,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 
 	t.Run("exceptions", func(t *testing.T) {
 		diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-			return withDB(t, tg, nil, func(c *sql.DB) []string {
+			return withDB(tg, nil, func(c *sql.DB) []string {
 				var out []string
 				for _, q := range []string{
 					"SELECT * FROM no_such_table",
@@ -311,7 +311,7 @@ func TestClientDatabaseSQL(t *testing.T) {
 	} {
 		t.Run("compression_"+comp.name, func(t *testing.T) {
 			diffBoth(t, ref, our, func(t *testing.T, tg *target) []string {
-				return withDB(t, tg, comp.c, func(c *sql.DB) []string {
+				return withDB(tg, comp.c, func(c *sql.DB) []string {
 					var out []string
 					rows, err := c.QueryContext(ctx, "SELECT number, toString(number), [number] FROM numbers(2000) ORDER BY number")
 					if err != nil {

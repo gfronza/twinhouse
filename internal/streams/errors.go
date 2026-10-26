@@ -26,10 +26,5 @@ func isTableNotFound(err error) bool { return hasCode(err, "ResourceNotFoundExce
 func isStreamNotFound(err error) bool { return hasCode(err, "ResourceNotFoundException") }
 
 // IsConditionFailed reports whether err is a DynamoDB conditional-check
-// failure (including a transaction cancelled only for that reason).
-func IsConditionFailed(err error) bool { return isConditionFailed(err) }
-
-func isConditionFailed(err error) bool { return hasCode(err, "ConditionalCheckFailedException") }
-
-// IsNotFound reports whether err is a DynamoDB / Streams ResourceNotFoundException.
-func IsNotFound(err error) bool { return hasCode(err, "ResourceNotFoundException") }
+// failure (ConditionalCheckFailedException).
+func IsConditionFailed(err error) bool { return hasCode(err, "ConditionalCheckFailedException") }

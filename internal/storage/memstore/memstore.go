@@ -215,7 +215,7 @@ func (s *Store) Insert(ctx context.Context, t *catalog.Table, rows []storage.Row
 		switch {
 		case isMerging(t.Engine):
 			// Direct inserts merge with a fresh source ref: not idempotent.
-			if _, err := s.mergeOne(ctx, t, tb, row, pk, sk, storage.SourceRef{View: "", RowID: rid}, 0); err != nil {
+			if err := s.mergeOne(ctx, t, tb, row, pk, sk, storage.SourceRef{View: "", RowID: rid}, 0); err != nil {
 				return nil, err
 			}
 		case t.Engine == catalog.EngineReplacingMergeTree:
@@ -279,7 +279,7 @@ func (s *Store) Merge(ctx context.Context, t *catalog.Table, rows []storage.Merg
 		}
 		switch {
 		case isMerging(t.Engine):
-			if _, err := s.mergeOne(ctx, t, tb, mr.Row, pk, sk, mr.Source, mr.Index); err != nil {
+			if err := s.mergeOne(ctx, t, tb, mr.Row, pk, sk, mr.Source, mr.Index); err != nil {
 				return err
 			}
 		case t.Engine == catalog.EngineReplacingMergeTree:
@@ -304,12 +304,12 @@ func derivedID(src storage.SourceRef, index int) string {
 }
 
 // mergeOne merges row into the keyed item exactly once per
-// (source, table, key, index). It reports whether the merge was applied.
-func (s *Store) mergeOne(ctx context.Context, t *catalog.Table, tb *table, row storage.Row, pk, sk []any, src storage.SourceRef, index int) (bool, error) {
+// (source, table, key, index).
+func (s *Store) mergeOne(ctx context.Context, t *catalog.Table, tb *table, row storage.Row, pk, sk []any, src storage.SourceRef, index int) error {
 	key := encodeKey(pk, sk)
 	marker := strings.Join([]string{src.View, src.RowID, physical(t), key, strconv.Itoa(index)}, "\x00")
 	if _, done := s.markers[marker]; done {
-		return false, nil
+		return nil
 	}
 	it, ok := tb.items[key]
 	fresh := !ok
@@ -352,10 +352,10 @@ func (s *Store) mergeOne(ctx context.Context, t *catalog.Table, tb *table, row s
 				continue
 			}
 			if !ok {
-				return false, cherr.New(cherr.TypeMismatch, "column %s of type %s expects an aggregate state, got %T", c.Name, c.TypeText, v)
+				return cherr.New(cherr.TypeMismatch, "column %s of type %s expects an aggregate state, got %T", c.Name, c.TypeText, v)
 			}
 			if p.Func != aggstate.StateBase(c.Type.AggFunc) {
-				return false, cherr.New(cherr.TypeMismatch, "cannot merge state of %s into column %s of type %s", p.Func, c.Name, c.TypeText)
+				return cherr.New(cherr.TypeMismatch, "cannot merge state of %s into column %s of type %s", p.Func, c.Name, c.TypeText)
 			}
 			var cur *chtype.AggPartial
 			if had && old != nil {
@@ -366,17 +366,17 @@ func (s *Store) mergeOne(ctx context.Context, t *catalog.Table, tb *table, row s
 			if aggstate.IsSetFunc(p.Func) {
 				m, err := aggstate.Members(ctx, p)
 				if err != nil {
-					return false, err
+					return err
 				}
 				adds = append(adds, memberAdd{c.Name, m})
 			} else if err := aggstate.Merge(ctx, cur, p); err != nil {
-				return false, err
+				return err
 			}
 			newVals[c.Name] = cur
 		case c.Type.Kind == chtype.SimpleAggregateFunction:
 			nv, err := mergeSimple(c.Type, old, had, v)
 			if err != nil {
-				return false, err
+				return err
 			}
 			newVals[c.Name] = nv
 		case t.Engine == catalog.EngineSummingMergeTree && summed(t, c, isKey):
@@ -406,7 +406,7 @@ func (s *Store) mergeOne(ctx context.Context, t *catalog.Table, tb *table, row s
 		tb.items[key] = it
 	}
 	s.markers[marker] = struct{}{}
-	return true, nil
+	return nil
 }
 
 func summed(t *catalog.Table, c *catalog.Column, isKey map[string]bool) bool {

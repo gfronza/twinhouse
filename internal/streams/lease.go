@@ -97,7 +97,7 @@ func (d *dynamoLeases) acquire(ctx context.Context, key, owner string, ttl time.
 	})
 	cancel()
 	if err != nil {
-		if isConditionFailed(err) {
+		if IsConditionFailed(err) {
 			cp, _, gerr := d.get(ctx, key)
 			return cp, false, gerr
 		}
@@ -119,7 +119,7 @@ func (d *dynamoLeases) owned(ctx context.Context, key, owner, update string, nam
 		ExpressionAttributeValues: values,
 	})
 	cancel()
-	if isConditionFailed(err) {
+	if IsConditionFailed(err) {
 		return ErrLeaseLost
 	}
 	return err

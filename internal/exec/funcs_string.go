@@ -417,7 +417,7 @@ func buildSplitByChar(c *compiler, name string, args []*expr) (*expr, error) {
 	if sep, _ := args[0].val.(string); len(sep) != 1 {
 		return nil, cherr.New(cherr.BadArguments, "Illegal separator for function %s. Must be exactly one byte", name)
 	}
-	return splitBuilder(c, name, args)
+	return splitStrings(args), nil
 }
 
 func buildSplitByString(c *compiler, name string, args []*expr) (*expr, error) {
@@ -427,10 +427,10 @@ func buildSplitByString(c *compiler, name string, args []*expr) (*expr, error) {
 	if err := requireString(name, args, 0, 1); err != nil {
 		return nil, err
 	}
-	return splitBuilder(c, name, args)
+	return splitStrings(args), nil
 }
 
-func splitBuilder(c *compiler, name string, args []*expr) (*expr, error) {
+func splitStrings(args []*expr) *expr {
 	return strict(args[:2], chtype.NewArray(chtype.TString), func(v []any) (any, error) {
 		sep, s := v[0].(string), v[1].(string)
 		var parts []string
@@ -446,7 +446,7 @@ func splitBuilder(c *compiler, name string, args []*expr) (*expr, error) {
 			out[i] = p
 		}
 		return out, nil
-	}), nil
+	})
 }
 
 // trimBuilder implements trimBoth/trimLeft/trimRight(s[, chars]); the

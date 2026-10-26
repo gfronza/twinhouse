@@ -457,13 +457,11 @@ func (p *pipe) apply(ctx context.Context, rec Record, received time.Time) error 
 		case EventInsert, EventModify:
 			// Only images this pipe will write are delayed (by their write
 			// time); replicas from elsewhere are skipped right away.
-			if origin, ok := stringAttr(rec.NewImage, attrOrigin); ok && origin == p.from.Name {
-				if ts, ok := numberAttr(rec.NewImage, attrTS); ok {
-					if nanos, err := strconv.ParseInt(ts, 10, 64); err == nil {
-						if err := p.wait(ctx, time.Unix(0, nanos).Add(p.r.cfg.Delay)); err != nil {
-							return err
-						}
-					}
+			origin, _ := stringAttr(rec.NewImage, attrOrigin)
+			ts, _ := numberAttr(rec.NewImage, attrTS)
+			if nanos, err := strconv.ParseInt(ts, 10, 64); origin == p.from.Name && err == nil {
+				if err := p.wait(ctx, time.Unix(0, nanos).Add(p.r.cfg.Delay)); err != nil {
+					return err
 				}
 			}
 		case EventRemove:
@@ -523,9 +521,6 @@ func sameRow(err error, item map[string]ddbtypes.AttributeValue) bool {
 
 // wait sleeps until t (artificial lag).
 func (p *pipe) wait(ctx context.Context, t time.Time) error {
-	if p.r.cfg.Delay <= 0 {
-		return nil
-	}
 	d := time.Until(t)
 	if d <= 0 {
 		return nil

@@ -69,7 +69,7 @@ func TestDropDeferredIsSuccess(t *testing.T) {
 	}
 
 	ds.dropErr = errors.New("AccessDeniedException")
-	if _, err := te.run("DROP TABLE t"); err == nil || !errors.Is(err, ds.dropErr) {
+	if _, err := te.run("DROP TABLE t"); !errors.Is(err, ds.dropErr) {
 		t.Fatalf("a real store error must surface, got %v", err)
 	}
 }

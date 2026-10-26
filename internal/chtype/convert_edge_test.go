@@ -2,20 +2,11 @@ package chtype
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
 )
-
-func errCode(err error) int {
-	var ce *cherr.Error
-	if errors.As(err, &ce) {
-		return ce.Code
-	}
-	return -1
-}
 
 // TestCastCompositeCodes checks error codes and results of casts involving
 // Array/Tuple/Map against ClickHouse 25.8 (want "" means an error with code).
@@ -104,7 +95,7 @@ func TestCastCompositeCodes(t *testing.T) {
 			}
 			got, err := Convert(v, from, to)
 			if c.code != 0 {
-				if code := errCode(err); code != c.code {
+				if code := errCodeOf(err); code != c.code {
 					t.Fatalf("got code %d (err %v, value %v), want %d", code, err, got, c.code)
 				}
 				return
@@ -136,21 +127,21 @@ func TestCastTrailingDataMessage(t *testing.T) {
 	}
 	// Input-format parsing keeps CANNOT_PARSE_DATETIME, as a plain *cherr.Error.
 	_, err = ParseText(MustParse("DateTime"), "2024-01-05T10:20:30Z")
-	if _, ok := err.(*cherr.Error); !ok || errCode(err) != cherr.CannotParseDateTime {
+	if _, ok := err.(*cherr.Error); !ok || errCodeOf(err) != cherr.CannotParseDateTime {
 		t.Fatalf("ParseText: got %T %v, want *cherr.Error code 41", err, err)
 	}
 	// JSON input (Normalize): CANNOT_PARSE_INPUT_ASSERTION_FAILED like
 	// ClickHouse's JSONEachRow.
 	for _, c := range [][2]string{{"DateTime", "2024-01-05T10:20:30Z"}, {"Date", "2024-01-05x"}, {"DateTime64(3)", "2024-01-05 10:20:30.5x"}} {
 		_, err = Normalize(MustParse(c[0]), c[1])
-		if _, ok := err.(*cherr.Error); !ok || errCode(err) != 27 {
+		if _, ok := err.(*cherr.Error); !ok || errCodeOf(err) != 27 {
 			t.Fatalf("Normalize(%s, %q): got %T %v, want *cherr.Error code 27", c[0], c[1], err, err)
 		}
 	}
-	if _, err = Normalize(MustParse("DateTime"), "garbage"); errCode(err) != cherr.CannotParseDateTime {
+	if _, err = Normalize(MustParse("DateTime"), "garbage"); errCodeOf(err) != cherr.CannotParseDateTime {
 		t.Fatalf("Normalize(DateTime, garbage): got %v, want code 41", err)
 	}
-	if _, err = Normalize(MustParse("UInt64"), "not a number"); errCode(err) != 27 {
+	if _, err = Normalize(MustParse("UInt64"), "not a number"); errCodeOf(err) != 27 {
 		t.Fatalf("Normalize(UInt64, 'not a number'): got %v, want code 27", err)
 	}
 }
@@ -158,8 +149,8 @@ func TestCastTrailingDataMessage(t *testing.T) {
 func TestZeroDate32(t *testing.T) {
 	// SELECT defaultValueOfTypeName('Date32') -> 1900-01-01
 	want := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
-	if z, ok := Zero(TDate32()).(time.Time); !ok || !z.Equal(want) {
-		t.Fatalf("Zero(Date32) = %v, want %v", Zero(TDate32()), want)
+	if z, ok := Zero(Type{Kind: Date32}).(time.Time); !ok || !z.Equal(want) {
+		t.Fatalf("Zero(Date32) = %v, want %v", Zero(Type{Kind: Date32}), want)
 	}
 	if z := Zero(MustParse("Tuple(Date32, LowCardinality(String))")).([]any); !z[0].(time.Time).Equal(want) {
 		t.Fatalf("Zero(Tuple(Date32,...)) = %v", z)
@@ -168,8 +159,6 @@ func TestZeroDate32(t *testing.T) {
 		t.Fatalf("Zero(Date) = %v", z)
 	}
 }
-
-func TDate32() Type { return Type{Kind: Date32} }
 
 func TestParseNothingComposites(t *testing.T) {
 	// toTypeName(map()) / toTypeName([]) in ClickHouse.
@@ -182,7 +171,7 @@ func TestParseNothingComposites(t *testing.T) {
 			t.Fatalf("Parse(%q).String() = %q", s, ty.String())
 		}
 	}
-	if _, err := Parse("Map(Nullable(String), UInt8)"); errCode(err) != cherr.BadArguments {
+	if _, err := Parse("Map(Nullable(String), UInt8)"); errCodeOf(err) != cherr.BadArguments {
 		t.Fatalf("Map(Nullable(String), UInt8): got %v, want code 36", err)
 	}
 	v, err := Convert([]any{}, MustParse("Map(Nothing, Nothing)"), MustParse("Map(String, UInt8)"))
@@ -226,7 +215,7 @@ func TestNormalizeJSONIntegers(t *testing.T) {
 		ty := MustParse(c.typ)
 		got, err := Normalize(ty, c.in)
 		if c.code != 0 {
-			if code := errCode(err); code != c.code {
+			if code := errCodeOf(err); code != c.code {
 				t.Errorf("Normalize(%s, %v): got code %d (%v, %v), want %d", c.typ, c.in, code, got, err, c.code)
 			}
 			continue
@@ -281,12 +270,12 @@ func TestDateTimeSaturation(t *testing.T) {
 		}
 	}
 	// Overflowing digits: CANNOT_PARSE_NUMBER like ClickHouse.
-	if _, err := Convert("99999999999999999999", TString, MustParse("DateTime")); errCode(err) != 72 {
+	if _, err := Convert("99999999999999999999", TString, MustParse("DateTime")); errCodeOf(err) != 72 {
 		t.Errorf("CAST('99999999999999999999' AS DateTime): got %v, want code 72", err)
 	}
 	// Beyond the representable DateTime64 range (int64 nanoseconds) stays an
 	// error; ClickHouse would saturate at 2299-12-31.
-	if _, err := Convert("2300-01-01 00:00:00", TString, MustParse("DateTime64(3)")); errCode(err) != 407 {
+	if _, err := Convert("2300-01-01 00:00:00", TString, MustParse("DateTime64(3)")); errCodeOf(err) != 407 {
 		t.Errorf("CAST('2300-01-01' AS DateTime64(3)): got %v, want code 407", err)
 	}
 
@@ -325,10 +314,10 @@ func TestDateTimeSaturation(t *testing.T) {
 	// Input formats and parameters: DateTime overflow is still rejected (69),
 	// DateTime64 text below 1900 is clamped like ClickHouse.
 	for _, s := range []string{"2200-01-01 00:00:00", "5000000000"} {
-		if _, err := ParseText(MustParse("DateTime"), s); errCode(err) != 69 {
+		if _, err := ParseText(MustParse("DateTime"), s); errCodeOf(err) != 69 {
 			t.Errorf("ParseText(DateTime, %q): got %v, want code 69", s, err)
 		}
-		if _, err := Normalize(MustParse("DateTime"), s); errCode(err) != 69 {
+		if _, err := Normalize(MustParse("DateTime"), s); errCodeOf(err) != 69 {
 			t.Errorf("Normalize(DateTime, %q): got %v, want code 69", s, err)
 		}
 	}

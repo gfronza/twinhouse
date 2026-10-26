@@ -609,13 +609,7 @@ func converter(from, to chtype.Type) (func(any) (any, error), error) {
 			return nil, cherr.New(cherr.CannotConvertType, "Cannot convert %s to %s", from.String(), to.String())
 		}, nil
 	}
-	return func(v any) (any, error) {
-		out, err := chtype.Convert(v, fu, tu)
-		if err != nil {
-			return nil, err
-		}
-		return out, nil
-	}, nil
+	return func(v any) (any, error) { return chtype.Convert(v, fu, tu) }, nil
 }
 
 // scalarSubquery evaluates an uncorrelated subquery once at plan time.

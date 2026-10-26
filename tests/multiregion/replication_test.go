@@ -57,14 +57,13 @@ func TestWriteOneRegionReadOther(t *testing.T) {
 	}
 	// JSON carries timing statistics; compare its data section.
 	q := strings.TrimSuffix(rollupQuery(db), " FORMAT TabSeparated") + " FORMAT JSON"
-	if a, b := jsonData(t, u.mustQuery(t, q, nil)), jsonData(t, e.mustQuery(t, q, nil)); a != b {
+	if a, b := jsonData(u.mustQuery(t, q, nil)), jsonData(e.mustQuery(t, q, nil)); a != b {
 		t.Errorf("FORMAT JSON data differs between regions:\nus: %.300s\neu: %.300s", a, b)
 	}
 }
 
 // jsonData returns the "meta"+"data"+"rows" part of FORMAT JSON output.
-func jsonData(t testing.TB, out string) string {
-	t.Helper()
+func jsonData(out string) string {
 	i := strings.Index(out, `"statistics"`)
 	if i < 0 {
 		i = len(out)

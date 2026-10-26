@@ -6,7 +6,6 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -34,7 +33,7 @@ func chColumnName(t *testing.T, base, from, expr string) (string, bool) {
 	t.Helper()
 	q := "SELECT " + expr + " FROM " + from + " LIMIT 0 FORMAT JSONCompact"
 	client := http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(base+"/?"+url.Values{}.Encode(), "text/plain", strings.NewReader(q))
+	resp, err := client.Post(base+"/", "text/plain", strings.NewReader(q))
 	if err != nil {
 		t.Fatalf("clickhouse: %v", err)
 	}

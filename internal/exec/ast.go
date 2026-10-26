@@ -219,7 +219,7 @@ func (a *aliasExpander) expandAs(name string, e sqlparse.Expr) sqlparse.Expr {
 	return r
 }
 
-// collectAliases records `expr AS name` occurrences nested in e.
+// collect records `expr AS name` occurrences nested in e.
 func (a *aliasExpander) collect(e sqlparse.Expr) {
 	walk(e, func(n sqlparse.Expr) bool {
 		if x, ok := n.(*sqlparse.AliasExpr); ok {

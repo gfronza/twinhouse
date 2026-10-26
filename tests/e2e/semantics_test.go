@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,6 @@ func TestSQLSemantics(t *testing.T) {
 	}
 	conn := openNative(t, db)
 	for _, c := range semCases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := post(t, db, c.query)
@@ -39,7 +39,7 @@ func TestSQLSemantics(t *testing.T) {
 			for rows.Next() {
 				vals := make([]any, len(cols))
 				for i := range vals {
-					vals[i] = newScanDest(cols[i].ScanType())
+					vals[i] = reflect.New(cols[i].ScanType()).Interface()
 				}
 				if err := rows.Scan(vals...); err != nil {
 					t.Fatalf("clickhouse-go scan: %v", err)

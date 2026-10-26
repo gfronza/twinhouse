@@ -24,35 +24,34 @@ var chgoUnsupported = map[string]bool{"nested_tuple": true}
 // TestNativeClickHouseGoDecode decodes our Native output with clickhouse-go's
 // own block decoder, as its HTTP transport does for SELECT results.
 func TestNativeClickHouseGoDecode(t *testing.T) {
+	const rev = chGoRevision
 	for _, c := range nativeCases() {
-		for _, rev := range []uint64{chGoRevision} {
-			t.Run(fmt.Sprintf("%s/rev%d", c.name, rev), func(t *testing.T) {
-				if chgoUnsupported[c.name] {
-					t.Skip("clickhouse-go cannot materialise this type generically")
+		t.Run(fmt.Sprintf("%s/rev%d", c.name, rev), func(t *testing.T) {
+			if chgoUnsupported[c.name] {
+				t.Skip("clickhouse-go cannot materialise this type generically")
+			}
+			data := encodeNative(t, c.cols, c.rows, rev)
+			block := proto.Block{ServerContext: &column.ServerContext{Revision: rev, Timezone: time.UTC}}
+			r := chproto.NewReader(bytes.NewReader(data))
+			if err := block.Decode(r, rev); err != nil {
+				t.Fatalf("clickhouse-go decode: %v", err)
+			}
+			if block.Rows() != len(c.rows) || len(block.Columns) != len(c.cols) {
+				t.Fatalf("decoded %d rows x %d cols, want %d x %d", block.Rows(), len(block.Columns), len(c.rows), len(c.cols))
+			}
+			for ci, col := range block.Columns {
+				if col.Name() != c.cols[ci].Name || string(col.Type()) != c.cols[ci].Type.String() {
+					t.Fatalf("column %d is %s %s, want %s %s", ci, col.Name(), col.Type(), c.cols[ci].Name, c.cols[ci].Type.String())
 				}
-				data := encodeNative(t, c.cols, c.rows, rev)
-				block := proto.Block{ServerContext: &column.ServerContext{Revision: rev, Timezone: time.UTC}}
-				r := chproto.NewReader(bytes.NewReader(data))
-				if err := block.Decode(r, rev); err != nil {
-					t.Fatalf("clickhouse-go decode: %v", err)
-				}
-				if block.Rows() != len(c.rows) || len(block.Columns) != len(c.cols) {
-					t.Fatalf("decoded %d rows x %d cols, want %d x %d", block.Rows(), len(block.Columns), len(c.rows), len(c.cols))
-				}
-				for ci, col := range block.Columns {
-					if col.Name() != c.cols[ci].Name || string(col.Type()) != c.cols[ci].Type.String() {
-						t.Fatalf("column %d is %s %s, want %s %s", ci, col.Name(), col.Type(), c.cols[ci].Name, c.cols[ci].Type.String())
-					}
-					for ri := range c.rows {
-						got := fromChGo(c.cols[ci].Type, col.Row(ri, false))
-						want := sortMaps(c.cols[ci].Type, c.rows[ri][ci])
-						if !valuesEqual(got, want) {
-							t.Fatalf("column %s row %d: got %#v, want %#v", col.Name(), ri, got, want)
-						}
+				for ri := range c.rows {
+					got := fromChGo(c.cols[ci].Type, col.Row(ri, false))
+					want := sortMaps(c.cols[ci].Type, c.rows[ri][ci])
+					if !valuesEqual(got, want) {
+						t.Fatalf("column %s row %d: got %#v, want %#v", col.Name(), ri, got, want)
 					}
 				}
-			})
-		}
+			}
+		})
 	}
 }
 

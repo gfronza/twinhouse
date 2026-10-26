@@ -166,13 +166,11 @@ func (m *Manager) Ensure(ctx context.Context, streamARN, functionARN string, o O
 			return fmt.Errorf("esm: create mapping %s -> %s: %w", streamARN, functionARN, err)
 		}
 	}
-	if len(existing) > 1 {
-		// Lambda allows one mapping per (stream, function); extra ones can
-		// only come from manual changes. Keep the first, remove the rest.
-		for _, extra := range existing[1:] {
-			if err := m.delete(ctx, extra); err != nil {
-				return err
-			}
+	// Lambda allows one mapping per (stream, function); extra ones can
+	// only come from manual changes. Keep the first, remove the rest.
+	for _, extra := range existing[1:] {
+		if err := m.delete(ctx, extra); err != nil {
+			return err
 		}
 	}
 	return m.converge(ctx, existing[0], o)

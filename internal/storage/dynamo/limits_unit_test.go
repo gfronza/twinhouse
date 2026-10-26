@@ -38,7 +38,7 @@ func (w *writeCounter) PutItem(context.Context, *dynamodb.PutItemInput, ...func(
 
 // TestItemSizeCheckedBeforeWrites: one row over DynamoDB's 400 KB item
 // limit rejects the whole INSERT before any write is sent (the batches are
-// written in parallel, so a late failure left a random subset stored).
+// written in parallel, so a late failure would leave a random subset stored).
 func TestItemSizeCheckedBeforeWrites(t *testing.T) {
 	big := strings.Repeat("x", 450000)
 	rows := func() []storage.Row {
@@ -126,7 +126,7 @@ func TestExpressionLimits(t *testing.T) {
 		ok          bool
 	}{
 		{catalog.EngineSummingMergeTree, "UInt64", 300, true},
-		{catalog.EngineSummingMergeTree, "UInt64", 400, true}, // failed at runtime before the shorter placeholders
+		{catalog.EngineSummingMergeTree, "UInt64", 400, true}, // fits only with short placeholders
 		{catalog.EngineSummingMergeTree, "Float64", 300, true},
 		{catalog.EngineSummingMergeTree, "UInt64", 700, false},
 		{catalog.EngineAggregatingMergeTree, "SimpleAggregateFunction(any, String)", 130, true},
@@ -144,7 +144,7 @@ func TestExpressionLimits(t *testing.T) {
 		if err != nil && !cherr.Is(err, cherr.NotImplemented) {
 			t.Errorf("%s %d x %s: code %v", c.engine, c.n, c.typ, err)
 		}
-		if !c.ok || !l.merging {
+		if !c.ok || !l.merging || strings.HasPrefix(c.typ, "AggregateFunction") {
 			continue
 		}
 		// The bound holds for a real row with every column present.
@@ -159,9 +159,6 @@ func TestExpressionLimits(t *testing.T) {
 			default:
 				row[i] = uint64(i)
 			}
-		}
-		if strings.HasPrefix(c.typ, "AggregateFunction") {
-			continue
 		}
 		rp, err := s.planRow(ctxBG, l, &storage.MergeRow{Row: row})
 		if err != nil {

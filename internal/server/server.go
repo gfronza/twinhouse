@@ -271,12 +271,11 @@ func (s *Server) serveQuery(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = authenticate(s.users, user, password)
 	}
+	c.user = user
 	if err != nil {
-		c.user = user
 		c.fail(err)
 		return
 	}
-	c.user = user
 
 	c.queryID = c.params.Get("query_id")
 	if c.queryID == "" {

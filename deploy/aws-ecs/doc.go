@@ -1,9 +1,9 @@
-// Package deployawsecs holds the container deployment of
-// twinhouse on Amazon ECS Fargate (template.yaml,
-// samconfig.toml, README.md): chserver behind an internal Application Load
-// Balancer on port 8123, the mvworker stream worker (or chserver's
-// in-process worker) and, once per deployment, the replicator, one plain
-// CloudFormation stack per region in an existing VPC.
+// Package deployawsecs holds the container deployment of twinhouse on
+// Amazon ECS Fargate (template.yaml, samconfig.toml, README.md): chserver
+// behind an internal Application Load Balancer on port 8123, the mvworker
+// stream worker (or chserver's in-process worker) and, once per deployment,
+// the replicator, one plain CloudFormation stack per region in an existing
+// VPC.
 //
 // The package has no Go code besides its tests. They parse the template
 // with the standard library (cfn_test.go) and check it against the

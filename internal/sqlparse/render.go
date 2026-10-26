@@ -410,13 +410,14 @@ var renderReserved = func() map[string]bool {
 	return m
 }()
 
+// isPlainIdent reports whether s needs no quoting. Unlike the lexer it does
+// not accept '$', so such names are always back-quoted.
 func isPlainIdent(s string) bool {
-	if s == "" || !(s[0] == '_' || (s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z')) {
+	if s == "" || !isIdentStart(s[0]) {
 		return false
 	}
 	for i := 1; i < len(s); i++ {
-		c := s[i]
-		if !(c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+		if !isIdentStart(s[i]) && !isDigit(s[i]) {
 			return false
 		}
 	}

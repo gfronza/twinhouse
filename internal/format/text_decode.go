@@ -195,9 +195,6 @@ func (d *delimitedDecoder) readHeader() error {
 	}
 	names, err := d.rd.readRow()
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return io.EOF
-		}
 		return err
 	}
 	d.row++

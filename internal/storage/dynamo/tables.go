@@ -678,16 +678,9 @@ func (s *storeImpl) dropPhysical(ctx context.Context, name string, removeReplica
 	}
 }
 
-// scanFilter is an optional Scan FilterExpression.
-type scanFilter struct {
-	expr   string
-	names  map[string]string
-	values map[string]types.AttributeValue
-}
-
-// deleteAll deletes every item (matching filter) of a table using a parallel
-// keys-only Scan. rangeKey tells whether the table has _sk.
-func (s *storeImpl) deleteAll(ctx context.Context, table string, rangeKey bool, filter *scanFilter) error {
+// deleteAll deletes every item of a table using a parallel keys-only Scan.
+// rangeKey tells whether the table has _sk.
+func (s *storeImpl) deleteAll(ctx context.Context, table string, rangeKey bool) error {
 	segments := s.opts.ScanSegments
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -709,13 +702,6 @@ func (s *storeImpl) deleteAll(ctx context.Context, table string, rangeKey bool, 
 			in := &dynamodb.ScanInput{
 				TableName: aws.String(table), Segment: aws.Int32(int32(seg)), TotalSegments: aws.Int32(int32(segments)),
 				ProjectionExpression: aws.String(proj), ExpressionAttributeNames: names, ConsistentRead: aws.Bool(true),
-			}
-			if filter != nil {
-				in.FilterExpression = aws.String(filter.expr)
-				for k, v := range filter.names {
-					names[k] = v
-				}
-				in.ExpressionAttributeValues = filter.values
 			}
 			err := s.scanPages(ctx, in, func(items []map[string]types.AttributeValue) error {
 				reqs := make([]types.WriteRequest, len(items))
