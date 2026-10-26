@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
@@ -8,8 +9,6 @@ import (
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
-
-const sizesOfArraysDontMatch = 190
 
 // ajStage is one ARRAY JOIN step: its arrays are unrolled together (zipped);
 // consecutive stages multiply (each arrayJoin() call is its own stage).
@@ -123,73 +122,132 @@ func (q *query) planArrayJoin(c *compiler, src *source, clause *sqlparse.ArrayJo
 		if err != nil {
 			return nil, err
 		}
-		return &arrayJoinIter{in: it, stages: stages, width: width}, nil
+		return newArrayJoinIter(q.ctx, it, stages, width), nil
 	}
 	return out, nil
 }
 
+// arrayJoinIter emits one row per combination of stage elements, the last
+// stage varying fastest. It holds only the current input row's arrays, never
+// their product.
 type arrayJoinIter struct {
+	ctx    context.Context
 	in     rowIter
 	stages []*ajStage
+	cur    []ajCursor
 	width  int
-	buf    [][]any
+	row    []any // the input row plus the current element of each placed stage
+	steps  int
+}
+
+// ajCursor is one stage's arrays for the current row and its element index.
+type ajCursor struct {
+	arrays [][]any
+	n, k   int
+	zero   bool // LEFT ARRAY JOIN of empty arrays: one row of defaults
+}
+
+func newArrayJoinIter(ctx context.Context, in rowIter, stages []*ajStage, width int) *arrayJoinIter {
+	cur := make([]ajCursor, len(stages))
+	for i, st := range stages {
+		cur[i].arrays = make([][]any, len(st.items))
+	}
+	return &arrayJoinIter{ctx: ctx, in: in, stages: stages, cur: cur, width: width}
 }
 
 func (a *arrayJoinIter) next() ([]any, error) {
-	for len(a.buf) == 0 {
-		row, err := a.in.next()
-		if err != nil {
+	last := len(a.stages) - 1
+	i := last // the stage to advance; -1 reads the next input row
+	if a.row == nil {
+		i = -1
+	}
+	for {
+		if err := a.poll(); err != nil {
 			return nil, err
 		}
-		r := make([]any, a.width)
-		copy(r, row)
-		rows := [][]any{r}
-		for _, st := range a.stages {
-			if rows, err = st.expand(rows); err != nil {
+		if i < 0 {
+			if err := a.load(); err != nil {
+				return nil, err
+			}
+			i = 0
+			if err := a.eval(0); err != nil {
 				return nil, err
 			}
 		}
-		a.buf = rows
+		c := &a.cur[i]
+		if c.k++; c.k >= c.n {
+			i--
+			continue
+		}
+		a.place(i)
+		if i == last {
+			return append([]any(nil), a.row...), nil
+		}
+		i++
+		if err := a.eval(i); err != nil {
+			return nil, err
+		}
 	}
-	r := a.buf[0]
-	a.buf = a.buf[1:]
-	return r, nil
 }
 
 func (a *arrayJoinIter) close() { a.in.close() }
 
-func (st *ajStage) expand(rows [][]any) ([][]any, error) {
-	var out [][]any
-	for _, r := range rows {
-		arrays := make([][]any, len(st.items))
-		n := -1
-		for i, x := range st.items {
-			v, err := x.eval(r)
-			if err != nil {
-				return nil, err
-			}
-			arr, _ := v.([]any)
-			if n >= 0 && len(arr) != n {
-				return nil, cherr.New(sizesOfArraysDontMatch, "Sizes of ARRAY-JOIN-ed arrays do not match")
-			}
-			n = len(arr)
-			arrays[i] = arr
+// poll checks for cancellation every 1024 steps, so a long run of empty
+// arrays can still be cancelled.
+func (a *arrayJoinIter) poll() error {
+	if a.steps++; a.steps&1023 != 0 {
+		return nil
+	}
+	if err := a.ctx.Err(); err != nil {
+		return cherr.Wrap(cherr.Timeout, err, "query cancelled")
+	}
+	return nil
+}
+
+// load reads the next input row into the working row.
+func (a *arrayJoinIter) load() error {
+	a.row = nil
+	row, err := a.in.next()
+	if err != nil {
+		return err
+	}
+	a.row = make([]any, a.width)
+	copy(a.row, row)
+	return nil
+}
+
+// eval evaluates stage i's arrays on the working row, which holds the
+// current elements of the earlier stages, and rewinds its cursor.
+func (a *arrayJoinIter) eval(i int) error {
+	st, c := a.stages[i], &a.cur[i]
+	for j, x := range st.items {
+		v, err := x.eval(a.row)
+		if err != nil {
+			return err
 		}
-		if n == 0 && st.left {
-			nr := append([]any(nil), r...)
-			for i, slot := range st.slots {
-				nr[slot] = zeroValue(st.elems[i])
-			}
-			out = append(out, nr)
-			continue
+		arr, _ := v.([]any)
+		if j > 0 && len(arr) != c.n {
+			return cherr.New(cherr.SizesOfArraysDontMatch, "Sizes of ARRAY-JOIN-ed arrays do not match")
 		}
-		for k := 0; k < n; k++ {
-			nr := append([]any(nil), r...)
-			for i, slot := range st.slots {
-				nr[slot] = arrays[i][k]
-			}
-			out = append(out, nr)
+		c.n = len(arr)
+		c.arrays[j] = arr
+	}
+	c.zero = c.n == 0 && st.left
+	if c.zero {
+		c.n = 1
+	}
+	c.k = -1
+	return nil
+}
+
+// place writes stage i's current elements into the working row.
+func (a *arrayJoinIter) place(i int) {
+	st, c := a.stages[i], &a.cur[i]
+	for j, slot := range st.slots {
+		if c.zero {
+			a.row[slot] = zeroValue(st.elems[j])
+		} else {
+			a.row[slot] = c.arrays[j][c.k]
 		}
 	}
-	return out, nil
 }

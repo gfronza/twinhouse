@@ -524,11 +524,26 @@ func (st *acc) flushPending(ctx context.Context) error {
 	return nil
 }
 
+// load loads the stored set members that result will need. It is the part
+// of result that can fail.
+func (a *aggCall) load(st *acc) error {
+	if !aggstate.IsSetFunc(a.spec.base) || a.countsPending(st) {
+		return nil
+	}
+	return st.flushPending(a.ctx)
+}
+
+// countsPending reports whether result counts a single stored set state
+// without loading its members.
+func (a *aggCall) countsPending(st *acc) bool {
+	return st.pending != nil && !a.spec.state && a.spec.base != "groupUniqArray"
+}
+
 // result returns the aggregate's output value for a group.
 func (a *aggCall) result(st *acc) (any, error) {
 	p := st.p
 	if aggstate.IsSetFunc(a.spec.base) {
-		if st.pending != nil && !a.spec.state && a.spec.base != "groupUniqArray" {
+		if a.countsPending(st) {
 			return aggstate.SetCount(st.pending), nil
 		}
 		if err := st.flushPending(a.ctx); err != nil {

@@ -621,15 +621,16 @@ func converter(from, to chtype.Type) (func(any) (any, error), error) {
 	return func(v any) (any, error) { return chtype.Convert(v, fu, tu) }, nil
 }
 
-// scalarSubquery evaluates an uncorrelated subquery once at plan time.
+// scalarSubquery evaluates an uncorrelated subquery once at plan time. It
+// keeps at most two rows: a second row is already an error.
 func (c *compiler) scalarSubquery(sel *sqlparse.SelectStmt) (*expr, error) {
-	res, err := c.q.subquery(sel, c.env.nested(), 0)
+	res, err := c.q.subquery(sel, c.env.nested(), 2)
 	if err != nil {
 		return nil, err
 	}
 	rows := res.rows
 	if len(rows) > 1 {
-		return nil, cherr.New(incorrectResultOfScalarSubquery, "Scalar subquery returned more than one row")
+		return nil, cherr.New(cherr.IncorrectResultOfScalarSubquery, "Scalar subquery returned more than one row")
 	}
 	cols := res.cols
 	if len(cols) == 1 {
@@ -637,7 +638,7 @@ func (c *compiler) scalarSubquery(sel *sqlparse.SelectStmt) (*expr, error) {
 		nt := nullableIf(t, true)
 		if len(rows) == 0 {
 			if !nt.IsNullable() {
-				return nil, cherr.New(incorrectResultOfScalarSubquery, "Scalar subquery returned empty result of type %s which cannot be Nullable", t.String())
+				return nil, cherr.New(cherr.IncorrectResultOfScalarSubquery, "Scalar subquery returned empty result of type %s which cannot be Nullable", t.String())
 			}
 			return constant(nt, nil), nil
 		}
@@ -649,22 +650,21 @@ func (c *compiler) scalarSubquery(sel *sqlparse.SelectStmt) (*expr, error) {
 	}
 	t := chtype.NewTuple(fields...)
 	if len(rows) == 0 {
-		return nil, cherr.New(incorrectResultOfScalarSubquery, "Scalar subquery returned empty result of type %s which cannot be Nullable", t.String())
+		return nil, cherr.New(cherr.IncorrectResultOfScalarSubquery, "Scalar subquery returned empty result of type %s which cannot be Nullable", t.String())
 	}
 	return constant(t, append([]any(nil), rows[0]...)), nil
 }
 
 // ClickHouse error codes not in cherr.
 const (
-	illegalAggregation              = 184
-	incorrectResultOfScalarSubquery = 125
-	illegalDivision                 = 153
-	thereIsNoColumn                 = 8
-	duplicateColumn                 = 15
-	tooManyRowsOrBytes              = 396
-	ambiguousIdentifier             = 207
-	tooDeepRecursion                = 306
-	multipleExpressionsForAlias     = 179
-	decimalOverflow                 = 407
-	badTypeOfField                  = 169
+	illegalAggregation          = 184
+	illegalDivision             = 153
+	thereIsNoColumn             = 8
+	duplicateColumn             = 15
+	tooManyRowsOrBytes          = 396
+	ambiguousIdentifier         = 207
+	tooDeepRecursion            = 306
+	multipleExpressionsForAlias = 179
+	decimalOverflow             = 407
+	badTypeOfField              = 169
 )

@@ -104,8 +104,18 @@ type subqueryResult struct {
 	rows [][]any
 }
 
-// subquery runs an uncorrelated subquery once per statement. max > 0 limits
-// the rows read (the result is then not cached).
+// subqueryProbeRows is how many rows past max a bounded subquery still reads
+// and drops: about one ClickHouse block (the max_block_size default, counted
+// in result rows), so an error within it still wins over "more than one row".
+// A scalar subquery (max 2) stops there, as ClickHouse does after one block:
+// once it has two rows it fails with 125, an error in a later row is never
+// raised, and read_rows counts only the rows read.
+const subqueryProbeRows = 65409
+
+// subquery runs an uncorrelated subquery once per statement. max > 0 keeps
+// only the first max rows and stops reading subqueryProbeRows rows later.
+// Only a complete result (fewer than max rows) is cached, so a later caller
+// never sees a truncated one.
 func (q *query) subquery(sel *sqlparse.SelectStmt, env *planEnv, max int) (*subqueryResult, error) {
 	if r, ok := q.subqueries[sel]; ok {
 		return r, nil
@@ -114,12 +124,16 @@ func (q *query) subquery(sel *sqlparse.SelectStmt, env *planEnv, max int) (*subq
 	if err != nil {
 		return nil, err
 	}
-	rows, err := rel.collect(q, max)
+	read := 0
+	if max > 0 {
+		read = max + subqueryProbeRows
+	}
+	rows, err := rel.collectFirst(q, max, read)
 	if err != nil {
 		return nil, err
 	}
 	r := &subqueryResult{cols: rel.cols, rows: rows}
-	if max == 0 {
+	if max == 0 || len(rows) < max {
 		if q.subqueries == nil {
 			q.subqueries = map[*sqlparse.SelectStmt]*subqueryResult{}
 		}

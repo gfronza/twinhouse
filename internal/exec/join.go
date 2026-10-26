@@ -293,16 +293,7 @@ func (q *query) joinTwo(left, right *source, j *sqlparse.JoinClause, where sqlpa
 		if err != nil {
 			return nil, err
 		}
-		build, err := spec.build(q, rit)
-		rit.close()
-		if err != nil {
-			return nil, err
-		}
-		lit, err := left.open(req)
-		if err != nil {
-			return nil, err
-		}
-		return &joinIter{spec: spec, b: build, in: lit}, nil
+		return startJoin(q, spec, rit, func() (rowIter, error) { return left.open(req) })
 	}
 	return out, nil
 }
@@ -329,32 +320,98 @@ func (s *source) displayQual() string {
 	return "_right"
 }
 
-type joinBuild struct {
-	rows    [][]any // combined-width rows with the left part empty
-	index   map[string][]int
-	matched []bool
+// plainSlot resolves a plain column reference to its slot.
+func plainSlot(sc *scope, e sqlparse.Expr) (int, bool) {
+	id, ok := e.(*sqlparse.Ident)
+	if !ok {
+		return 0, false
+	}
+	i, err := sc.lookup(id.Parts)
+	return i, err == nil && i >= 0
 }
 
-func (spec *joinSpec) keyOf(row []any, keys []*expr, convs []func(any) (any, error)) (string, bool, error) {
-	var b []byte
+// startJoin builds the right side from rit, closes it and opens the left
+// side to probe. Tests swap it for the previous implementation (an oracle).
+var startJoin = startHashJoin
+
+func startHashJoin(q *query, spec *joinSpec, rit rowIter, openLeft func() (rowIter, error)) (rowIter, error) {
+	b, err := spec.build(q, rit)
+	rit.close()
+	if err != nil {
+		return nil, err
+	}
+	lit, err := openLeft()
+	if err != nil {
+		return nil, err
+	}
+	return &joinIter{q: q, spec: spec, b: b, in: lit, scratch: make([]any, spec.leftW+spec.rightW)}, nil
+}
+
+type joinBuild struct {
+	rows    chunkedRows    // right-side rows, as the right input returned them
+	index   map[string]int // key → its entry in lists
+	lists   [][]int        // the build rows of each key, in input order
+	matched []bool
+	key     []byte // reused key buffer
+}
+
+// lookup returns the build rows whose key is key.
+func (b *joinBuild) lookup(key []byte) []int {
+	if li, ok := b.index[string(key)]; ok {
+		return b.lists[li]
+	}
+	return nil
+}
+
+// chunkRows is the size of every chunk of chunkedRows after the first.
+const chunkRows = 1024
+
+// chunkedRows is an append-only list of rows kept in fixed-size chunks, so
+// growing it never copies the rows already held.
+type chunkedRows struct {
+	chunks [][][]any
+	n      int
+}
+
+func (c *chunkedRows) add(r []any) {
+	last := len(c.chunks) - 1
+	if last < 0 || len(c.chunks[last]) == chunkRows {
+		var chunk [][]any
+		if last >= 0 {
+			chunk = make([][]any, 0, chunkRows)
+		}
+		c.chunks = append(c.chunks, chunk)
+		last++
+	}
+	c.chunks[last] = append(c.chunks[last], r)
+	c.n++
+}
+
+func (c *chunkedRows) at(i int) []any { return c.chunks[i/chunkRows][i%chunkRows] }
+
+// appendKey appends the key of row to dst; ok is false when a part of it
+// is NULL, which never matches.
+func (spec *joinSpec) appendKey(dst []byte, row []any, keys []*expr, convs []func(any) (any, error)) ([]byte, bool, error) {
 	for i, k := range keys {
 		v, err := k.eval(row)
 		if err != nil {
-			return "", false, err
+			return dst, false, err
 		}
 		if v == nil {
-			return "", false, nil // NULL never matches
+			return dst, false, nil
 		}
 		if v, err = convs[i](v); err != nil {
-			return "", false, err
+			return dst, false, err
 		}
-		b = aggstate.AppendKey(b, v)
+		dst = aggstate.AppendKey(dst, v)
 	}
-	return string(b), true, nil
+	return dst, true, nil
 }
 
+// build reads the right side into rows and indexes it by key.
 func (spec *joinSpec) build(q *query, it rowIter) (*joinBuild, error) {
-	b := &joinBuild{index: map[string][]int{}}
+	b := &joinBuild{index: map[string]int{}}
+	scratch := make([]any, spec.leftW+spec.rightW)
 	for {
 		r, err := it.next()
 		if err == io.EOF {
@@ -363,33 +420,71 @@ func (spec *joinSpec) build(q *query, it rowIter) (*joinBuild, error) {
 		if err != nil {
 			return nil, err
 		}
-		row := make([]any, spec.leftW+spec.rightW)
-		copy(row[spec.leftW:], r)
-		k, ok, err := spec.keyOf(row, spec.rightKeys, spec.keyConvR)
-		if err != nil {
+		if err := b.add(spec, scratch, r); err != nil {
 			return nil, err
 		}
-		b.rows = append(b.rows, row)
-		if ok {
-			b.index[k] = append(b.index[k], len(b.rows)-1)
-		}
-		if len(b.rows)&1023 == 0 {
+		if b.rows.n&1023 == 0 {
 			if err := q.ctx.Err(); err != nil {
 				return nil, cherr.Wrap(cherr.Timeout, err, "query cancelled")
 			}
 		}
 	}
-	b.matched = make([]bool, len(b.rows))
+	b.matched = make([]bool, b.rows.n)
 	return b, nil
 }
 
+// add stores r and indexes it by its key, evaluated over scratch: a reused
+// combined row whose left part stays empty. Key-less joins need no index.
+func (b *joinBuild) add(spec *joinSpec, scratch, r []any) error {
+	b.rows.add(r)
+	if len(spec.rightKeys) == 0 {
+		return nil
+	}
+	setSlots(scratch[spec.leftW:], r)
+	key, ok, err := spec.appendKey(b.key[:0], scratch, spec.rightKeys, spec.keyConvR)
+	b.key = key
+	if err != nil || !ok {
+		return err
+	}
+	if li, found := b.index[string(key)]; found {
+		b.lists[li] = append(b.lists[li], b.rows.n-1)
+		return nil
+	}
+	b.index[string(key)] = len(b.lists)
+	b.lists = append(b.lists, []int{b.rows.n - 1})
+	return nil
+}
+
+// setSlots copies src into dst and clears the slots src does not reach.
+func setSlots(dst, src []any) {
+	n := copy(dst, src)
+	clear(dst[n:])
+}
+
+// joinIter probes the build with one left row at a time and emits one
+// combined row per next call.
 type joinIter struct {
-	spec  *joinSpec
-	b     *joinBuild
-	in    rowIter
-	buf   [][]any
-	done  bool
-	tailI int
+	q    *query
+	spec *joinSpec
+	b    *joinBuild
+	in   rowIter
+	// scratch holds the current left row, then the right side of the
+	// candidate being tested (empty while the left keys are evaluated).
+	scratch []any
+	// Probe state of the current left row, while probing is set.
+	probing bool
+	left    []any
+	cands   []int // the matching entry of lists, never copied
+	all     bool  // key-less join: every build row is a candidate
+	pos     int
+	matched bool
+	// checked is set once the residual has passed on every entry of cands,
+	// which then point into accepted (reused across left rows).
+	checked  bool
+	accepted []int
+	scanned  int // candidates tested, for polling ctx
+	done     bool
+	tailI    int
 }
 
 func (j *joinIter) combine(left []any, right []any) []any {
@@ -401,7 +496,7 @@ func (j *joinIter) combine(left []any, right []any) []any {
 		copy(row, s.leftZero)
 	}
 	if right != nil {
-		copy(row[s.leftW:], right[s.leftW:])
+		copy(row[s.leftW:], right)
 	} else {
 		copy(row[s.leftW:], s.rightZero)
 	}
@@ -420,94 +515,185 @@ func (j *joinIter) combine(left []any, right []any) []any {
 	return row
 }
 
-// plainSlot resolves a plain column reference to its slot.
-func plainSlot(sc *scope, e sqlparse.Expr) (int, bool) {
-	id, ok := e.(*sqlparse.Ident)
-	if !ok {
-		return 0, false
-	}
-	i, err := sc.lookup(id.Parts)
-	return i, err == nil && i >= 0
-}
-
 func (j *joinIter) next() ([]any, error) {
-	s := j.spec
-	for len(j.buf) == 0 {
-		if j.done {
-			// Unmatched right rows of RIGHT/FULL joins.
-			for j.tailI < len(j.b.rows) {
-				i := j.tailI
-				j.tailI++
-				if !j.b.matched[i] {
-					return j.combine(nil, j.b.rows[i]), nil
-				}
-			}
-			return nil, io.EOF
-		}
-		left, err := j.in.next()
-		if err == io.EOF {
-			j.done = true
-			if s.kind != "RIGHT" && s.kind != "FULL" {
-				return nil, io.EOF
+	for !j.done {
+		if !j.probing {
+			if err := j.readLeft(); err != nil {
+				return nil, err
 			}
 			continue
 		}
+		row, err := j.probe()
+		if err != nil || row != nil {
+			return row, err
+		}
+		j.probing = false
+		if !j.matched && j.emitsUnmatchedLeft() {
+			return j.combine(j.left, nil), nil
+		}
+	}
+	return j.tail()
+}
+
+// readLeft starts probing the next left row, or marks the left side done.
+func (j *joinIter) readLeft() error {
+	s := j.spec
+	left, err := j.in.next()
+	if err == io.EOF {
+		j.done = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	j.probing, j.left, j.cands, j.all, j.pos, j.matched, j.checked = true, left, nil, false, 0, false, false
+	if len(s.leftKeys) == 0 {
+		j.all = true
+	} else {
+		setSlots(j.scratch, left)
+		key, ok, err := s.appendKey(j.b.key[:0], j.scratch, s.leftKeys, s.keyConvL)
+		j.b.key = key
 		if err != nil {
+			return err
+		}
+		if ok {
+			j.cands = j.b.lookup(key)
+		}
+	}
+	if s.residual != nil && !j.stopsAtFirstMatch() {
+		return j.checkAll()
+	}
+	return nil
+}
+
+// stopsAtFirstMatch reports whether a left row uses at most one match.
+func (j *joinIter) stopsAtFirstMatch() bool {
+	switch j.spec.strictness {
+	case "ANY", "SEMI", "ANTI":
+		return true
+	}
+	return false
+}
+
+// checkAll tests the residual on every candidate of the current left row
+// before any of its rows is emitted, so a residual error comes first (as it
+// did when those rows were buffered). The accepted candidates replace cands.
+func (j *joinIter) checkAll() error {
+	j.accepted = j.accepted[:0]
+	n := j.candidates()
+	for pos := range n {
+		if err := j.poll(); err != nil {
+			return err
+		}
+		ci := j.candidate(pos)
+		ok, err := j.accepts(j.b.rows.at(ci))
+		if err != nil {
+			return err
+		}
+		if ok {
+			j.accepted = append(j.accepted, ci)
+		}
+	}
+	j.cands, j.all, j.checked = j.accepted, false, true
+	return nil
+}
+
+// candidates is the number of candidates of the current left row.
+func (j *joinIter) candidates() int {
+	if j.all {
+		return j.b.rows.n
+	}
+	return len(j.cands)
+}
+
+// candidate returns the build row of the candidate at pos.
+func (j *joinIter) candidate(pos int) int {
+	if j.all {
+		return pos
+	}
+	return j.cands[pos]
+}
+
+// probe returns the next combined row for the current left row, or nil once
+// its candidates are exhausted. ANY and SEMI stop at the first match; ANTI
+// stops there too but emits nothing.
+func (j *joinIter) probe() ([]any, error) {
+	n := j.candidates()
+	for j.pos < n {
+		ci := j.candidate(j.pos)
+		j.pos++
+		if err := j.poll(); err != nil {
 			return nil, err
 		}
-		var cands []int
-		if len(s.leftKeys) == 0 {
-			cands = make([]int, len(j.b.rows))
-			for i := range cands {
-				cands[i] = i
-			}
-		} else {
-			probe := make([]any, s.leftW+s.rightW)
-			copy(probe, left)
-			k, ok, err := s.keyOf(probe, s.leftKeys, s.keyConvL)
+		if !j.checked {
+			ok, err := j.accepts(j.b.rows.at(ci))
 			if err != nil {
 				return nil, err
 			}
-			if ok {
-				cands = j.b.index[k]
+			if !ok {
+				continue
 			}
 		}
-		matched := false
-		for _, ci := range cands {
-			row := j.combine(left, j.b.rows[ci])
-			if s.residual != nil {
-				v, err := s.residual.eval(row)
-				if err != nil {
-					return nil, err
-				}
-				if v == nil {
-					continue
-				}
-				ok, err := truth(v)
-				if err != nil {
-					return nil, err
-				}
-				if !ok {
-					continue
-				}
-			}
-			matched = true
-			j.b.matched[ci] = true
-			if s.strictness == "ANTI" {
-				break
-			}
-			j.buf = append(j.buf, row)
-			if s.strictness == "ANY" || s.strictness == "SEMI" {
-				break
-			}
+		j.matched = true
+		j.b.matched[ci] = true
+		switch j.spec.strictness {
+		case "ANTI":
+			j.pos = n
+			return nil, nil
+		case "ANY", "SEMI":
+			j.pos = n
 		}
-		if !matched && (s.kind == "LEFT" && s.strictness != "SEMI" || s.kind == "FULL") {
-			j.buf = append(j.buf, j.combine(left, nil))
+		return j.combine(j.left, j.b.rows.at(ci)), nil
+	}
+	return nil, nil
+}
+
+// accepts reports whether the residual condition holds for the current left
+// row joined with right.
+func (j *joinIter) accepts(right []any) (bool, error) {
+	s := j.spec
+	if s.residual == nil {
+		return true, nil
+	}
+	copy(j.scratch, j.left[:s.leftW])
+	setSlots(j.scratch[s.leftW:], right)
+	v, err := s.residual.eval(j.scratch)
+	if err != nil || v == nil {
+		return false, err
+	}
+	return truth(v)
+}
+
+// poll checks for cancellation every 1024 tested candidates.
+func (j *joinIter) poll() error {
+	j.scanned++
+	if j.scanned&1023 != 0 {
+		return nil
+	}
+	if err := j.q.ctx.Err(); err != nil {
+		return cherr.Wrap(cherr.Timeout, err, "query cancelled")
+	}
+	return nil
+}
+
+func (j *joinIter) emitsUnmatchedLeft() bool {
+	s := j.spec
+	return s.kind == "LEFT" && s.strictness != "SEMI" || s.kind == "FULL"
+}
+
+// tail emits the unmatched right rows of RIGHT and FULL joins.
+func (j *joinIter) tail() ([]any, error) {
+	if j.spec.kind != "RIGHT" && j.spec.kind != "FULL" {
+		return nil, io.EOF
+	}
+	for j.tailI < j.b.rows.n {
+		i := j.tailI
+		j.tailI++
+		if !j.b.matched[i] {
+			return j.combine(nil, j.b.rows.at(i)), nil
 		}
 	}
-	r := j.buf[0]
-	j.buf = j.buf[1:]
-	return r, nil
+	return nil, io.EOF
 }
 
 func (j *joinIter) close() { j.in.close() }
