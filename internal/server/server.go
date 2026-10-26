@@ -23,11 +23,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // Executor runs one statement. *exec.Engine implements it.

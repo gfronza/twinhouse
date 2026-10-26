@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 func errCode(err error) int {

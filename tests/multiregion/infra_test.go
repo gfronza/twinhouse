@@ -77,8 +77,8 @@ func composeCmd(ctx context.Context, env []string, args ...string) (string, erro
 func requireCompose(t testing.TB) {
 	t.Helper()
 	requireStack(t)
-	if cfg.project == "dhdev" {
-		t.Skip("refusing to inject faults into the shared development stack (MR_COMPOSE_PROJECT=dhdev)")
+	if cfg.project == "twinhouse" {
+		t.Skip("refusing to inject faults into the shared development stack (MR_COMPOSE_PROJECT=twinhouse)")
 	}
 	composeOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

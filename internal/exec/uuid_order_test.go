@@ -3,8 +3,8 @@ package exec
 import (
 	"testing"
 
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/exec/aggstate"
 )
 
 // UUIDs order as ClickHouse's UInt128 (high half = last 8 bytes), not as

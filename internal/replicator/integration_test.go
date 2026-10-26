@@ -24,7 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	sttypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 
-	"dynamodb-eventstream/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/awsx"
 )
 
 const (

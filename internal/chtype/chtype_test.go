@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 func TestInferLiteral(t *testing.T) {

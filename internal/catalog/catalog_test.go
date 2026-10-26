@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // memBackend is a Backend with DynamoDB-like conditional semantics.

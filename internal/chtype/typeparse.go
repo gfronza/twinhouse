@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // codeDataTypeCannotHaveArguments is DATA_TYPE_CANNOT_HAVE_ARGUMENTS.

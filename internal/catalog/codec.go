@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // JSON shapes of persisted entries. Column types are stored as their text and

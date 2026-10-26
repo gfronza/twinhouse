@@ -1,6 +1,6 @@
 # Serverless deployment on AWS (SAM)
 
-This directory deploys dynamodb-eventstream fully serverless, one
+This directory deploys twinhouse fully serverless, one
 CloudFormation stack per region:
 
 ```
@@ -64,10 +64,10 @@ CloudFormation stack per region:
   parameter and the only source the API's resource policy allows. Enable
   *private DNS* on the endpoint if you want to call the plain invoke URL;
   otherwise use the `ApiVpceEndpoint` output (see "Pointing a client").
-* Decide the table prefix (`TablePrefix`, default `chddb_`): the IAM
+* Decide the table prefix (`TablePrefix`, default `twinhouse_`): the IAM
   policies are scoped to `table/<prefix>*`, so one account can host several
   deployments with different prefixes. The prefixes must not be prefixes
-  of one another (`chddb_` and `chddb_prod_`): the policies of the shorter
+  of one another (`twinhouse_` and `twinhouse_prod_`): the policies of the shorter
   one would cover the other's tables, and its reconciler, which drops
   physical tables of its deployment that no catalog entry names, could
   mistake the other's tables for its own.
@@ -99,8 +99,8 @@ make aws-build                         # four arm64 bootstraps under deploy/aws-
 
 # 1. home region
 make aws-deploy ENV=us
-# wait until the first reconciler run created chddb___catalog (CloudWatch logs
-# of dynamodb-eventstream-reconciler, or `aws dynamodb describe-table`)
+# wait until the first reconciler run created twinhouse___catalog (CloudWatch logs
+# of twinhouse-reconciler, or `aws dynamodb describe-table`)
 
 # 2. replica region
 make aws-deploy ENV=eu
@@ -111,7 +111,7 @@ make aws-deploy ENV=eu
 command line**: the SAM CLI does not merge it with the file, it *replaces*
 the environment's whole list for that run, so every parameter left out
 silently falls back to the template default on a first deploy (`ChUsers`
-would become the password-less `default:`, `TablePrefix` `chddb_`) or
+would become the password-less `default:`, `TablePrefix` `twinhouse_`) or
 keeps the stack's previous value on an update; `make aws-deploy` refuses
 it. Values that must not be committed, `ChUsers` above all, go into a
 git-ignored copy of the file with the full parameter lists:
@@ -165,7 +165,7 @@ its region and returns; the reconciler adds the replicas.
 
 | Parameter | Default | Notes |
 |---|---|---|
-| `TablePrefix` | `chddb_` | Physical table prefix; also the IAM scope. |
+| `TablePrefix` | `twinhouse_` | Physical table prefix; also the IAM scope. |
 | `GlobalMode` | `aws` | `none` for a single region (no replicator, no replicas). |
 | `ReplicaRegions` | `us-east-1,eu-west-1` | All regions, this one included; identical in every stack. |
 | `HomeRegion` | `us-east-1` | Creates the global tables; deploy first. |
@@ -444,16 +444,16 @@ With the local stack up (`make up`), `make aws-local-api` builds the
 functions, runs one reconciler round from the host (`go run
 ./cmd/reconciler-lambda -once`, which creates the system tables: the API
 Lambda only checks they exist) and starts `sam local start-api` on port
-3000 against the `us` DynamoDB Local container of the `dhdev` compose
-project (network `dhdev_default`, `GLOBAL_MODE=emulated`, event-source
+3000 against the `us` DynamoDB Local container of the `twinhouse` compose
+project (network `twinhouse_default`, `GLOBAL_MODE=emulated`, event-source
 mapping management disabled). It uses the built template
 (`.aws-sam/build`), the parameter overrides from `samconfig.toml`, the
 environment file `local-env.json` (`SAM_LOCAL_ENV` to use another) and
 dummy credentials, so no AWS account is involved. The reconciler round
 does not read that file: it takes `TABLE_PREFIX` from make (default
-`chddb_`). An env file with another `TABLE_PREFIX` therefore needs the same
+`twinhouse_`). An env file with another `TABLE_PREFIX` therefore needs the same
 value on the make command line, `make aws-local-api SAM_LOCAL_ENV=other.json
-TABLE_PREFIX=other_`; otherwise the reconciler creates the `chddb_` system
+TABLE_PREFIX=other_`; otherwise the reconciler creates the `twinhouse_` system
 tables, the API looks for the other prefix's, and every request answers
 `UNAVAILABLE` (system tables not ready). (`sam local` only
 overrides environment variables the template declares, which is why
@@ -480,7 +480,7 @@ the session test. The other functions can be exercised with
 cd deploy/aws-lambda
 sam local generate-event cloudwatch scheduled-event > /tmp/schedule.json
 sam local invoke ReconcilerFunction -t .aws-sam/build/template.yaml \
-  --docker-network dhdev_default --env-vars local-env.json -e /tmp/schedule.json
+  --docker-network twinhouse_default --env-vars local-env.json -e /tmp/schedule.json
 ```
 
 and `MvWorkerFunction` with a DynamoDB stream event whose records carry the

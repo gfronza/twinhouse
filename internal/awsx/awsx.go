@@ -19,7 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	"github.com/aws/smithy-go"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // DefaultHTTPTimeout bounds how long an SDK call waits for the response

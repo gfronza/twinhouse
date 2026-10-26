@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // parseText implements ParseText (escaped / TabSeparated form).

@@ -9,10 +9,10 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/config"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/config"
 )
 
 // ddbAPI is the subset of the DynamoDB client the store uses (an interface so

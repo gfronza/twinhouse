@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 func TestCreateTableCatalogMapping(t *testing.T) {

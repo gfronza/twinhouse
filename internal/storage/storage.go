@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 
-	"dynamodb-eventstream/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/catalog"
 )
 
 // Row holds one value per table column, in catalog.Table.Columns order, using

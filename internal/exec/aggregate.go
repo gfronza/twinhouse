@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/exec/aggstate"
-	"dynamodb-eventstream/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // Supported aggregate base functions. Case-insensitive ones are listed in

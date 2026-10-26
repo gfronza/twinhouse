@@ -9,9 +9,9 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/storage/dynamo"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/storage/dynamo"
 )
 
 // LambdaConfig configures the Lambda entry point.

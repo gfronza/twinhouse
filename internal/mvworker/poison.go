@@ -16,11 +16,11 @@ import (
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/smithy-go"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/storage"
-	"dynamodb-eventstream/internal/streams"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/storage"
+	"github.com/gfronza/twinhouse/internal/streams"
 )
 
 // Poison policies (Config.PoisonPolicy, MV_POISON_POLICY).

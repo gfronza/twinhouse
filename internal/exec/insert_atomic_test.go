@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 func atomicSchema(te *testEnv) {

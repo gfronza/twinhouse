@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // prettyEncoder implements Pretty and PrettyCompact (best effort: the layout

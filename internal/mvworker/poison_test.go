@@ -17,9 +17,9 @@ import (
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/smithy-go"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 func TestIsTransient(t *testing.T) {
@@ -413,7 +413,7 @@ func TestResolvePoison(t *testing.T) {
 }
 
 func TestDeadLetterTableName(t *testing.T) {
-	if got := DeadLetterTableName("chddb___checkpoints"); got != "chddb___dead_letters" {
+	if got := DeadLetterTableName("twinhouse___checkpoints"); got != "twinhouse___dead_letters" {
 		t.Fatal(got)
 	}
 	if got := DeadLetterTableName("p__checkpoints"); got != "p__dead_letters" {

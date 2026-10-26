@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dynamodb-eventstream/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // rewrite returns a copy of e where every node for which f returns

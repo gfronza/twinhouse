@@ -1,10 +1,10 @@
 package exec
 
 import (
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/exec/aggstate"
-	"dynamodb-eventstream/internal/sqlparse"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // maxKeyRanges caps the number of ranges produced by pushdown; above it the

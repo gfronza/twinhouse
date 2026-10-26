@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // ReconcilerConfig configures a Reconciler.

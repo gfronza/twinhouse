@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 type supertypeCase struct {

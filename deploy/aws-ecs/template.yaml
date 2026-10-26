@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  dynamodb-eventstream on ECS Fargate, one region: chserver (the
+  twinhouse on ECS Fargate, one region: chserver (the
   ClickHouse-compatible HTTP server) behind an internal Application Load
   Balancer on port 8123, the materialized-view stream worker (cmd/mvworker,
   or in-process in chserver) and, once per deployment, the
@@ -69,7 +69,7 @@ Parameters:
     Description: Container Insights of the cluster the stack creates.
   TablePrefix:
     Type: String
-    Default: chddb_
+    Default: twinhouse_
     Description: >-
       TABLE_PREFIX: prefix of every physical DynamoDB table. The task roles
       are scoped to tables with this prefix. Use the same value in every
@@ -357,7 +357,7 @@ Resources:
           Value: !Ref ContainerInsights
       Tags:
         - Key: Application
-          Value: dynamodb-eventstream
+          Value: twinhouse
 
   # -------------------------------------------------------------------------
   # Network: the load balancer accepts the allowed clients and talks only to
@@ -480,7 +480,7 @@ Resources:
           Value: 'true'
       Tags:
         - Key: Application
-          Value: dynamodb-eventstream
+          Value: twinhouse
 
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -815,7 +815,7 @@ Resources:
         - Key: Listener
           Value: !If [CreateHttpListener, !Ref HttpListener, !Ref HttpsListener]
         - Key: Application
-          Value: dynamodb-eventstream
+          Value: twinhouse
 
   # CPU target tracking (ChserverMaxCount > 0). Application Auto Scaling uses
   # its ECS service-linked role.
@@ -1017,7 +1017,7 @@ Resources:
       PropagateTags: SERVICE
       Tags:
         - Key: Application
-          Value: dynamodb-eventstream
+          Value: twinhouse
 
   # -------------------------------------------------------------------------
   # Replicator (GLOBAL_MODE=aws, RunsReplicator): tails the
@@ -1154,7 +1154,7 @@ Resources:
       PropagateTags: SERVICE
       Tags:
         - Key: Application
-          Value: dynamodb-eventstream
+          Value: twinhouse
 
 # ---------------------------------------------------------------------------
 Outputs:

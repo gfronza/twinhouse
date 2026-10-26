@@ -3,9 +3,9 @@ package exec
 import (
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // expr is a compiled, statically typed expression evaluated over a row.

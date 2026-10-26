@@ -7,11 +7,11 @@ import (
 	"sync"
 	"testing"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/storage"
-	"dynamodb-eventstream/internal/storage/memstore"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/storage"
+	"github.com/gfronza/twinhouse/internal/storage/memstore"
 )
 
 // testEnv is an engine over memstore and the in-memory catalog.

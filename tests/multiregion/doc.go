@@ -1,7 +1,7 @@
 //go:build multiregion
 
 // Package multiregion is the multi-region (active-active) test suite of
-// dynamodb-eventstream (DESIGN.md §1, §5, §6). It drives two regions of the
+// twinhouse (DESIGN.md §1, §5, §6). It drives two regions of the
 // local compose stack — chserver-us / chserver-eu, mvworker-us / mvworker-eu,
 // two DynamoDB Local instances and the replicator that emulates global tables
 // — and checks that both regions converge to exactly the same data:
@@ -20,7 +20,7 @@
 //
 // The fault-injection tests stop, kill and recreate containers, so the suite
 // must run against its OWN compose project, never the shared development
-// stack ("dhdev"). Start it with distinct host ports:
+// stack ("twinhouse"). Start it with distinct host ports:
 //
 //	cd <repo root>
 //	COMPOSE_PROJECT=dhmr US_HTTP_PORT=28123 EU_HTTP_PORT=28124 \
@@ -44,7 +44,7 @@
 //	MR_DDB_EU            DynamoDB Local of eu-west-1 (http://localhost:28001)
 //	MR_COMPOSE_PROJECT   compose project driven by fault tests (dhmr)
 //	MR_COMPOSE_FILE      compose file (deploy/local/docker-compose.yml under the repo root)
-//	MR_TABLE_PREFIX      physical table prefix of the stack (chddb_)
+//	MR_TABLE_PREFIX      physical table prefix of the stack (twinhouse_)
 //	MR_CONVERGE_TIMEOUT  convergence deadline per check, Go duration (60s)
 //	MR_PARALLEL          max scenario tests running at once (4)
 //	MR_SOAK, MR_SOAK_DURATION   see above
@@ -66,7 +66,7 @@
 // them at the end; tests never touch databases they did not create. Tests
 // skip when the endpoints are unreachable; fault-injection tests also skip
 // when docker compose cannot reach the project or its published ports do not
-// match MR_US_URL / MR_EU_URL, and they refuse to run against "dhdev".
+// match MR_US_URL / MR_EU_URL, and they refuse to run against "twinhouse".
 //
 // Fault-injection tests are sequential (no t.Parallel) and restore the stack
 // (all services running, REPLICATION_DELAY=0s) when they finish; the other

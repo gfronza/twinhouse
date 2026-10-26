@@ -13,7 +13,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/google/uuid"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // chgoUnsupported lists cases clickhouse-go's generic Row/Scan cannot

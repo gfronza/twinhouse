@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/format"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/format"
 )
 
 func TestHealthEndpoints(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 func tsUTC(s string) time.Time {

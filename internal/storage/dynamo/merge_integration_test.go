@@ -11,9 +11,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 func uniqTable(e *env, name string) *catalog.Table {

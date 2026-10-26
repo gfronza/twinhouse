@@ -2,7 +2,7 @@
 
 // End-to-end check of the API Lambda through API Gateway emulation:
 //
-//	sam build && sam local start-api --docker-network dhdev_default ...
+//	sam build && sam local start-api --docker-network twinhouse_default ...
 //	go test -tags samlocal -count=1 -v ./cmd/chserver-lambda/
 //
 // SAM_LOCAL_URL (default http://127.0.0.1:3000) is the emulated API; the
@@ -29,8 +29,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/klauspost/compress/zstd"
 
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/format"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/format"
 )
 
 func TestSamLocal(t *testing.T) {

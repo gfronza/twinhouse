@@ -10,7 +10,7 @@ import (
 	"context"
 	"time"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // Engines supported by the storage layer.

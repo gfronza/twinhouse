@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"io"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 const outBufSize = 64 << 10

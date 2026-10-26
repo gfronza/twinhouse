@@ -12,7 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 
-	"dynamodb-eventstream/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/catalog"
 )
 
 // listPhysical lists the region's physical tables of database db.

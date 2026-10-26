@@ -63,7 +63,7 @@ func TestMain(m *testing.M) {
 		project:  envOr("MR_COMPOSE_PROJECT", "dhmr"),
 		compose:  envOr("MR_COMPOSE_FILE", filepath.Join(root, "deploy", "local", "docker-compose.yml")),
 		repoRoot: root,
-		prefix:   envOr("MR_TABLE_PREFIX", "chddb_"),
+		prefix:   envOr("MR_TABLE_PREFIX", "twinhouse_"),
 		converge: 60 * time.Second,
 	}
 	if !filepath.IsAbs(cfg.compose) {

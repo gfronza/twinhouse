@@ -180,7 +180,7 @@ func TestEventSourceMappingSettings(t *testing.T) {
 
 	t.Setenv("MVWORKER_FUNCTION_ARN", " arn:aws:lambda:eu-west-1:123456789012:function:mvworker ")
 	t.Setenv("REPLICATOR_FUNCTION_ARN", "replicator")
-	t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "chddb-reconciler")
+	t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "twinhouse-reconciler")
 	t.Setenv("ESM_BATCH_SIZE", "250")
 	if c, err = Load(); err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestEventSourceMappingSettings(t *testing.T) {
 		c.ReplicatorFunctionARN != "replicator" || c.ESMBatchSize != 250 {
 		t.Errorf("settings not honoured: %+v", c)
 	}
-	if c.ReconcilerFunctionARN != "chddb-reconciler" {
+	if c.ReconcilerFunctionARN != "twinhouse-reconciler" {
 		t.Errorf("RECONCILER_FUNCTION_ARN must default to AWS_LAMBDA_FUNCTION_NAME, got %q", c.ReconcilerFunctionARN)
 	}
 	if err := c.Validate(); err != nil {

@@ -1,8 +1,8 @@
 package format
 
 import (
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // nativeCodec is a compiled ClickHouse type tree used by the Native format

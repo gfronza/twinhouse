@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // missRefreshInterval is the minimum time between two catalog reloads

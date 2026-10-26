@@ -9,9 +9,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // Options configures the store.

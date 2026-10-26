@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/streams"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/streams"
 )
 
 // Consumer is the checkpoint consumer name of the stream worker.

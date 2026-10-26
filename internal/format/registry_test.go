@@ -5,8 +5,8 @@ import (
 	"io"
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 func TestCanonical(t *testing.T) {

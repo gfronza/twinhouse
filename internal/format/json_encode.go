@@ -6,7 +6,7 @@ import (
 	"math"
 	"strconv"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // jsonStyle holds the settings that shape JSON value rendering.

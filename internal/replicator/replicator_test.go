@@ -8,7 +8,7 @@ import (
 
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/awsx"
 )
 
 func TestNewValidates(t *testing.T) {

@@ -18,11 +18,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/config"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/storage/dynamo"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/config"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/storage/dynamo"
 )
 
 // node is one process: a store, its own catalog snapshot and an engine.

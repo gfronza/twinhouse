@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // convert implements Convert (CAST(v AS to), v of type from).

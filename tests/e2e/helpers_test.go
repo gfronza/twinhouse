@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	baseURL = strings.TrimRight(envOr("CHDDB_URL", "http://localhost:8123"), "/")
+	baseURL = strings.TrimRight(envOr("TWINHOUSE_URL", "http://localhost:8123"), "/")
 	runID   = newRunID()
 
 	reachOnce sync.Once
@@ -46,7 +46,7 @@ func newRunID() string {
 	return fmt.Sprintf("%d_%s", time.Now().Unix()%1000000, hex.EncodeToString(b))
 }
 
-// hostPort returns host:port of CHDDB_URL for clickhouse-go's Addr.
+// hostPort returns host:port of TWINHOUSE_URL for clickhouse-go's Addr.
 func hostPort() string {
 	u, err := url.Parse(baseURL)
 	if err != nil || u.Host == "" {
@@ -55,7 +55,7 @@ func hostPort() string {
 	return u.Host
 }
 
-// lambdaMode is true when CHDDB_URL is the serverless deployment (the API
+// lambdaMode is true when TWINHOUSE_URL is the serverless deployment (the API
 // Lambda behind API Gateway, or its `sam local start-api` emulation): HTTP
 // sessions are rejected with NOT_IMPLEMENTED (48) and bodies are bounded by
 // the Lambda payload limit (6 MB). Detected by probe (detect), or forced

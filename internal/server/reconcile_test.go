@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // fakeCatalog serves a settable table list; only the methods the reconciler

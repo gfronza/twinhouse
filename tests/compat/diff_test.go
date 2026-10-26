@@ -89,13 +89,13 @@ func canonicalJSONDoc(body []byte) string {
 	return string(b)
 }
 
-// unifiedDiff renders a line diff of want (reference) vs got (chddb).
+// unifiedDiff renders a line diff of want (reference) vs got (twinhouse).
 func unifiedDiff(want, got string) string {
 	a := strings.Split(want, "\n")
 	b := strings.Split(got, "\n")
 	const maxLines = 3000
 	if len(a) > maxLines || len(b) > maxLines {
-		return fmt.Sprintf("--- reference (%d lines)\n+++ chddb (%d lines)\n(too large to diff; first lines)\n- %s\n+ %s\n",
+		return fmt.Sprintf("--- reference (%d lines)\n+++ twinhouse (%d lines)\n(too large to diff; first lines)\n- %s\n+ %s\n",
 			len(a), len(b), truncate(want, 2000), truncate(got, 2000))
 	}
 	// LCS table.
@@ -134,7 +134,7 @@ func unifiedDiff(want, got string) string {
 		}
 	}
 	var sb strings.Builder
-	sb.WriteString("--- reference\n+++ chddb\n")
+	sb.WriteString("--- reference\n+++ twinhouse\n")
 	const ctx = 3
 	keep := make([]bool, len(ops))
 	for k, o := range ops {

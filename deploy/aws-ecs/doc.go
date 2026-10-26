@@ -1,5 +1,5 @@
 // Package deployawsecs holds the container deployment of
-// dynamodb-eventstream on Amazon ECS Fargate (template.yaml,
+// twinhouse on Amazon ECS Fargate (template.yaml,
 // samconfig.toml, README.md): chserver behind an internal Application Load
 // Balancer on port 8123, the mvworker stream worker (or chserver's
 // in-process worker) and, once per deployment, the replicator, one plain

@@ -37,26 +37,26 @@ lint = true
 # replicator). Deploy first.
 # ---------------------------------------------------------------------------
 [us.deploy.parameters]
-stack_name = "dynamodb-eventstream-ecs"
+stack_name = "twinhouse-ecs"
 region = "us-east-1"
 # The template is uploaded to the SAM-managed bucket. It is under the
 # 51,200 bytes CloudFormation accepts inline; S3 leaves room to grow.
 resolve_s3 = true
-s3_prefix = "dynamodb-eventstream-ecs"
+s3_prefix = "twinhouse-ecs"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 fail_on_empty_changeset = false
 disable_rollback = false
-tags = "Application=dynamodb-eventstream"
+tags = "Application=twinhouse"
 parameter_overrides = [
-  "ImageUri=ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream:CHANGE_ME",
+  "ImageUri=ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/twinhouse:CHANGE_ME",
   "CpuArchitecture=ARM64",
   "VpcId=vpc-CHANGE_ME",
   "SubnetIds=subnet-CHANGE_ME_A,subnet-CHANGE_ME_B",
   "AllowedCidr=CHANGE_ME",          # e.g. the application VPC's CIDR, or "" with ClientSecurityGroupId below
   # "ClientSecurityGroupId=sg-CHANGE_ME",   # uncomment to admit a client security group (needed if AllowedCidr is "")
   "ChUsersSecretArn=arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:CHANGE_ME",
-  "TablePrefix=chddb_",
+  "TablePrefix=twinhouse_",
   "GlobalMode=aws",
   "ReplicaRegions=us-east-1,eu-west-1",
   "HomeRegion=us-east-1",
@@ -84,24 +84,24 @@ parameter_overrides = [
 # eu-west-1: a replica region. Deploy after the home region's stack is up.
 # ---------------------------------------------------------------------------
 [eu.deploy.parameters]
-stack_name = "dynamodb-eventstream-ecs"
+stack_name = "twinhouse-ecs"
 region = "eu-west-1"
 resolve_s3 = true
-s3_prefix = "dynamodb-eventstream-ecs"
+s3_prefix = "twinhouse-ecs"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 fail_on_empty_changeset = false
 disable_rollback = false
-tags = "Application=dynamodb-eventstream"
+tags = "Application=twinhouse"
 parameter_overrides = [
-  "ImageUri=ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/dynamodb-eventstream:CHANGE_ME",
+  "ImageUri=ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/twinhouse:CHANGE_ME",
   "CpuArchitecture=ARM64",
   "VpcId=vpc-CHANGE_ME",
   "SubnetIds=subnet-CHANGE_ME_A,subnet-CHANGE_ME_B",
   "AllowedCidr=CHANGE_ME",
   # "ClientSecurityGroupId=sg-CHANGE_ME",
   "ChUsersSecretArn=arn:aws:secretsmanager:eu-west-1:ACCOUNT_ID:secret:CHANGE_ME",
-  "TablePrefix=chddb_",
+  "TablePrefix=twinhouse_",
   "GlobalMode=aws",
   "ReplicaRegions=us-east-1,eu-west-1",
   "HomeRegion=us-east-1",

@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/sqlparse"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // insertBatch is the number of rows written (and views applied) per batch.

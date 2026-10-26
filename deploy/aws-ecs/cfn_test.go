@@ -554,7 +554,7 @@ var noValue = noValueT{}
 
 func (tp *template) instantiate(t testing.TB, region string, overrides map[string]string) *stack {
 	t.Helper()
-	s := &stack{tp: tp, region: region, account: "123456789012", name: "chddb", values: map[string]any{}, condCache: map[string]bool{}}
+	s := &stack{tp: tp, region: region, account: "123456789012", name: "twinhouse", values: map[string]any{}, condCache: map[string]bool{}}
 	for name, p := range tp.params {
 		pm := p.(map[string]any)
 		v, ok := overrides[name]

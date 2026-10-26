@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // CheckFormattable returns a NOT_IMPLEMENTED error if values of t cannot be

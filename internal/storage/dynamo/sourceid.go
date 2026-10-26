@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // Source row ids (storage.SourceRef.RowID) handed out by this store carry

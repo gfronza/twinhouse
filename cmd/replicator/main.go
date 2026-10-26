@@ -16,7 +16,7 @@
 //
 //	REGIONS                "us-east-1=http://dynamodb-us:8000,eu-west-1=http://dynamodb-eu:8000"
 //	                       (an empty endpoint means the real AWS region)
-//	TABLE_PREFIX           physical table prefix (default "chddb_")
+//	TABLE_PREFIX           physical table prefix (default "twinhouse_")
 //	REPLICATION_DELAY      artificial lag, Go duration (default 0)
 //	STREAM_POLL_INTERVAL   stream idle poll interval (default 250ms)
 //	CATALOG_REFRESH        table discovery interval (default 2s)
@@ -56,13 +56,13 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/config"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/mvworker"
-	"dynamodb-eventstream/internal/replicator"
-	"dynamodb-eventstream/internal/storage/dynamo"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/config"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/mvworker"
+	"github.com/gfronza/twinhouse/internal/replicator"
+	"github.com/gfronza/twinhouse/internal/storage/dynamo"
 )
 
 func main() {

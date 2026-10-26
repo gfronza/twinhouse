@@ -4,11 +4,11 @@ import (
 	"io"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/exec/aggstate"
-	"dynamodb-eventstream/internal/sqlparse"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // joinSpec is one planned hash join of the current source with a right side.

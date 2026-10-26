@@ -1,6 +1,6 @@
 # Container deployment on AWS (ECS Fargate)
 
-This directory deploys the long-running binaries of dynamodb-eventstream on
+This directory deploys the long-running binaries of twinhouse on
 Amazon ECS Fargate, one plain CloudFormation stack per region, into an
 existing VPC:
 
@@ -90,13 +90,13 @@ existing VPC:
   the secret uses a customer managed key.
 
   ```sh
-  aws secretsmanager create-secret --region us-east-1 --name chddb/ch-users \
+  aws secretsmanager create-secret --region us-east-1 --name twinhouse/ch-users \
     --secret-string 'analytics:<password>,default:'
   ```
-* Decide the table prefix (`TablePrefix`, default `chddb_`): the task roles
+* Decide the table prefix (`TablePrefix`, default `twinhouse_`): the task roles
   are scoped to `table/<prefix>*`, so one account can host several
   deployments with different prefixes. Prefixes must not be prefixes of one
-  another (`chddb_` and `chddb_prod_`), as for the serverless deployment.
+  another (`twinhouse_` and `twinhouse_prod_`), as for the serverless deployment.
 
 ## Image
 
@@ -107,7 +107,7 @@ picks its binary with the container command. Build it for the platform of
 `X86_64` = `linux/amd64`) and push it to ECR:
 
 ```sh
-REPO=123456789012.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream   # your repository
+REPO=123456789012.dkr.ecr.us-east-1.amazonaws.com/twinhouse   # your repository
 aws ecr get-login-password --region us-east-1 \
   | docker login --username AWS --password-stdin "${REPO%%/*}"
 make image-push IMAGE_REPO=$REPO IMAGE_TAG=v1 PLATFORM=linux/arm64
@@ -157,8 +157,8 @@ make ecs-validate                 # sam validate --lint, no credentials needed
 
 # 1. home region: chserver, mvworker and the replicator
 make ecs-deploy ENV=us
-# wait until the services are stable and chddb___catalog has its replicas:
-aws dynamodb describe-table --region us-east-1 --table-name chddb___catalog \
+# wait until the services are stable and twinhouse___catalog has its replicas:
+aws dynamodb describe-table --region us-east-1 --table-name twinhouse___catalog \
   --query 'Table.Replicas[].{region:RegionName,status:ReplicaStatus}'
 
 # 2. replica region: chserver and mvworker
@@ -200,7 +200,7 @@ ran the statement creates the physical table and adds its replicas
 | `AllowedCidr`, `ClientSecurityGroupId` | — | Clients allowed to reach the load balancer; set at least one. |
 | `ExistingClusterName` | — | Run in an existing cluster instead of creating one. |
 | `ContainerInsights` | `disabled` | `enabled` or `disabled`: Container Insights of the cluster the stack creates (ignored with `ExistingClusterName`). |
-| `TablePrefix` | `chddb_` | `TABLE_PREFIX`; also the IAM scope. Same in every region. |
+| `TablePrefix` | `twinhouse_` | `TABLE_PREFIX`; also the IAM scope. Same in every region. |
 | `GlobalMode` | `aws` | `none` for a single region (no replicas, no replicator). |
 | `ReplicaRegions` | `us-east-1,eu-west-1` | All regions (two or more), this one included; identical in every stack. `REPLICA_REGIONS` drops the current region; the replicator's `REGIONS` becomes `us-east-1=,eu-west-1=`. |
 | `HomeRegion` | `us-east-1` | `GLOBAL_HOME_REGION`; deploy it first. |
@@ -244,7 +244,7 @@ resolves inside the VPC (and peered networks or VPNs with the VPC's DNS).
 Use it like a ClickHouse server's HTTP interface:
 
 ```sh
-URL=$(aws cloudformation describe-stacks --region us-east-1 --stack-name dynamodb-eventstream-ecs \
+URL=$(aws cloudformation describe-stacks --region us-east-1 --stack-name twinhouse-ecs \
   --query "Stacks[0].Outputs[?OutputKey=='ClickHouseUrl'].OutputValue" --output text)
 curl -sS "$URL/ping"                                        # Ok.
 curl -sS -u analytics:<password> "$URL" --data-binary 'SELECT version(), displayName()'
@@ -306,7 +306,7 @@ format:
 
 ```sh
 make image-push IMAGE_REPO=$REPO IMAGE_TAG=v2          # us-east-1
-REPO_EU=123456789012.dkr.ecr.eu-west-1.amazonaws.com/dynamodb-eventstream
+REPO_EU=123456789012.dkr.ecr.eu-west-1.amazonaws.com/twinhouse
 aws ecr get-login-password --region eu-west-1 \
   | docker login --username AWS --password-stdin "${REPO_EU%%/*}"
 make image-push IMAGE_REPO=$REPO_EU IMAGE_TAG=v2       # eu-west-1 (skip with ECR replication)
@@ -336,7 +336,7 @@ deployment's tables and delete them, replicas before the table in the home
 region of each global table:
 
 ```sh
-P=chddb_
+P=twinhouse_
 for r in eu-west-1 us-east-1; do
   aws dynamodb list-tables --region $r --output text --query 'TableNames[]' | tr '\t' '\n' | grep "^$P"
 done
@@ -379,7 +379,7 @@ installed. `make ecs-local` (with the local stack up, `make up`) goes
 further: it renders the task definitions with concrete parameter values
 (`GlobalMode=none`, `TablePrefix=ecs_`), builds the image, runs each
 container definition as a local container (`ecsemu-*`, on the
-`dhdev_default` network, with the rendered environment, command,
+`twinhouse_default` network, with the rendered environment, command,
 read-only root filesystem, CPU and memory, stop timeout and health check)
 against the `us` DynamoDB Local, runs `tests/e2e` against the emulated
 chserver on port 38123, checks with `InlineViews=false` that the mvworker

@@ -3,7 +3,7 @@ package chtype
 import (
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 type typeCase struct {

@@ -8,9 +8,9 @@ import (
 
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/storage/dynamo"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/storage/dynamo"
 )
 
 // ImageApplierConfig configures an ImageApplier (one per region).

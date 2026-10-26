@@ -13,8 +13,8 @@ import (
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	sttypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 
-	"dynamodb-eventstream/internal/mvworker"
-	"dynamodb-eventstream/internal/streams"
+	"github.com/gfronza/twinhouse/internal/mvworker"
+	"github.com/gfronza/twinhouse/internal/streams"
 )
 
 // Stream record event names.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // quotedParser reads values in ClickHouse's quoted form. In strict mode it

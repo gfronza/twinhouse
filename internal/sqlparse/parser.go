@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // maxDepth bounds recursion so hostile input cannot overflow the stack.

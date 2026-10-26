@@ -3,10 +3,10 @@ package exec
 import (
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/sqlparse"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 const sizesOfArraysDontMatch = 190

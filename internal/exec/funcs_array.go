@@ -4,9 +4,9 @@ import (
 	"sort"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/exec/aggstate"
 )
 
 // maxRangeElements bounds range() results.

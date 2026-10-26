@@ -20,12 +20,12 @@ package deployawsecs_test
 //
 // The containers are named ecsemu-* and removed at the end, as are the
 // TABLE_PREFIX tables in both DynamoDB Local instances. Needs Docker and
-// the dhdev stack (make up):
+// the twinhouse stack (make up):
 //
 //	go test -tags ecslocal -count=1 -v -timeout 30m ./deploy/aws-ecs/
 //	make ecs-local
 //
-// Settings (environment): ECSLOCAL_NETWORK (dhdev_default),
+// Settings (environment): ECSLOCAL_NETWORK (twinhouse_default),
 // ECSLOCAL_DDB_US / ECSLOCAL_DDB_EU (http://dynamodb-us:8000 /
 // http://dynamodb-eu:8000, as seen from the network), ECSLOCAL_DDB_US_HOST /
 // ECSLOCAL_DDB_EU_HOST (http://localhost:18000 / :18001, for the table
@@ -60,7 +60,7 @@ func envDefault(k, def string) string {
 }
 
 var (
-	ecsNetwork = envDefault("ECSLOCAL_NETWORK", "dhdev_default")
+	ecsNetwork = envDefault("ECSLOCAL_NETWORK", "twinhouse_default")
 	ecsDDBUS   = envDefault("ECSLOCAL_DDB_US", "http://dynamodb-us:8000")
 	ecsDDBEU   = envDefault("ECSLOCAL_DDB_EU", "http://dynamodb-eu:8000")
 	ecsHostUS  = envDefault("ECSLOCAL_DDB_US_HOST", "http://localhost:18000")
@@ -290,7 +290,7 @@ func TestECSLocal(t *testing.T) {
 	t.Run("e2e", func(t *testing.T) {
 		cmd := exec.Command("go", "test", "-tags", "e2e", "-count=1", "-timeout", "20m", "./tests/e2e/...")
 		cmd.Dir = repoRoot
-		cmd.Env = append(os.Environ(), "CHDDB_URL=http://localhost:"+ecsPort, "TABLE_PREFIX="+ecsPrefix)
+		cmd.Env = append(os.Environ(), "TWINHOUSE_URL=http://localhost:"+ecsPort, "TABLE_PREFIX="+ecsPrefix)
 		out, err := cmd.CombinedOutput()
 		t.Logf("tests/e2e against ecsemu-chserver:\n%s", out)
 		if err != nil {

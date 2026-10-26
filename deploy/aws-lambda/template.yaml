@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >-
-  dynamodb-eventstream: a ClickHouse-compatible HTTP API on Lambda behind a
+  twinhouse: a ClickHouse-compatible HTTP API on Lambda behind a
   private REST API Gateway, with the materialized-view stream worker, the
   ReplacingMergeTree replicator and the catalog reconciler as Lambdas on
   DynamoDB streams. One stack per region (DESIGN.md section 1 and 6); no
@@ -13,7 +13,7 @@ Description: >-
 Parameters:
   TablePrefix:
     Type: String
-    Default: chddb_
+    Default: twinhouse_
     Description: >-
       Prefix of every physical DynamoDB table (TABLE_PREFIX). The IAM policies
       below are scoped to tables with this prefix.
@@ -274,7 +274,7 @@ Resources:
           HttpMethod: '*'
           MetricsEnabled: true
       Tags:
-        Application: dynamodb-eventstream
+        Application: twinhouse
 
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup

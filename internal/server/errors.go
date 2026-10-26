@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // toCHError converts any error into a *cherr.Error. Context cancellation

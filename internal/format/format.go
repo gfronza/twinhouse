@@ -15,7 +15,7 @@ import (
 	"io"
 	"time"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // Column is a result/input column.

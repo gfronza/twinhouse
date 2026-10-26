@@ -10,9 +10,9 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/storage/memstore"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/storage/memstore"
 )
 
 // TestRealEngineIntegration wires the HTTP server to the real engine over an

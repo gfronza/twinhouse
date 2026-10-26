@@ -1,6 +1,6 @@
 package chtype
 
-import "dynamodb-eventstream/internal/cherr"
+import "github.com/gfronza/twinhouse/internal/cherr"
 
 // ClickHouse error codes used by this package that internal/cherr does not
 // (yet) name. Values match ClickHouse's ErrorCodes.cpp so clients that switch

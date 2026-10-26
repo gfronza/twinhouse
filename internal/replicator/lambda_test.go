@@ -17,8 +17,8 @@ import (
 	sttypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 	"github.com/aws/smithy-go"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // fakeDDB records the writes of one target region. failPut/failDelete return

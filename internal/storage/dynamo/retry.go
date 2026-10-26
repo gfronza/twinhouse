@@ -10,8 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/smithy-go"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 const (

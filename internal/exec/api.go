@@ -11,9 +11,9 @@ import (
 	"io"
 	"log/slog"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // Config configures an Engine.

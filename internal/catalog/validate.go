@@ -3,9 +3,9 @@ package catalog
 import (
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/storage/keyenc"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/storage/keyenc"
 )
 
 // ReservedAttributes are the DynamoDB item attributes used by the storage

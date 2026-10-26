@@ -12,10 +12,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/storage"
-	"dynamodb-eventstream/internal/storage/keyenc"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/storage"
+	"github.com/gfronza/twinhouse/internal/storage/keyenc"
 )
 
 // interval is an inclusive _sk byte range; nil bounds are unbounded.

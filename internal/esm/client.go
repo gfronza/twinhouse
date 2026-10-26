@@ -8,7 +8,7 @@ import (
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 
-	"dynamodb-eventstream/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/awsx"
 )
 
 // NewClient builds the Lambda client of region with the default credential

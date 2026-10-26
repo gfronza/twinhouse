@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // TestConvertNumberErrorCodes: CAST from String to a number reports the

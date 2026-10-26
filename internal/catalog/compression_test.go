@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 func TestNormalizeCodec(t *testing.T) {

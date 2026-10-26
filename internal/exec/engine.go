@@ -26,11 +26,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // engineImpl holds engine-wide state.
@@ -60,7 +60,7 @@ func newEngine(cfg Config) (*Engine, error) {
 		cfg.ServerRevision = 54477
 	}
 	if cfg.DisplayName == "" {
-		cfg.DisplayName = "dynamodb-eventstream"
+		cfg.DisplayName = "twinhouse"
 	}
 	if _, err := time.LoadLocation(cfg.Timezone); err != nil {
 		return nil, cherr.Wrap(cherr.BadArguments, err, "exec: invalid timezone %q", cfg.Timezone)

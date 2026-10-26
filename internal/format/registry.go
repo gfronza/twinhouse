@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // Canonical format names.

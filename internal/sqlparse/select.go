@@ -3,7 +3,7 @@ package sqlparse
 import (
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // Words that cannot be an implicit alias (`SELECT a b` makes b an alias of a),

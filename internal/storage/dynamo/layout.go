@@ -6,11 +6,11 @@ import (
 	"encoding/hex"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/storage"
-	"dynamodb-eventstream/internal/storage/keyenc"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/storage"
+	"github.com/gfronza/twinhouse/internal/storage/keyenc"
 )
 
 // System attribute names (DESIGN.md §4).

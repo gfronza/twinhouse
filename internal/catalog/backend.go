@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // Entry kinds and key prefixes of persisted catalog items (DESIGN.md §4).

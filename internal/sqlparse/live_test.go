@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // Differential tests against a real ClickHouse server. They run only when

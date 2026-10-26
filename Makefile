@@ -5,23 +5,23 @@
 #                                    plain CloudFormation (targets ecs-*, image-push)
 
 GO              ?= go
-COMPOSE_PROJECT ?= dhdev
+COMPOSE_PROJECT ?= twinhouse
 PROFILES        ?=
 COMPOSE_YML     ?= deploy/local/docker-compose.yml
 COMPOSE         := docker compose -p $(COMPOSE_PROJECT) -f $(COMPOSE_YML)
 COMPOSE_UP      := $(COMPOSE) $(foreach p,$(PROFILES),--profile $(p))
 
 # Endpoints of the running stack, exported to the e2e/compat/multiregion tests.
-export CHDDB_URL          ?= http://localhost:8123
-export CHDDB_EU_URL       ?= http://localhost:8124
+export TWINHOUSE_URL      ?= http://localhost:8123
+export TWINHOUSE_EU_URL   ?= http://localhost:8124
 export CLICKHOUSE_REF_URL ?= http://localhost:18123
 export DDB_US_ENDPOINT    ?= http://localhost:18000
 export DDB_EU_ENDPOINT    ?= http://localhost:18001
-export TABLE_PREFIX       ?= chddb_
+export TABLE_PREFIX       ?= twinhouse_
 
 # DynamoDB Local containers for the stream/replicator integration tests.
-ITEST_DDB_A    ?= chddb-itest-ddb-a
-ITEST_DDB_B    ?= chddb-itest-ddb-b
+ITEST_DDB_A    ?= twinhouse-itest-ddb-a
+ITEST_DDB_B    ?= twinhouse-itest-ddb-b
 ITEST_PORT_A   ?= 18101
 ITEST_PORT_B   ?= 18102
 DDB_LOCAL_IMG  ?= amazon/dynamodb-local:latest
@@ -93,7 +93,7 @@ multiregion:
 #   make aws-validate                      # sam validate --lint (no credentials needed)
 #   make aws-build                         # cross-compiles the four arm64 bootstraps
 #   make aws-local-api                     # sam local start-api on :3000 against the
-#                                          # dhdev DynamoDB Local (make up first)
+#                                          # twinhouse DynamoDB Local (make up first)
 #   make aws-local-e2e                     # tests/e2e against the emulated API (in
 #                                          # another terminal; session tests skip)
 #   make aws-deploy ENV=us                 # deploy the home region (needs credentials
@@ -134,7 +134,7 @@ aws-local-api: aws-build aws-local-reconcile
 # suite detects Lambda mode (session_id answered with NOT_IMPLEMENTED) and
 # skips the tests of features the serverless deployment does not offer.
 aws-local-e2e:
-	CHDDB_URL=$(SAM_LOCAL_URL) $(GO) test -tags e2e -count=1 -v ./tests/e2e/...
+	TWINHOUSE_URL=$(SAM_LOCAL_URL) $(GO) test -tags e2e -count=1 -v ./tests/e2e/...
 
 # Never run by the test suites: it needs AWS credentials and creates
 # resources. Every parameter comes from $(SAM_CONFIG) (VpcEndpointId must be
@@ -150,7 +150,7 @@ aws-deploy: aws-build
 # :8123, the mvworker service and the replicator (home region).
 #   make ecs-validate                      # sam validate --lint (no credentials needed)
 #   make ecs-local                         # the rendered task definitions as local
-#                                          # containers against the dhdev DynamoDB Local,
+#                                          # containers against the twinhouse DynamoDB Local,
 #                                          # plus tests/e2e against them (make up first)
 #   make image-push IMAGE_REPO=<account>.dkr.ecr.<region>.amazonaws.com/<repo> \
 #        [IMAGE_TAG=v1] [PLATFORM=linux/arm64|linux/amd64]

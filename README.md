@@ -1,4 +1,4 @@
-# dynamodb-eventstream
+# twinhouse
 
 A ClickHouse-compatible HTTP server that stores its data in Amazon DynamoDB,
 so a ClickHouse-style workload can run **multi-region active-active**.
@@ -205,7 +205,7 @@ processed the replicated rows.
 `go.mod`, only needed for the tests), `make` and `curl`.
 
 ```sh
-git clone <this repository> && cd dynamodb-eventstream
+git clone <this repository> && cd twinhouse
 make up        # two "regions": us on :8123, eu on :8124
 ```
 
@@ -514,7 +514,7 @@ lists the ones each process needs.
 |---|---|---|
 | `REGION` | `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `local` | This process's region. It must be a real AWS region unless `DYNAMODB_ENDPOINT` is set. Lambda and ECS inject `AWS_REGION`. |
 | `DYNAMODB_ENDPOINT` | *(AWS)* | Custom endpoint, e.g. DynamoDB Local. Dummy credentials are used when it is set. |
-| `TABLE_PREFIX` | `chddb_` | Prefix of every physical DynamoDB table. |
+| `TABLE_PREFIX` | `twinhouse_` | Prefix of every physical DynamoDB table. |
 | `GLOBAL_MODE` | `none` | `none` for a single region, `aws` for real global tables, `emulated` for local copies kept in sync by `cmd/replicator`. |
 | `REPLICA_REGIONS` | | Comma-separated list of the other regions (required for `aws`; this region itself is dropped from the list). |
 | `GLOBAL_HOME_REGION` | first of sorted `REGION` + `REPLICA_REGIONS` | (`aws`) The region that creates `__catalog` and adds its replicas. |
@@ -679,10 +679,10 @@ server reports that case with the region holding the stray table. Tables
 created later with `CREATE TABLE` are created and replicated by the region
 that ran the statement; the other regions' reconcilers join them.
 
-**Table prefix.** `TABLE_PREFIX` (default `chddb_`) prefixes every physical
+**Table prefix.** `TABLE_PREFIX` (default `twinhouse_`) prefixes every physical
 table and is also the IAM scope (`table/<prefix>*`), so one account can
 host several deployments with different prefixes. Prefixes must not be
-prefixes of one another (`chddb_` and `chddb_prod_`). Otherwise the
+prefixes of one another (`twinhouse_` and `twinhouse_prod_`). Otherwise the
 shorter one's policies would cover the other's tables, and its reconciler,
 which drops physical tables of its deployment that no catalog entry
 names, could take the other's tables for its own.
@@ -768,7 +768,7 @@ deployment.
 
 `make up` builds the image and starts
 [`deploy/local/docker-compose.yml`](deploy/local/docker-compose.yml) as the
-compose project `dhdev`:
+compose project `twinhouse`:
 
 - two DynamoDB Local instances, in memory, standing in for `us-east-1`
   (host port 18000) and `eu-west-1` (18001);
@@ -1009,7 +1009,7 @@ per service, and these services:
 
 ```sh
 make ecs-validate                                   # sam validate --lint (no credentials needed)
-make image-push IMAGE_REPO=<account>.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream \
+make image-push IMAGE_REPO=<account>.dkr.ecr.us-east-1.amazonaws.com/twinhouse \
   IMAGE_TAG=v1 PLATFORM=linux/arm64                 # after docker login to ECR; per region
 # fill in the CHANGE_ME values in deploy/aws-ecs/samconfig.toml (both environments) first
 make ecs-deploy ENV=us                              # home region first
@@ -1289,13 +1289,13 @@ make compat             # tests/compat: differential tests against the reference
 
 make aws-validate && make aws-build   # SAM template lint + the four Lambda bootstraps
 go test ./deploy/aws-lambda/   # template vs. the binaries' contract (env vars, IAM scope, private API, schedule)
-make aws-local-api      # the API Lambda under sam local (:3000) against the dhdev DynamoDB Local
+make aws-local-api      # the API Lambda under sam local (:3000) against the twinhouse DynamoDB Local
 make aws-local-e2e      # tests/e2e against it; the suite detects Lambda mode and skips sessions
 go test -tags samlocal -count=1 ./cmd/chserver-lambda/   # API Gateway specifics (base64 bodies, compression) against sam local
 
 make ecs-validate       # ECS template lint (sam validate --lint)
 go test ./deploy/aws-ecs/   # template vs. the binaries' contract (env vars, ports, /ping, secrets, IAM scope, conditions)
-make ecs-local          # the ECS task definitions as local containers (ecsemu-*) against the dhdev
+make ecs-local          # the ECS task definitions as local containers (ecsemu-*) against the twinhouse
                         # DynamoDB Local: tests/e2e, mvworker applying a view, replicator start, SIGTERM
 ```
 

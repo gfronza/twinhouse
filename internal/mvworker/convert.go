@@ -10,7 +10,7 @@ import (
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	sttypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 
-	"dynamodb-eventstream/internal/streams"
+	"github.com/gfronza/twinhouse/internal/streams"
 )
 
 // changesFromStream converts DynamoDB Streams records.

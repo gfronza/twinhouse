@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // intBytes returns the byte width of an integer kind (Bool counts as UInt8).

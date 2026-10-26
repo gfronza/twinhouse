@@ -10,9 +10,9 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/mvworker"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/mvworker"
 )
 
 // TableLookup resolves a physical table name to its replication spec. ok is

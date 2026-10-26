@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // compareValues orders two canonical values of one column type with

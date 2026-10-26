@@ -50,8 +50,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/streams"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/streams"
 )
 
 // System attributes used for conflict resolution (DESIGN.md §4).

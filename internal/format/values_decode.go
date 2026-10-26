@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // valuesDecoder reads the Values format: (v, ...), (v, ...)[;] where each

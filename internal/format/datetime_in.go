@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // dtInMode is the date_time_input_format setting.

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"dynamodb-eventstream/internal/exec"
+	"github.com/gfronza/twinhouse/internal/exec"
 )
 
 // The iterator exposes the stored row ids POPULATE needs.

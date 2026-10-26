@@ -114,7 +114,7 @@ func (c Config) ManagesEventSourceMappings() bool { return c.MVWorkerFunctionARN
 //
 //	REGION                 (default: AWS_REGION, then AWS_DEFAULT_REGION, then "local")
 //	DYNAMODB_ENDPOINT      (default "", i.e. AWS)
-//	TABLE_PREFIX           (default "chddb_")
+//	TABLE_PREFIX           (default "twinhouse_")
 //	GLOBAL_MODE            none|aws|emulated (default none)
 //	REPLICA_REGIONS        comma list
 //	GLOBAL_HOME_REGION     GLOBAL_MODE=aws: region creating global tables (default:
@@ -148,7 +148,7 @@ func Load() (Config, error) {
 	c := Config{
 		Region:           defaultRegion(),
 		DynamoDBEndpoint: env("DYNAMODB_ENDPOINT", ""),
-		TablePrefix:      env("TABLE_PREFIX", "chddb_"),
+		TablePrefix:      env("TABLE_PREFIX", "twinhouse_"),
 		GlobalMode:       env("GLOBAL_MODE", GlobalNone),
 		HomeRegion:       strings.TrimSpace(env("GLOBAL_HOME_REGION", "")),
 		ListenAddr:       env("LISTEN_ADDR", ":8123"),

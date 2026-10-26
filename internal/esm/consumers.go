@@ -9,8 +9,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/config"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/config"
 )
 
 // ConsumersConfig configures Consumers.

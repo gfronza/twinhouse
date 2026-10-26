@@ -1,4 +1,4 @@
-# dynamodb-eventstream — design
+# twinhouse — design
 
 A ClickHouse-compatible SQL server whose storage is DynamoDB, so that a
 ClickHouse workload (append-only events + materialized-view rollups +
@@ -1404,7 +1404,7 @@ differential compatibility tests.
   `DYNAMODB_TEST_ENDPOINT`.
 * `tests/e2e` (build tag `e2e`): clickhouse-go v2 HTTP client (native API
   and database/sql) and plain net/http against a running chserver
-  (`CHDDB_URL`) — DDL, inserts with parameters, MV rollups, FINAL, tuple-IN
+  (`TWINHOUSE_URL`) — DDL, inserts with parameters, MV rollups, FINAL, tuple-IN
   probes, latest-wins replays, JSONEachRow bulk insert over raw HTTP. One
   region only, so it also runs against `make up-single`. Against the
   serverless API (`make aws-local-api` then `make aws-local-e2e`, or a

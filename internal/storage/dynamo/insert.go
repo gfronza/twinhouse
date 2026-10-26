@@ -9,9 +9,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/config"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/config"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 func (s *Store) insert(ctx context.Context, t *catalog.Table, rows []storage.Row) (*storage.InsertResult, error) {

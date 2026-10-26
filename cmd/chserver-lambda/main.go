@@ -22,11 +22,11 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 
-	"dynamodb-eventstream/internal/awsx"
-	"dynamodb-eventstream/internal/config"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/server"
-	"dynamodb-eventstream/internal/storage/dynamo"
+	"github.com/gfronza/twinhouse/internal/awsx"
+	"github.com/gfronza/twinhouse/internal/config"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/server"
+	"github.com/gfronza/twinhouse/internal/storage/dynamo"
 )
 
 func main() {

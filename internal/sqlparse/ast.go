@@ -1,5 +1,5 @@
 // Package sqlparse parses the ClickHouse SQL dialect subset supported by
-// dynamodb-eventstream into an AST.
+// twinhouse into an AST.
 //
 // AST CONTRACT: the node types below are shared by the parser and the query
 // engine. Extend additively; do not rename or change field meanings.

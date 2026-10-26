@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 func TestMergeAndFinalize(t *testing.T) {

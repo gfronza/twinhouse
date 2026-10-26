@@ -26,12 +26,12 @@ func (f *fakeStore) EnsureSystemTables(context.Context) error {
 	return f.ensureErr
 }
 
-func (f *fakeStore) CatalogTableName() string { return "chddb___catalog" }
+func (f *fakeStore) CatalogTableName() string { return "twinhouse___catalog" }
 
 func (f *fakeStore) StreamARN(_ context.Context, physical string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if physical != "chddb___catalog" {
+	if physical != "twinhouse___catalog" {
 		return "", errors.New("unexpected table " + physical)
 	}
 	return f.streamARN, f.streamErr
@@ -55,14 +55,14 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 
 const streamEvent = `{"Records":[{"eventID":"1","eventName":"INSERT","eventSource":"aws:dynamodb","awsRegion":"eu-west-1",
  "dynamodb":{"Keys":{"pk":{"S":"table#default.t"}},"SequenceNumber":"111","StreamViewType":"NEW_AND_OLD_IMAGES"},
- "eventSourceARN":"arn:aws:dynamodb:eu-west-1:123456789012:table/chddb___catalog/stream/2026-01-01T00:00:00.000"},
+ "eventSourceARN":"arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse___catalog/stream/2026-01-01T00:00:00.000"},
  {"eventID":"2","eventName":"REMOVE","eventSource":"aws:dynamodb","awsRegion":"eu-west-1",
  "dynamodb":{"Keys":{"pk":{"S":"table#default.u"}},"SequenceNumber":"112"},
- "eventSourceARN":"arn:aws:dynamodb:eu-west-1:123456789012:table/chddb___catalog/stream/2026-01-01T00:00:00.000"}]}`
+ "eventSourceARN":"arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse___catalog/stream/2026-01-01T00:00:00.000"}]}`
 
 const scheduleEvent = `{"version":"0","id":"53dc4d37-cffa-4f76-80c9-8b7d4a4d2eaa","detail-type":"Scheduled Event","source":"aws.events",
  "account":"123456789012","time":"2026-10-25T10:00:00Z","region":"eu-west-1",
- "resources":["arn:aws:events:eu-west-1:123456789012:rule/chddb-reconciler-schedule"],"detail":{}}`
+ "resources":["arn:aws:events:eu-west-1:123456789012:rule/twinhouse-reconciler-schedule"],"detail":{}}`
 
 func TestClassify(t *testing.T) {
 	if k, n := classify(json.RawMessage(streamEvent)); k != kindCatalogStream || n != 2 {
@@ -86,7 +86,7 @@ func TestClassify(t *testing.T) {
 }
 
 func TestHandleBothShapes(t *testing.T) {
-	st := &fakeStore{streamARN: "arn:aws:dynamodb:eu-west-1:123456789012:table/chddb___catalog/stream/x"}
+	st := &fakeStore{streamARN: "arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse___catalog/stream/x"}
 	rec := &fakeReconciler{}
 	var wired []string
 	h, err := newHandler(handlerConfig{Store: st, Reconciler: rec, Logger: quiet(), Margin: time.Second,

@@ -8,8 +8,8 @@ import (
 	"math"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // Limits guarding against corrupt or hostile input.

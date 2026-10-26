@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/config"
-	"dynamodb-eventstream/internal/replicator"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/config"
+	"github.com/gfronza/twinhouse/internal/replicator"
 )
 
 func TestParseRegions(t *testing.T) {

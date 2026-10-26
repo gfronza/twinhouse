@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 func ts3(s string) time.Time {

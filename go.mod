@@ -1,4 +1,4 @@
-module dynamodb-eventstream
+module github.com/gfronza/twinhouse
 
 go 1.27.0
 

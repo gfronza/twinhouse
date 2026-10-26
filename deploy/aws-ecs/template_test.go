@@ -30,10 +30,10 @@ func readFile(t *testing.T, path string) string {
 // required are the parameters without a default: account-specific values
 // the operator supplies (samconfig.toml placeholders).
 var required = map[string]string{
-	"ImageUri":         "123456789012.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream:v1",
+	"ImageUri":         "123456789012.dkr.ecr.us-east-1.amazonaws.com/twinhouse:v1",
 	"VpcId":            "vpc-0123456789abcdef0",
 	"SubnetIds":        "subnet-0123456789abcdef0,subnet-0123456789abcdef1",
-	"ChUsersSecretArn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:chddb-users-AbCdEf",
+	"ChUsersSecretArn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:twinhouse-users-AbCdEf",
 }
 
 // render instantiates the template in region with the required
@@ -202,7 +202,7 @@ func TestContainers(t *testing.T) {
 		if fmt.Sprint(s.eval(t, get(props, "RuntimePlatform", "CpuArchitecture"))) != "ARM64" {
 			t.Errorf("%s: RuntimePlatform.CpuArchitecture must follow the CpuArchitecture parameter", d.taskDef)
 		}
-		want := map[string]string{"TABLE_PREFIX": "chddb_", "GLOBAL_MODE": "aws", "LOG_LEVEL": "info", "CATALOG_REFRESH": "2s"}
+		want := map[string]string{"TABLE_PREFIX": "twinhouse_", "GLOBAL_MODE": "aws", "LOG_LEVEL": "info", "CATALOG_REFRESH": "2s"}
 		if svc != "replicator" {
 			want["REGION"] = "us-east-1"
 			want["REPLICA_REGIONS"] = "us-east-1,eu-west-1"
@@ -311,10 +311,10 @@ func TestChUsersFromSecretsManager(t *testing.T) {
 	// grant; it accepts full and partial ARNs.
 	arnPattern := regexp.MustCompile(get(tp.params["ChUsersSecretArn"], "AllowedPattern").(string))
 	for v, ok := range map[string]bool{
-		required["ChUsersSecretArn"]:                                                     true,
-		"arn:aws:secretsmanager:us-east-1:123456789012:secret:chddb/ch-users":            true,
-		required["ChUsersSecretArn"] + ":ch_users::":                                     false,
-		"arn:aws:secretsmanager:us-east-1:123456789012:secret:chddb/ch-users:ch_users::": false,
+		required["ChUsersSecretArn"]: true,
+		"arn:aws:secretsmanager:us-east-1:123456789012:secret:twinhouse/ch-users":            true,
+		required["ChUsersSecretArn"] + ":ch_users::":                                         false,
+		"arn:aws:secretsmanager:us-east-1:123456789012:secret:twinhouse/ch-users:ch_users::": false,
 	} {
 		if arnPattern.MatchString(v) != ok {
 			t.Errorf("ChUsersSecretArn AllowedPattern accepts %q = %v, want %v", v, !ok, ok)
@@ -562,7 +562,7 @@ func TestIAMIsScopedToTablePrefix(t *testing.T) {
 							t.Errorf("%s %s/%s: Resource '*' for %v", label, r, st.sid, st.actions)
 						}
 					case strings.Contains(res, ":dynamodb:"):
-						if !strings.Contains(res, ":table/chddb_") {
+						if !strings.Contains(res, ":table/twinhouse_") {
 							t.Errorf("%s %s/%s: DynamoDB ARN not scoped to the prefix: %s", label, r, st.sid, res)
 						}
 						if strings.Contains(res, ":dynamodb:*:") && st.condition == nil {
@@ -619,7 +619,7 @@ func TestIAMIsScopedToTablePrefix(t *testing.T) {
 	}
 	for _, st := range mv["dynamodb:CreateTableReplica"] {
 		for _, r := range st.resources {
-			if !strings.HasSuffix(r, ":table/chddb___catalog") {
+			if !strings.HasSuffix(r, ":table/twinhouse___catalog") {
 				t.Errorf("mvworker's replica permission must be limited to __catalog, got %s", r)
 			}
 		}
@@ -843,9 +843,9 @@ func TestMakefileTargets(t *testing.T) {
 	if out, err := run("image-push"); err == nil || !strings.Contains(out, "IMAGE_REPO") {
 		t.Errorf("make image-push must require IMAGE_REPO, got err=%v:\n%s", err, out)
 	}
-	out, err := run("image-push", "IMAGE_REPO=123456789012.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream", "IMAGE_TAG=v1", "PLATFORM=linux/amd64")
+	out, err := run("image-push", "IMAGE_REPO=123456789012.dkr.ecr.us-east-1.amazonaws.com/twinhouse", "IMAGE_TAG=v1", "PLATFORM=linux/amd64")
 	if err != nil || !strings.Contains(out, "buildx build --platform linux/amd64") || !strings.Contains(out, "-f deploy/Dockerfile") ||
-		!strings.Contains(out, "123456789012.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream:v1") || !strings.Contains(out, "--push") {
+		!strings.Contains(out, "123456789012.dkr.ecr.us-east-1.amazonaws.com/twinhouse:v1") || !strings.Contains(out, "--push") {
 		t.Errorf("make -n image-push: %v\n%s", err, out)
 	}
 	// The serverless targets keep working from their new directory.

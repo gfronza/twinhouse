@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/storage"
-	"dynamodb-eventstream/internal/storage/memstore"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/storage"
+	"github.com/gfronza/twinhouse/internal/storage/memstore"
 )
 
 // A view reading FROM a SummingMergeTree/AggregatingMergeTree table would

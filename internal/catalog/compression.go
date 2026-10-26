@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // NormalizeCodec renders a column CODEC list the way ClickHouse reports it in

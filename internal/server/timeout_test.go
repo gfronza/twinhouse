@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/exec"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/exec"
 )
 
 // stallingExec waits for ctx like a storage call to an unresponsive

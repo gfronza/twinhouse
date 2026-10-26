@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/chtype"
 )
 
 // Golden Native tests: testdata/native/<case>.rev<N>.hex holds the exact

@@ -20,13 +20,13 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/klauspost/compress/zstd"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/server"
-	"dynamodb-eventstream/internal/storage/memstore"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/server"
+	"github.com/gfronza/twinhouse/internal/storage/memstore"
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

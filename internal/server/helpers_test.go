@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // seenRequest is a copy of an exec.Request with Data read into memory.

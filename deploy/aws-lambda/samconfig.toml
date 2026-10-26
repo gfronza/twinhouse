@@ -35,11 +35,11 @@ lint = true
 
 [default.local_start_api.parameters]
 # Against the local Docker stack (deploy/local): DynamoDB Local of the "us"
-# region on the dhdev_default network, GLOBAL_MODE=emulated, no event-source
+# region on the twinhouse_default network, GLOBAL_MODE=emulated, no event-source
 # mappings (MVWORKER_FUNCTION_ARN empty). See `make aws-local-api`.
 # Serve the compiled bootstraps of `sam build`, not the source directories.
 template_file = ".aws-sam/build/template.yaml"
-docker_network = "dhdev_default"
+docker_network = "twinhouse_default"
 env_vars = "local-env.json"
 warm_containers = "EAGER"
 port = 3000
@@ -54,17 +54,17 @@ parameter_overrides = "VpcEndpointId=vpce-00000000000000000 GlobalMode=none Dyna
 # us-east-1: the home region (creates the global system tables). Deploy first.
 # ---------------------------------------------------------------------------
 [us.deploy.parameters]
-stack_name = "dynamodb-eventstream"
+stack_name = "twinhouse"
 region = "us-east-1"
 resolve_s3 = true
-s3_prefix = "dynamodb-eventstream"
+s3_prefix = "twinhouse"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 fail_on_empty_changeset = false
 disable_rollback = false
-tags = "Application=dynamodb-eventstream"
+tags = "Application=twinhouse"
 parameter_overrides = [
-  "TablePrefix=chddb_",
+  "TablePrefix=twinhouse_",
   "GlobalMode=aws",
   "ReplicaRegions=us-east-1,eu-west-1",
   "HomeRegion=us-east-1",
@@ -95,17 +95,17 @@ parameter_overrides = [
 # eu-west-1: a replica region. Deploy after the home region's stack is up.
 # ---------------------------------------------------------------------------
 [eu.deploy.parameters]
-stack_name = "dynamodb-eventstream"
+stack_name = "twinhouse"
 region = "eu-west-1"
 resolve_s3 = true
-s3_prefix = "dynamodb-eventstream"
+s3_prefix = "twinhouse"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 fail_on_empty_changeset = false
 disable_rollback = false
-tags = "Application=dynamodb-eventstream"
+tags = "Application=twinhouse"
 parameter_overrides = [
-  "TablePrefix=chddb_",
+  "TablePrefix=twinhouse_",
   "GlobalMode=aws",
   "ReplicaRegions=us-east-1,eu-west-1",
   "HomeRegion=us-east-1",

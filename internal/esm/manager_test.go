@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	streamA   = "arn:aws:dynamodb:eu-west-1:123456789012:table/chddb_default.events/stream/2026-01-01T00:00:00.000"
-	streamB   = "arn:aws:dynamodb:eu-west-1:123456789012:table/chddb_default.other/stream/2026-01-01T00:00:00.000"
-	mvworker  = "arn:aws:lambda:eu-west-1:123456789012:function:chddb-mvworker"
-	replicatr = "arn:aws:lambda:eu-west-1:123456789012:function:chddb-replicator"
+	streamA   = "arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse_default.events/stream/2026-01-01T00:00:00.000"
+	streamB   = "arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse_default.other/stream/2026-01-01T00:00:00.000"
+	mvworker  = "arn:aws:lambda:eu-west-1:123456789012:function:twinhouse-mvworker"
+	replicatr = "arn:aws:lambda:eu-west-1:123456789012:function:twinhouse-replicator"
 )
 
 // fakeLambda is an in-memory Lambda event-source-mapping API.
@@ -454,27 +454,27 @@ func TestRemoveByTableAndPagination(t *testing.T) {
 	f := newFake()
 	f.pageSize = 2
 	m := newManager(t, f)
-	old := "arn:aws:dynamodb:eu-west-1:123456789012:table/chddb_default.events/stream/2025-01-01T00:00:00.000"
+	old := "arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse_default.events/stream/2025-01-01T00:00:00.000"
 	f.add(streamB, mvworker, "Enabled", DefaultBatchSize)
 	f.add(old, mvworker, "Enabled", DefaultBatchSize)
-	f.add("arn:aws:dynamodb:eu-west-1:123456789012:table/chddb_default.events_2/stream/x", mvworker, "Enabled", DefaultBatchSize)
+	f.add("arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse_default.events_2/stream/x", mvworker, "Enabled", DefaultBatchSize)
 	f.add(streamA, mvworker, "Enabled", DefaultBatchSize)
 	f.add(streamA, replicatr, "Enabled", DefaultBatchSize)
-	if err := m.RemoveByTable(ctx, "chddb_default.events", mvworker); err != nil {
+	if err := m.RemoveByTable(ctx, "twinhouse_default.events", mvworker); err != nil {
 		t.Fatal(err)
 	}
 	var left []string
 	for _, g := range f.snapshot() {
 		left = append(left, *g.EventSourceArn+"->"+*g.FunctionArn)
 	}
-	want := []string{streamB + "->" + mvworker, "arn:aws:dynamodb:eu-west-1:123456789012:table/chddb_default.events_2/stream/x->" + mvworker, streamA + "->" + replicatr}
+	want := []string{streamB + "->" + mvworker, "arn:aws:dynamodb:eu-west-1:123456789012:table/twinhouse_default.events_2/stream/x->" + mvworker, streamA + "->" + replicatr}
 	if !slices.Equal(left, want) {
 		t.Errorf("left %v\nwant %v", left, want)
 	}
 	if f.count("List") != 2 { // 4 of the function's mappings in pages of 2
 		t.Errorf("pagination not followed: %d list calls, want 2", f.count("List"))
 	}
-	if TableOfStreamARN("junk") != "" || TableOfStreamARN(streamA) != "chddb_default.events" {
+	if TableOfStreamARN("junk") != "" || TableOfStreamARN(streamA) != "twinhouse_default.events" {
 		t.Error("TableOfStreamARN")
 	}
 }

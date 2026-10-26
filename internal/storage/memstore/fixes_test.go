@@ -5,9 +5,9 @@ import (
 	"io"
 	"testing"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // TestMarkAbsent: an attribute missing from an item (column added by ALTER

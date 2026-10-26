@@ -2,7 +2,7 @@
 
 // Package compat is the differential compatibility suite: every scenario in
 // testdata/*.sql runs against the reference ClickHouse (CLICKHOUSE_REF_URL)
-// and against chddb (CHDDB_URL), and the outputs must be identical — raw HTTP
+// and against twinhouse (TWINHOUSE_URL), and the outputs must be identical — raw HTTP
 // bodies for text formats, decoded values + column names/types for
 // clickhouse-go Native, and error codes / HTTP statuses for invalid
 // statements. See corpus_test.go for the directive syntax.
@@ -89,7 +89,7 @@ func runScenario(t *testing.T, ref, our *target, db string, stmts []*stmt) {
 		t.Fatalf("open reference: %v", err)
 	}
 	if sc.ourConn, err = our.open(db); err != nil {
-		t.Fatalf("open chddb: %v", err)
+		t.Fatalf("open twinhouse: %v", err)
 	}
 	t.Cleanup(func() { sc.refConn.Close(); sc.ourConn.Close() })
 
@@ -139,7 +139,7 @@ func (sc *scenario) exec(t *testing.T, s *stmt, sql, loc string) {
 	}
 	o := sc.our.do(ctx, sql, sc.opts(s))
 	if o.failed() {
-		t.Fatalf("%s: setup statement failed on chddb (reference succeeded):\n%s\n  -> %s", loc, sql, o.describe())
+		t.Fatalf("%s: setup statement failed on twinhouse (reference succeeded):\n%s\n  -> %s", loc, sql, o.describe())
 	}
 }
 
@@ -217,12 +217,12 @@ func (sc *scenario) errorCase(t *testing.T, s *stmt, sql, loc string) {
 	}
 	g := sc.our.do(ctx, sql, sc.opts(s))
 	if !g.failed() {
-		t.Errorf("%s: reference fails with code %d (HTTP %d) but chddb SUCCEEDED\nquery:\n%s\nreference: %s\nchddb body: %s",
+		t.Errorf("%s: reference fails with code %d (HTTP %d) but twinhouse SUCCEEDED\nquery:\n%s\nreference: %s\ntwinhouse body: %s",
 			loc, w.code, w.status, indent(sql), w.describe(), truncate(string(g.body), 400))
 		return
 	}
 	if g.code != w.code || g.status != w.status {
-		t.Errorf("%s: error mismatch\nquery:\n%s\nreference: code=%d HTTP %d: %s\nchddb:     code=%d HTTP %d: %s",
+		t.Errorf("%s: error mismatch\nquery:\n%s\nreference: code=%d HTTP %d: %s\ntwinhouse:     code=%d HTTP %d: %s",
 			loc, indent(sql), w.code, w.status, firstLine(w.body), g.code, g.status, firstLine(g.body))
 	}
 	// clickhouse-go must surface the same code.
@@ -232,17 +232,17 @@ func (sc *scenario) errorCase(t *testing.T, s *stmt, sql, loc string) {
 	wn := nativeQuery(ctx, sc.refConn, sql, s)
 	gn := nativeQuery(ctx, sc.ourConn, sql, s)
 	if wn.code != 0 && gn.code != wn.code {
-		t.Errorf("%s: clickhouse-go error code mismatch: reference %d (%v), chddb %d (%v)", loc, wn.code, wn.err, gn.code, gn.err)
+		t.Errorf("%s: clickhouse-go error code mismatch: reference %d (%v), twinhouse %d (%v)", loc, wn.code, wn.err, gn.code, gn.err)
 	}
 }
 
-// notImplemented checks a documented limitation: chddb must refuse the
+// notImplemented checks a documented limitation: twinhouse must refuse the
 // statement with one of the given codes instead of returning a wrong result.
 func (sc *scenario) notImplemented(t *testing.T, s *stmt, sql, loc string, codes ...int) {
 	ctx := context.Background()
 	g := sc.our.do(ctx, sql, sc.opts(s))
 	if !slices.Contains(codes, g.code) {
-		t.Errorf("%s: documented limitation (%s): chddb must answer code %v, got %s\nquery:\n%s",
+		t.Errorf("%s: documented limitation (%s): twinhouse must answer code %v, got %s\nquery:\n%s",
 			loc, s.deviation, codes, g.describe(), indent(sql))
 	}
 }

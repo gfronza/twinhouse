@@ -472,8 +472,8 @@ func TestLocalComposeConfig(t *testing.T) {
 	if !strings.Contains(string(out), "context: "+root+"\n") || !strings.Contains(string(out), "dockerfile: deploy/Dockerfile") {
 		t.Errorf("compose build context should be the repository root with deploy/Dockerfile:\n%s", out)
 	}
-	if !strings.Contains(string(out), "dynamodb-eventstream:dev") {
-		t.Errorf("compose should default the image to dynamodb-eventstream:dev")
+	if !strings.Contains(string(out), "twinhouse:dev") {
+		t.Errorf("compose should default the image to twinhouse:dev")
 	}
 }
 

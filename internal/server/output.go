@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/exec"
-	"dynamodb-eventstream/internal/format"
-	"dynamodb-eventstream/internal/sqlparse"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/exec"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
 // summaryStats is the X-ClickHouse-Summary payload.

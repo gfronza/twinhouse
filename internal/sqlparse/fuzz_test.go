@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // FuzzParse checks that arbitrary input never panics, that every error is a

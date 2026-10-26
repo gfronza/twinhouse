@@ -32,7 +32,7 @@ import (
 
 // target is one server under comparison.
 type target struct {
-	name string // "reference" | "chddb"
+	name string // "reference" | "twinhouse"
 	base *url.URL
 }
 
@@ -58,13 +58,13 @@ func loadTargets() {
 		targetsErr = err
 		return
 	}
-	our, err := url.Parse(envOr("CHDDB_URL", "http://localhost:8123"))
+	our, err := url.Parse(envOr("TWINHOUSE_URL", "http://localhost:8123"))
 	if err != nil {
 		targetsErr = err
 		return
 	}
 	refTarget = &target{name: "reference", base: ref}
-	ourTarget = &target{name: "chddb", base: our}
+	ourTarget = &target{name: "twinhouse", base: our}
 	for _, tg := range []*target{refTarget, ourTarget} {
 		resp, err := httpClient.Get(tg.base.JoinPath("/ping").String())
 		if err != nil {

@@ -1,4 +1,4 @@
-// Package deployawslambda holds the AWS SAM deployment of dynamodb-eventstream
+// Package deployawslambda holds the AWS SAM deployment of twinhouse
 // (template.yaml, samconfig.toml, local-env.json, README.md): the
 // ClickHouse-compatible HTTP API on Lambda behind a private REST API
 // Gateway, with the stream worker, the replicator and the reconciler as

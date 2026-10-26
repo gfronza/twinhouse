@@ -9,7 +9,7 @@ import (
 	"time"
 	_ "time/tzdata" // explicit DateTime('tz') must work without system zoneinfo
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 var locCache sync.Map // tz name -> *time.Location

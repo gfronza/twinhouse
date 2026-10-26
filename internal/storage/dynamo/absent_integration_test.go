@@ -3,9 +3,9 @@ package dynamo
 import (
 	"testing"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // TestIntegrationAddColumnAbsent: rows written before ALTER TABLE ADD COLUMN

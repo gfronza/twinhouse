@@ -3,7 +3,7 @@ package sqlparse
 import (
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 func TestSelectAnalyticsQueries(t *testing.T) {

@@ -12,10 +12,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/chtype"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 func (e *env) describe(name string) *ddbtypes.TableDescription {

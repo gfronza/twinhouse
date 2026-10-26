@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // The oracle corpus: every case runs its fixtures and query on this engine

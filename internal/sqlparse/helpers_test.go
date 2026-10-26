@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 func mustParse(t *testing.T, sql string) Statement {

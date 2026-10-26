@@ -5,12 +5,12 @@ import (
 	"slices"
 	"testing"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/config"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/config"
 )
 
 func table(engine, repl, ver string) *catalog.Table {
-	return &catalog.Table{Database: "default", Name: "t", PhysicalName: "chddb_default.t", Engine: engine, Replication: repl, VersionColumn: ver}
+	return &catalog.Table{Database: "default", Name: "t", PhysicalName: "twinhouse_default.t", Engine: engine, Replication: repl, VersionColumn: ver}
 }
 
 func TestTargets(t *testing.T) {

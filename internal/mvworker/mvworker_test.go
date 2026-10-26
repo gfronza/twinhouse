@@ -15,9 +15,9 @@ import (
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	sttypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 
-	"dynamodb-eventstream/internal/catalog"
-	"dynamodb-eventstream/internal/cherr"
-	"dynamodb-eventstream/internal/storage"
+	"github.com/gfronza/twinhouse/internal/catalog"
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/storage"
 )
 
 // fakeCatalog is a minimal in-memory catalog.Catalog.
@@ -396,7 +396,7 @@ func TestTableFromStreamARN(t *testing.T) {
 		arn, table string
 		ok         bool
 	}{
-		{"arn:aws:dynamodb:us-east-1:123456789012:table/chddb_db.events/stream/2024-01-01T00:00:00.000", "chddb_db.events", true},
+		{"arn:aws:dynamodb:us-east-1:123456789012:table/twinhouse_db.events/stream/2024-01-01T00:00:00.000", "twinhouse_db.events", true},
 		{"arn:aws:dynamodb:ddblocal:000000000000:table/t/stream/x", "t", true},
 		{"arn:aws:dynamodb:us-east-1:1:table/t", "", false},
 		{"arn:aws:dynamodb:us-east-1:1:table//stream/x", "", false},

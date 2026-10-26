@@ -14,19 +14,19 @@
 #   Host ports are overridable (US_HTTP_PORT, EU_HTTP_PORT, DDB_US_PORT, DDB_EU_PORT,
 #   CH_REF_PORT, DDB_SINGLE_PORT, SINGLE_HTTP_PORT) so a second stack can run
 #   under another COMPOSE_PROJECT, e.g. for tests that restart containers.
-#   CHDDB_IMAGE (default dynamodb-eventstream:dev) names the built image, so a
+#   TWINHOUSE_IMAGE (default twinhouse:dev) names the built image, so a
 #   second stack built from another tree does not retag the first one's image.
-name: dynamodb-eventstream
+name: twinhouse
 
 x-image: &image
-  image: ${CHDDB_IMAGE:-dynamodb-eventstream:dev}
+  image: ${TWINHOUSE_IMAGE:-twinhouse:dev}
   build:
     context: ../..
     dockerfile: deploy/Dockerfile
   restart: unless-stopped
 
 x-env: &env
-  TABLE_PREFIX: chddb_
+  TABLE_PREFIX: twinhouse_
   GLOBAL_MODE: emulated
   REPLICA_REGIONS: us-east-1,eu-west-1
   LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -150,7 +150,7 @@ services:
     command: ["chserver"]
     ports: ["${SINGLE_HTTP_PORT:-8125}:8123"]
     environment:
-      TABLE_PREFIX: chddb_
+      TABLE_PREFIX: twinhouse_
       GLOBAL_MODE: none
       REGION: us-east-1
       DYNAMODB_ENDPOINT: http://dynamodb-single:8000

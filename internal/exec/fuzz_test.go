@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"dynamodb-eventstream/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
 // FuzzExecute checks that no statement makes the engine panic.
