@@ -415,9 +415,10 @@ func TestDropDatabaseRemovesObjects(t *testing.T) {
 	must(t, other.Refresh(ctx))
 	must(t, other.CreateView(ctx, &View{Database: "app", Name: "v", SelectSQL: "SELECT 1"}, false))
 	must(t, a.CreateTable(ctx, eventsTable("default", "keep"), false))
+	ev, _ := a.Table("app", "events")
 
 	must(t, a.DropDatabase(ctx, "app", false))
-	if _, ok := a.TableByPhysicalName("p_app.events"); ok {
+	if _, ok := a.TableByPhysicalName(ev.PhysicalName); ok {
 		t.Fatal("physical index not cleaned")
 	}
 	keys := backendKeys(b)
