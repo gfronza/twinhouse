@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,22 @@ func TestNativeDecodeMapping(t *testing.T) {
 	dec, _ = NewDecoder("Native", bytes.NewReader(data), target, Options{Settings: map[string]string{"input_format_skip_unknown_fields": "0"}})
 	if _, err := dec.Next(); !cherr.Is(err, cherr.IncorrectData) {
 		t.Fatalf("unknown column: got %v", err)
+	}
+}
+
+// TestNativeDecodeHeaderTypeError checks that a bad column type keeps the
+// code its parse raised.
+func TestNativeDecodeHeaderTypeError(t *testing.T) {
+	cols := []Column{col("c", "String")}
+	for typ, code := range map[string]int{
+		"Junk":                    cherr.UnknownType,
+		"FixedString(2147483647)": cherr.ArgumentOutOfBound,
+		strings.Repeat("Array(", 2000) + "String" + strings.Repeat(")", 2000): cherr.TooDeepRecursion,
+	} {
+		dec, _ := NewDecoder("Native", bytes.NewReader(nativeBlock(0, typ)), cols, Options{})
+		if _, err := dec.Next(); !cherr.Is(err, code) {
+			t.Errorf("%.40s: got %v, want code %d", typ, err, code)
+		}
 	}
 }
 

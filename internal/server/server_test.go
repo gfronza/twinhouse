@@ -97,7 +97,7 @@ func TestQueryAndDataSources(t *testing.T) {
 			wantQuery: "INSERT INTO db.t (a) FORMAT JSONEachRow", wantData: ptr(big)},
 		{name: "large inline VALUES insert is streamed", method: "POST", url: "/", body: "INSERT INTO t (a, `format`) VALUES " + bigValues,
 			wantQuery: "INSERT INTO t (a, `format`) VALUES", wantData: ptr(" " + bigValues)},
-		{name: "large non-insert read whole", method: "POST", url: "/", body: "SELECT '" + big + "'",
+		{name: "large non-insert read whole", method: "POST", url: "/?max_query_size=4194304", body: "SELECT '" + big + "'",
 			wantQuery: "SELECT '" + big + "'"},
 	}
 	for _, tc := range cases {

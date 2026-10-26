@@ -94,10 +94,10 @@ func EncodeTable(t *Table) ([]byte, error) {
 }
 
 // DecodeTable parses a persisted table definition, re-parsing column types
-// with parse (chtype.Parse when nil).
+// with parse (chtype.ParseStored when nil).
 func DecodeTable(b []byte, parse func(string) (chtype.Type, error)) (*Table, error) {
 	if parse == nil {
-		parse = chtype.Parse
+		parse = chtype.ParseStored
 	}
 	var d tableDef
 	if err := json.Unmarshal(b, &d); err != nil {

@@ -7,10 +7,8 @@ import (
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/limits"
 )
-
-// maxRangeElements bounds range() results.
-const maxRangeElements = 100_000_000
 
 func init() {
 	reg(buildRange, "range")
@@ -78,26 +76,53 @@ func buildRange(c *compiler, name string, args []*expr) (*expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	unsigned := !isSignedKind(et.Kind)
 	return strict(args, chtype.NewArray(et), func(v []any) (any, error) {
-		start, end, step := int64(0), asInt(v[0]), int64(1)
-		if len(v) >= 2 {
-			start, end = asInt(v[0]), asInt(v[1])
+		start, end, step, err := rangeArgs(name, v, unsigned)
+		if err != nil {
+			return nil, err
 		}
-		if len(v) == 3 {
-			step = asInt(v[2])
+		n, err := rangeCount(name, start, end, step, unsigned)
+		if err != nil {
+			return nil, err
 		}
-		if step <= 0 {
-			return nil, cherr.New(cherr.BadArguments, "A call to function %s overflows, step must be positive", name)
-		}
-		if end > start && (uint64(end)-uint64(start))/uint64(step) > maxRangeElements {
-			return nil, cherr.New(cherr.BadArguments, "A call to function %s overflows, investigate the values of arguments you are passing", name)
-		}
-		out := []any{}
-		for x := start; x < end; x += step {
-			out = append(out, aggstate.Wrap(et, x))
+		out := make([]any, n)
+		for i := range out {
+			out[i] = aggstate.Wrap(et, start+uint64(i)*step)
 		}
 		return out, nil
 	}), nil
+}
+
+// rangeArgs returns the start, end and step of a range() call as 64-bit
+// two's-complement words.
+func rangeArgs(name string, v []any, unsigned bool) (start, end, step uint64, err error) {
+	start, end, step = 0, asUint(v[0]), 1
+	if len(v) >= 2 {
+		start, end = asUint(v[0]), asUint(v[1])
+	}
+	if len(v) == 3 {
+		step = asUint(v[2])
+	}
+	if step == 0 || !unsigned && int64(step) < 0 {
+		return 0, 0, 0, cherr.New(cherr.BadArguments, "A call to function %s overflows, step must be positive", name)
+	}
+	return start, end, step, nil
+}
+
+// rangeCount returns how many elements range(start, end, step) produces,
+// computed without overflow.
+func rangeCount(name string, start, end, step uint64, unsigned bool) (uint64, error) {
+	if unsigned && end <= start || !unsigned && int64(end) <= int64(start) {
+		return 0, nil
+	}
+	n := (end-start-1)/step + 1
+	if n > limits.MaxRangeElements {
+		return 0, cherr.New(cherr.ArgumentOutOfBound,
+			"A call to function %s would produce %d array elements, which is greater than the allowed maximum of %d",
+			name, n, limits.MaxRangeElements)
+	}
+	return n, nil
 }
 
 func buildArrayStringConcat(c *compiler, name string, args []*expr) (*expr, error) {
@@ -120,6 +145,11 @@ func buildArrayStringConcat(c *compiler, name string, args []*expr) (*expr, erro
 		for _, e := range v[0].([]any) {
 			if e != nil {
 				parts = append(parts, valueToString(c.q, e, et))
+			}
+		}
+		if len(parts) > 1 {
+			if err := checkResultSize(name, satMul(uint64(len(parts)-1), uint64(len(sep)))); err != nil {
+				return nil, err
 			}
 		}
 		return strings.Join(parts, sep), nil
@@ -393,12 +423,15 @@ func buildRepeat(c *compiler, name string, args []*expr) (*expr, error) {
 	}
 	return strict(args, chtype.TString, func(v []any) (any, error) {
 		n := asInt(v[1])
+		if u, ok := v[1].(uint64); ok && u > limits.MaxRepeatTimes || n > limits.MaxRepeatTimes {
+			return nil, cherr.New(cherr.TooLargeStringSize, "Too many times to repeat (%v), maximum is: %d", v[1], limits.MaxRepeatTimes)
+		}
 		if n <= 0 {
 			return "", nil
 		}
 		s := v[0].(string)
-		if int64(len(s))*n > 1<<30 {
-			return nil, cherr.New(cherr.BadArguments, "Too large result of function %s", name)
+		if err := checkResultSize(name, satMul(uint64(len(s)), uint64(n))); err != nil {
+			return nil, err
 		}
 		return strings.Repeat(s, int(n)), nil
 	}), nil

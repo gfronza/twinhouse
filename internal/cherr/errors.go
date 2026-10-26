@@ -56,12 +56,15 @@ const (
 	UnknownSetting                   = 115
 	IncorrectData                    = 117
 	IncorrectResultOfScalarSubquery  = 125
+	TooLargeArraySize                = 128
 	CannotReadArrayFromText          = 130
 	TooLargeStringSize               = 131
 	IllegalDivision                  = 153
 	TooManyRows                      = 158
 	Timeout                          = 159 // TIMEOUT_EXCEEDED
 	ReadonlyQuery                    = 164 // READONLY
+	TooDeepAST                       = 167
+	TooBigAST                        = 168
 	IllegalAggregation               = 184
 	SizesOfArraysDontMatch           = 190
 	RequiredPassword                 = 194
@@ -84,6 +87,7 @@ const (
 	QueryWasCancelled                = 394
 	TooManyRowsOrBytes               = 396
 	DecimalOverflow                  = 407
+	CannotCompileRegexp              = 427
 	BrotliReadFailed                 = 448
 	UnknownQueryParameter            = 456
 	BadQueryParameter                = 457
@@ -122,7 +126,7 @@ func HTTPStatus(code int) int {
 	case CannotParseText, ThereIsNoColumn, DuplicateColumn, CannotParseEscapeSequence, CannotParseQuotedString,
 		CannotParseInputAssertionFailed, BadArguments, 37, CannotParseDate, CannotParseDateTime, IllegalColumn,
 		TypeMismatch, SyntaxError, CannotParseNumber, IncorrectData, 123, 167, 168, UnexpectedASTStructure, 321,
-		CannotParseUUID, 427, 441, 675, 676:
+		CannotParseUUID, CannotCompileRegexp, 441, 675, 676:
 		return http.StatusBadRequest
 	case UnknownFunction, UnknownIdentifier, UnknownType, UnknownStorage, UnknownTable, UnknownAggregateFunction,
 		UnknownFormat, 78, UnknownDatabase, UnknownSetting, 152, 336, 511:

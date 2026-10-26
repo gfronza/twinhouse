@@ -5,8 +5,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/limits"
 )
 
 // codeDataTypeCannotHaveArguments is DATA_TYPE_CANNOT_HAVE_ARGUMENTS.
@@ -27,6 +29,7 @@ const (
 	tkNumber         // numeric literal (text is the literal, sign included)
 	tkString         // 'string' literal (text is the unescaped value)
 	tkPunct          // ( ) , =
+	tkError          // lexical error, held in typeParser.lexErr
 )
 
 type token struct {
@@ -35,55 +38,72 @@ type token struct {
 	pos  int
 }
 
-func lexType(s string) ([]token, error) {
-	var toks []token
-	i := 0
-	for i < len(s) {
-		c := s[i]
-		switch {
-		case isSpace(c):
-			i++
-		case c == '(' || c == ')' || c == ',' || c == '=':
-			toks = append(toks, token{tkPunct, string(c), i})
-			i++
-		case c == '\'':
-			v, n, err := readQuotedStringLit(s[i:], '\'')
-			if err != nil {
-				return nil, errf(cherr.SyntaxError, "Syntax error (data type): failed at position %d: %s", i+1, s)
-			}
-			toks = append(toks, token{tkString, v, i})
-			i += n
-		case c == '`' || c == '"':
-			v, n, err := readQuotedStringLit(s[i:], c)
-			if err != nil {
-				return nil, errf(cherr.SyntaxError, "Syntax error (data type): failed at position %d: %s", i+1, s)
-			}
-			toks = append(toks, token{tkQIdent, v, i})
-			i += n
-		case isIdentStart(c):
-			j := i + 1
-			for j < len(s) && isIdentChar(s[j]) {
-				j++
-			}
-			toks = append(toks, token{tkIdent, s[i:j], i})
-			i = j
-		case isDigit(c) || ((c == '-' || c == '+' || c == '.') && i+1 < len(s) && (isDigit(s[i+1]) || s[i+1] == '.')):
-			j := i
-			if s[j] == '-' || s[j] == '+' {
-				j++
-			}
-			for j < len(s) && (isDigit(s[j]) || s[j] == '.' || s[j] == '_' || isIdentChar(s[j]) ||
-				((s[j] == '-' || s[j] == '+') && (s[j-1] == 'e' || s[j-1] == 'E'))) {
-				j++
-			}
-			toks = append(toks, token{tkNumber, s[i:j], i})
-			i = j
-		default:
-			return nil, errf(cherr.SyntaxError, "Syntax error (data type): failed at position %d (%q): %s", i+1, string(c), s)
-		}
+// lexToken reads the token that starts at or after offset i of s and
+// returns it with the offset just past it.
+func lexToken(s string, i int) (token, int, error) {
+	for i < len(s) && isSpace(s[i]) {
+		i++
 	}
-	toks = append(toks, token{tkEOF, "", len(s)})
-	return toks, nil
+	if i == len(s) {
+		return token{tkEOF, "", i}, i, nil
+	}
+	c := s[i]
+	switch {
+	case c == '(' || c == ')' || c == ',' || c == '=':
+		return token{tkPunct, s[i : i+1], i}, i + 1, nil
+	case c == '\'' || c == '`' || c == '"':
+		v, n, err := readQuotedStringLit(s[i:], c)
+		if err != nil {
+			return token{}, i, errf(cherr.SyntaxError, "Syntax error (data type): failed at position %d: %s", i+1, excerpt(s, i))
+		}
+		kind := tkQIdent
+		if c == '\'' {
+			kind = tkString
+		}
+		return token{kind, v, i}, i + n, nil
+	case isIdentStart(c):
+		j := i + 1
+		for j < len(s) && isIdentChar(s[j]) {
+			j++
+		}
+		return token{tkIdent, s[i:j], i}, j, nil
+	case isDigit(c) || ((c == '-' || c == '+' || c == '.') && i+1 < len(s) && (isDigit(s[i+1]) || s[i+1] == '.')):
+		j := i
+		if s[j] == '-' || s[j] == '+' {
+			j++
+		}
+		for j < len(s) && (isDigit(s[j]) || s[j] == '.' || s[j] == '_' || isIdentChar(s[j]) ||
+			((s[j] == '-' || s[j] == '+') && (s[j-1] == 'e' || s[j-1] == 'E'))) {
+			j++
+		}
+		return token{tkNumber, s[i:j], i}, j, nil
+	}
+	return token{}, i, errf(cherr.SyntaxError, "Syntax error (data type): failed at position %d (%q): %s", i+1, string(c), excerpt(s, i))
+}
+
+// excerptBytes is how much of a type ClickHouse shows after a syntax error
+// (SHOW_CHARS_ON_SYNTAX_ERROR).
+const excerptBytes = 160
+
+// excerpt is the type text shown in a syntax error: s from pos, cut short.
+func excerpt(s string, pos int) string { return cutShort(s[pos:]) }
+
+// cutShort keeps a huge type or token from being copied into a message.
+func cutShort(s string) string {
+	if len(s) <= excerptBytes {
+		return s
+	}
+	cut := excerptBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
+}
+
+// errTooDeep is ClickHouse's error for a type nested deeper than
+// max_parser_depth.
+func errTooDeep() error {
+	return errf(cherr.TooDeepRecursion, "Maximum parse depth (%d) exceeded. Consider rising max_parser_depth parameter.", limits.MaxParserDepth)
 }
 
 // readQuotedStringLit reads a quoted literal starting at s[0] (the quote),
@@ -126,18 +146,56 @@ func isIdentChar(c byte) bool  { return isIdentStart(c) || isDigit(c) }
 // ---------------------------------------------------------------------------
 // Parser
 
+// typeParser lexes lazily, so a bad type fails at its first bad token
+// without the rest of it being tokenized.
 type typeParser struct {
-	src  string
-	toks []token
-	pos  int
+	src    string
+	off    int     // lexer offset in src
+	ahead  []token // tokens lexed but not yet consumed
+	lexErr error   // lexical error behind a tkError token
+	depth  int     // nested parseType calls
+}
+
+// maxTypeNameBytes caps a type name read from a query or a request body
+// (ClickHouse's DBMS_DEFAULT_MAX_QUERY_SIZE). The parser allocates over 100
+// bytes per byte of a long Tuple, so the cap also bounds its memory.
+const maxTypeNameBytes = 262144
+
+// parseTypeCapped is parseType for untrusted input: a name over
+// maxTypeNameBytes fails before it is lexed.
+func parseTypeCapped(s string) (Type, error) {
+	if len(s) > maxTypeNameBytes {
+		return Type{}, errf(cherr.SyntaxError, "Max query size exceeded (can be increased with the `max_query_size` setting): Syntax error (data type): failed at position %d: %s", maxTypeNameBytes+1, excerpt(s, maxTypeNameBytes))
+	}
+	return parseType(s)
 }
 
 func parseType(s string) (Type, error) {
-	toks, err := lexType(s)
-	if err != nil {
-		return Type{}, err
+	p := &typeParser{src: s}
+	t, err := p.parseWhole()
+	if err == nil {
+		return t, nil
 	}
-	p := &typeParser{src: s, toks: toks}
+	// ClickHouse parses the whole type before resolving it, so a
+	// lexical error anywhere wins over all but the depth error, which it
+	// raises while parsing.
+	if !cherr.Is(err, cherr.TooDeepRecursion) {
+		p.lexRest()
+	}
+	if p.lexErr != nil {
+		return Type{}, p.lexErr
+	}
+	return Type{}, err
+}
+
+// lexRest tokenizes the rest of src without keeping the tokens, to find a
+// lexical error.
+func (p *typeParser) lexRest() {
+	for !isLastToken(p.lex()) {
+	}
+}
+
+func (p *typeParser) parseWhole() (Type, error) {
 	if p.peek().kind == tkEOF {
 		return Type{}, errf(cherr.SyntaxError, "Syntax error (data type): empty type name")
 	}
@@ -151,27 +209,52 @@ func parseType(s string) (Type, error) {
 	return t, nil
 }
 
-func (p *typeParser) peek() token { return p.toks[p.pos] }
-func (p *typeParser) peekN(n int) token {
-	if p.pos+n < len(p.toks) {
-		return p.toks[p.pos+n]
+// lex reads the next token from src. It returns tkError, and keeps
+// returning it, once src cannot be tokenized.
+func (p *typeParser) lex() token {
+	if p.lexErr != nil {
+		return token{kind: tkError, pos: p.off}
 	}
-	return p.toks[len(p.toks)-1]
+	tk, off, err := lexToken(p.src, p.off)
+	p.off = off
+	if err != nil {
+		p.lexErr = err
+		return token{kind: tkError, pos: off}
+	}
+	return tk
 }
+
+// peekN returns the token n ahead of the current one. Past the end it
+// returns the final tkEOF or tkError token.
+func (p *typeParser) peekN(n int) token {
+	for len(p.ahead) <= n {
+		if k := len(p.ahead); k > 0 && isLastToken(p.ahead[k-1]) {
+			return p.ahead[k-1]
+		}
+		p.ahead = append(p.ahead, p.lex())
+	}
+	return p.ahead[n]
+}
+
+func (p *typeParser) peek() token { return p.peekN(0) }
+
 func (p *typeParser) next() token {
-	t := p.toks[p.pos]
-	if t.kind != tkEOF {
-		p.pos++
+	t := p.peek()
+	if !isLastToken(t) {
+		// Shift in place: the buffer holds at most a few tokens.
+		p.ahead = p.ahead[:copy(p.ahead, p.ahead[1:])]
 	}
 	return t
 }
 
+func isLastToken(t token) bool { return t.kind == tkEOF || t.kind == tkError }
+
 func (p *typeParser) syntaxErr(tk token, expected string) error {
-	at := tk.text
+	at := cutShort(tk.text)
 	if tk.kind == tkEOF {
 		at = "end of query"
 	}
-	return errf(cherr.SyntaxError, "Syntax error (data type): failed at position %d (%s): %s. Expected %s", tk.pos+1, at, p.src, expected)
+	return errf(cherr.SyntaxError, "Syntax error (data type): failed at position %d (%s): %s. Expected %s", tk.pos+1, at, excerpt(p.src, tk.pos), expected)
 }
 
 func (p *typeParser) isPunct(s string) bool {
@@ -294,7 +377,21 @@ func (p *typeParser) compoundAt() (string, int) {
 	return "", 0
 }
 
+// enter counts one more level of type nesting; leave undoes it.
+func (p *typeParser) enter() error {
+	if p.depth++; p.depth > limits.MaxParserDepth {
+		return errTooDeep()
+	}
+	return nil
+}
+
+func (p *typeParser) leave() { p.depth-- }
+
 func (p *typeParser) parseType() (Type, error) {
+	if err := p.enter(); err != nil {
+		return Type{}, err
+	}
+	defer p.leave()
 	tk := p.peek()
 	if tk.kind != tkIdent && tk.kind != tkQIdent {
 		return Type{}, p.syntaxErr(tk, "data type")
@@ -302,7 +399,9 @@ func (p *typeParser) parseType() (Type, error) {
 	family := ""
 	if fam, n := p.compoundAt(); n > 0 {
 		family = fam
-		p.pos += n
+		for range n {
+			p.next()
+		}
 	} else {
 		p.next()
 		if _, ok := canonicalFamilies[tk.text]; ok {
@@ -436,8 +535,11 @@ func (p *typeParser) parseFixedString(hasArgs bool) (Type, error) {
 	p.next()
 	tk := p.next()
 	n, ok := parseUintLiteral(tk)
-	if !ok || n == 0 || n > math.MaxInt32 {
+	if !ok || n == 0 {
 		return Type{}, errf(cherr.BadArguments, "FixedString data type family must have a number (positive integer) as its argument")
+	}
+	if n > limits.MaxFixedStringSize {
+		return Type{}, errf(cherr.ArgumentOutOfBound, "FixedString size is too large")
 	}
 	if err := p.expectPunct(")"); err != nil {
 		return Type{}, err
@@ -566,10 +668,9 @@ func (p *typeParser) parseEnum(family string, hasArgs bool) (Type, error) {
 	}
 	// Implicit numbering is allowed only when no element has a value, or
 	// when just the first one does (it sets the starting number).
-	for i, e := range explicit {
-		if e && i > 0 && slices.Contains(explicit, false) {
-			return Type{}, errf(codeUnexpectedASTStructure, "All elements of Enum data type must be of form: 'name' = number or 'name', where name is string literal and number is an integer")
-		}
+	hasImplicit := slices.Contains(explicit, false)
+	if hasImplicit && slices.Contains(explicit[1:], true) {
+		return Type{}, errf(codeUnexpectedASTStructure, "All elements of Enum data type must be of form: 'name' = number or 'name', where name is string literal and number is an integer")
 	}
 	kind := Enum8
 	switch family {

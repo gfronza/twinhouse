@@ -5,6 +5,9 @@ package sqlparse
 // supported, and are recognised only outside string literals. Errors are
 // *cherr.Error with code SYNTAX_ERROR (62) and a message in ClickHouse style:
 // "Syntax error: failed at position N ('tok'): <query excerpt>. Expected ...".
+// Input past ClickHouse's default limits is TOO_DEEP_RECURSION (306,
+// max_parser_depth), TOO_DEEP_AST (167, max_ast_depth) or TOO_BIG_AST (168,
+// max_ast_elements).
 //
 // For INSERT ... FORMAT <name>, parsing stops right after the format name;
 // the remaining text becomes InsertStmt.Data (data is never tokenized).

@@ -97,6 +97,12 @@ func TestDecodeTSV(t *testing.T) {
 		{name: "empty input", format: "TSVWithNames", input: "", cols: two},
 		{name: "with names and types converts", format: "TSVWithNamesAndTypes",
 			input: "a\ts\nUInt8\tString\n7\tz\n", cols: two, want: [][]any{{uint64(7), "z"}}},
+		{name: "with names and types too deep header type", format: "TSVWithNamesAndTypes",
+			input: "a\n" + strings.Repeat("Array(", 2000) + "\n", cols: two, errCode: cherr.TooDeepRecursion},
+		{name: "with names and types too large FixedString", format: "TSVWithNamesAndTypes",
+			input: "a\nFixedString(2147483647)\n", cols: two, errCode: cherr.ArgumentOutOfBound},
+		{name: "with names and types unknown header type", format: "TSVWithNamesAndTypes",
+			input: "a\nJunk\n", cols: two, errCode: cherr.UnknownType},
 		{name: "names header ignored", format: "TSVWithNames", input: "x\ty\n1\tq\n", cols: two,
 			settings: map[string]string{"input_format_with_names_use_header": "0"}, want: [][]any{{uint64(1), "q"}}},
 	})

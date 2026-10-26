@@ -232,7 +232,7 @@ func (d *delimitedDecoder) readHeader() error {
 		if d.types && d.s.useTypes {
 			t, err := chtype.Parse(d.headerText(typeNames[i]))
 			if err != nil {
-				return cherr.Wrap(cherr.UnknownType, nil, "%s header type of column %s: %s", d.format, names[i], cherr.As(err).Msg)
+				return cherr.Wrap(cherr.As(err).Code, nil, "%s header type of column %s: %s", d.format, names[i], cherr.As(err).Msg)
 			}
 			if err := checkInputType(t); err != nil {
 				return columnErr(err, names[i])

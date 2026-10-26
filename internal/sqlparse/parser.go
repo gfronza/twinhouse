@@ -5,10 +5,8 @@ import (
 	"strings"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/limits"
 )
-
-// maxDepth bounds recursion so hostile input cannot overflow the stack.
-const maxDepth = 512
 
 type parser struct {
 	src   string
@@ -16,6 +14,9 @@ type parser struct {
 	ahead []token // lookahead buffer
 	last  token   // most recently consumed token
 	depth int
+	// height and elements enforce the AST limits (see astlimits.go).
+	height   int
+	elements int
 	// dataTaken is set once INSERT ... FORMAT has claimed the rest of the
 	// input as raw data.
 	dataTaken bool
@@ -119,10 +120,13 @@ func (p *parser) lexNext() token {
 	return tok
 }
 
+// enter bounds recursion, as ClickHouse's max_parser_depth does. Every
+// recursive path of the parser passes through it.
 func (p *parser) enter() {
 	p.depth++
-	if p.depth > maxDepth {
-		p.fail("Maximum parse depth exceeded")
+	if p.depth > limits.MaxParserDepth {
+		panic(bail{cherr.New(cherr.TooDeepRecursion,
+			"Maximum parse depth (%d) exceeded. Consider rising max_parser_depth parameter.", limits.MaxParserDepth)})
 	}
 }
 
@@ -279,6 +283,7 @@ func parseStatementWith(p *parser) (Statement, error) {
 		if !p.dataTaken {
 			p.finish()
 		}
+		p.checkElements()
 		p.resolveBareUnions(st)
 	})
 	if err != nil {
@@ -310,6 +315,7 @@ func parseExpr(s string) (Expr, error) {
 		if t := p.peek(); t.kind != tEOF {
 			p.failAt(t, "end of query")
 		}
+		p.checkElements()
 	})
 	if err != nil {
 		return nil, err

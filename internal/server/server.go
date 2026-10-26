@@ -44,7 +44,11 @@ const (
 	ServerRevision = 54477
 
 	defaultResponseBuffer = 1 << 20
-	defaultMaxQuerySize   = 256 << 20
+	// defaultMaxQuerySize is ClickHouse's max_query_size default.
+	defaultMaxQuerySize = 262144
+	// defaultQuerySizeCeiling is the largest max_query_size a request may
+	// set unless Config.MaxQuerySize says otherwise.
+	defaultQuerySizeCeiling = 256 << 20
 	// bodySplitThreshold: bodies up to this size are handed to the engine as
 	// one query text; larger INSERT bodies are split at the start of their
 	// inline data, which is then streamed.
@@ -78,7 +82,8 @@ type Config struct {
 	// status and headers are sent (default 1 MiB). Errors raised before that
 	// get a proper HTTP error status; later ones are appended to the body.
 	ResponseBufferSize int
-	// MaxQuerySize bounds query text read from the request body (default 256 MiB).
+	// MaxQuerySize is the largest max_query_size a request may set
+	// (default 256 MiB); larger values are lowered to it.
 	MaxQuerySize int
 	// MaxExecutionTime is the default max_execution_time of every query
 	// (0: unlimited, like ClickHouse). A max_execution_time setting (URL,
@@ -117,7 +122,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.ResponseBufferSize = defaultResponseBuffer
 	}
 	if cfg.MaxQuerySize <= 0 {
-		cfg.MaxQuerySize = defaultMaxQuerySize
+		cfg.MaxQuerySize = defaultQuerySizeCeiling
 	}
 	s := &Server{cfg: cfg, users: cfg.Users, log: cfg.Logger, now: cfg.Now}
 	if len(s.users) == 0 {
@@ -333,13 +338,28 @@ func (c *call) run() error {
 		defer nr.Close()
 		in = nr
 	}
-	if err := c.assembleQuery(in); err != nil {
+	maxQuerySize, sizeErr := c.maxQuerySize()
+	if _, inURL := c.params["max_query_size"]; sizeErr != nil && inURL {
+		return sizeErr
+	}
+	if sizeErr != nil {
+		// A bad value in the session must not block the SET replacing it.
+		maxQuerySize = min(defaultMaxQuerySize, s.cfg.MaxQuerySize)
+	}
+	if err := c.assembleQuery(in, maxQuerySize); err != nil {
 		return err
 	}
 	if isEmptyQuery(c.query) {
 		return cherr.New(cherr.SyntaxError, "Empty query")
 	}
 	c.keyword = leadingKeyword(c.query)
+	setsSize, err := c.setsMaxQuerySize()
+	if err != nil {
+		return err
+	}
+	if sizeErr != nil && !setsSize {
+		return sizeErr
+	}
 
 	db := c.database()
 	if s.cfg.Catalog != nil && !builtinDatabase(db) {
@@ -594,16 +614,17 @@ func firstSettingName(q string) string {
 // assembleQuery resolves the query text and INSERT data like ClickHouse:
 // with a non-empty `query` parameter the body is appended to it (as INSERT
 // data, or as the rest of the query text otherwise); without it the body is
-// the query, possibly followed by inline INSERT data.
-func (c *call) assembleQuery(body io.Reader) error {
+// the query, possibly followed by inline INSERT data. The query part may be
+// at most maxSize bytes (max_query_size).
+func (c *call) assembleQuery(body io.Reader, maxSize int) error {
 	qp := c.params.Get("query")
 	if qp != "" {
 		if leadingKeyword(qp) == "INSERT" {
 			c.query = qp
 			c.data = &countingReader{r: body}
-			return nil
+			return checkQuerySize(c.query, maxSize)
 		}
-		rest, err := readLimited(body, c.s.cfg.MaxQuerySize)
+		rest, err := readLimited(body, maxSize)
 		if err != nil {
 			return err
 		}
@@ -611,7 +632,7 @@ func (c *call) assembleQuery(body io.Reader) error {
 		if len(rest) > 0 {
 			c.query = qp + "\n" + string(rest)
 		}
-		return nil
+		return checkQuerySize(c.query, maxSize)
 	}
 	br := bufio.NewReaderSize(body, 64<<10)
 	head, err := readLimited(io.LimitReader(br, bodySplitThreshold+1), bodySplitThreshold+1)
@@ -620,7 +641,7 @@ func (c *call) assembleQuery(body io.Reader) error {
 	}
 	if len(head) <= bodySplitThreshold {
 		c.query = string(head)
-		return nil
+		return checkQuerySize(c.query, maxSize)
 	}
 	if leadingKeyword(string(head[:min(len(head), 4096)])) == "INSERT" {
 		if end, isFormat, ok := insertDataSplit(string(head)); ok {
@@ -630,15 +651,109 @@ func (c *call) assembleQuery(body io.Reader) error {
 				data = trimInlineDataStart(data)
 			}
 			c.data = &countingReader{r: data}
-			return nil
+			return checkQuerySize(c.query, maxSize)
 		}
 	}
-	rest, err := readLimited(br, c.s.cfg.MaxQuerySize-len(head))
+	rest, err := readLimited(br, maxSize-len(head))
 	if err != nil {
 		return err
 	}
 	c.query = string(head) + string(rest)
+	return checkQuerySize(c.query, maxSize)
+}
+
+// maxQuerySize returns the request's max_query_size (URL or session
+// setting, default 262144), lowered to Config.MaxQuerySize; 0 means that
+// ceiling.
+func (c *call) maxQuerySize() (int, error) {
+	v := c.setting("max_query_size")
+	if v == "" {
+		return min(defaultMaxQuerySize, c.s.cfg.MaxQuerySize), nil
+	}
+	n, err := parseUintSetting(v)
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 || n > uint64(c.s.cfg.MaxQuerySize) {
+		return c.s.cfg.MaxQuerySize, nil
+	}
+	return int(n), nil
+}
+
+// setsMaxQuerySize reports whether the query is a SET of max_query_size,
+// failing as the per-request check would when the value does not parse,
+// so that a session never stores it.
+func (c *call) setsMaxQuerySize() (bool, error) {
+	if c.keyword != "SET" {
+		return false, nil
+	}
+	st, err := c.parseQuery()
+	if err != nil {
+		return false, nil // the engine reports it
+	}
+	set, ok := st.(*sqlparse.SetStmt)
+	if !ok {
+		return false, nil
+	}
+	sets := false
+	for _, kv := range set.Settings {
+		if kv.Name == "max_query_size" {
+			if _, err := parseUintSetting(settingValueText(kv.Value)); err != nil {
+				return false, err
+			}
+			sets = true
+		}
+	}
+	return sets, nil
+}
+
+// parseUintSetting parses an unsigned integer setting value the way
+// ClickHouse does (parseWithSizeSuffix): digits, optionally followed by a
+// size suffix (K, M, G, T, or Ki, Mi, Gi, Ti for powers of 1024).
+func parseUintSetting(v string) (uint64, error) {
+	t := strings.TrimSpace(v)
+	n := 0
+	for n < len(t) && t[n] >= '0' && t[n] <= '9' {
+		n++
+	}
+	if n == 0 {
+		return 0, cherr.New(cherr.CannotParseNumber, "Cannot read integer value")
+	}
+	mult, ok := sizeSuffixes[t[n:]]
+	if !ok {
+		return 0, cherr.New(cherr.CannotParseInputAssertionFailed, "Cannot parse input: expected 'eof' before: '%s'", t[n:])
+	}
+	x, err := strconv.ParseUint(t[:n], 10, 64)
+	if err != nil || x > math.MaxUint64/mult {
+		return 0, cherr.New(cherr.CannotParseNumber, "Cannot read integer value: %s", t)
+	}
+	return x * mult, nil
+}
+
+// sizeSuffixes maps the size suffixes of integer settings to multipliers.
+var sizeSuffixes = map[string]uint64{
+	"": 1, "k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12,
+	"ki": 1 << 10, "Ki": 1 << 10, "Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40,
+}
+
+// checkQuerySize fails when the query part of text is over maxSize bytes.
+// Inline INSERT data (after VALUES or FORMAT <name>) is not counted, as in
+// ClickHouse.
+func checkQuerySize(text string, maxSize int) error {
+	n := len(text)
+	if n > maxSize && leadingKeyword(text[:min(n, 4096)]) == "INSERT" {
+		if end, _, ok := insertDataSplit(text); ok {
+			n = end
+		}
+	}
+	if n > maxSize {
+		return errQuerySize()
+	}
 	return nil
+}
+
+func errQuerySize() error {
+	return cherr.New(cherr.SyntaxError, "Syntax error: Max query size exceeded (can be increased with the `max_query_size` setting)")
 }
 
 // trimInlineDataStart skips what ClickHouse skips between `FORMAT <name>`
@@ -671,7 +786,7 @@ func readLimited(r io.Reader, limit int) ([]byte, error) {
 		return nil, err
 	}
 	if len(b) > limit {
-		return nil, cherr.New(cherr.SyntaxError, "Max query size exceeded")
+		return nil, errQuerySize()
 	}
 	return b, nil
 }

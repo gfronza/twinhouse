@@ -2,6 +2,7 @@ package exec
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -132,4 +133,26 @@ func TestSummingMergeTree(t *testing.T) {
 	te.exec(`CREATE TABLE s2 (k String, a UInt64, b UInt64) ENGINE = SummingMergeTree(a) ORDER BY k`)
 	te.exec(`INSERT INTO s2 VALUES ('x', 1, 5), ('x', 2, 6)`)
 	te.expectRows(`SELECT a, b FROM s2`, "3\t5")
+}
+
+// A VALUES row is not bounded by the AST limits, so a chain of AND, OR or ||
+// in it must compile and evaluate without a level of recursion per operand.
+func TestValuesChainsInsertWithoutRecursion(t *testing.T) {
+	guardFunctionTest(t)
+	te := newTestEnv(t)
+	te.exec("CREATE TABLE t (a UInt8, b UInt8, s String) ENGINE = Memory")
+	chain := func(op string, n int, atom string) string {
+		return strings.Repeat(atom+" "+op+" ", n-1) + atom
+	}
+	sql := "INSERT INTO t VALUES (" + chain("AND", 40000, "1") + ", " + chain("OR", 40000, "0") + ", " +
+		chain("||", 20000, "'x'") + ")"
+	// A walk per operand needs several MiB of stack.
+	old := debug.SetMaxStack(1 << 20)
+	_, err := te.run(sql)
+	debug.SetMaxStack(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	te.expectRows("SELECT a, b, length(s), s = repeat('x', 20000) FROM t", "1\t0\t20000\t1")
+	te.expectRows("SELECT 'a' || ('b' || 'c') || 'd', toTypeName('a' || toNullable('b') || 'c')", "abcd\tNullable(String)")
 }

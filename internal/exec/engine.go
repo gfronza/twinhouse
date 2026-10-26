@@ -90,8 +90,8 @@ type query struct {
 	readRows  atomic.Uint64
 	readBytes atomic.Uint64
 
-	// depth is the current planning nesting depth (shared by copies).
-	depth *int
+	// plan is the state of the current plan (shared by copies).
+	plan *planState
 
 	// subqueries caches results of uncorrelated subqueries (IN / scalar),
 	// which are evaluated at plan time and may be needed twice (filter and
@@ -153,7 +153,7 @@ func (e *Engine) newQuery(ctx context.Context, req *Request) *query {
 		e: e, ctx: ctx, db: db, settings: settings, params: req.Params,
 		cat:   &queryCatalog{Catalog: e.cfg.Catalog, f: e.impl.fresh, ctx: ctx, since: now},
 		bound: map[string]*expr{}, now: now.UTC(), loc: loc, tzName: tzName, user: user, id: req.QueryID, req: req,
-		depth: new(int),
+		plan: &planState{},
 	}
 }
 

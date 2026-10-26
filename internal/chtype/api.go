@@ -11,7 +11,14 @@ package chtype
 // Type names are case-sensitive except the aliases ClickHouse treats
 // case-insensitively (e.g. "BOOLEAN", "TEXT", "VARCHAR(255)", "INT", "BIGINT",
 // "DOUBLE", "FLOAT", "TIMESTAMP"); aliases resolve to canonical types.
-func Parse(s string) (Type, error) { return parseType(s) }
+// A name longer than 262144 bytes fails with SYNTAX_ERROR (62), as in
+// ClickHouse; use ParseStored for names the server wrote itself.
+func Parse(s string) (Type, error) { return parseTypeCapped(s) }
+
+// ParseStored is Parse without the length cap, for type names the server
+// wrote itself (catalog entries, CTAS columns): a big tuple built by a query
+// can render longer than any type name a client may send.
+func ParseStored(s string) (Type, error) { return parseType(s) }
 
 // MustParse is Parse that panics; for tests and static tables.
 func MustParse(s string) Type {

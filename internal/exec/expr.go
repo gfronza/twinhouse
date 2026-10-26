@@ -369,25 +369,16 @@ func (c *compiler) postAgg(e sqlparse.Expr) (*expr, bool, error) {
 
 var binaryFuncs = map[string]string{
 	"=": "equals", "!=": "notEquals", "<": "less", "<=": "lessOrEquals", ">": "greater", ">=": "greaterOrEquals",
-	"+": "plus", "-": "minus", "*": "multiply", "/": "divide", "%": "modulo", "||": "concat",
+	"+": "plus", "-": "minus", "*": "multiply", "/": "divide", "%": "modulo",
 	"LIKE": "like", "NOT LIKE": "notLike", "ILIKE": "ilike", "NOT ILIKE": "notILike",
 }
 
 func (c *compiler) binary(n *sqlparse.BinaryExpr) (*expr, error) {
 	switch n.Op {
 	case "AND", "OR":
-		var ops []sqlparse.Expr
-		var flat func(e sqlparse.Expr)
-		flat = func(e sqlparse.Expr) {
-			if b, ok := e.(*sqlparse.BinaryExpr); ok && b.Op == n.Op {
-				flat(b.Left)
-				flat(b.Right)
-				return
-			}
-			ops = append(ops, e)
-		}
-		flat(n)
-		return c.callAST(strings.ToLower(n.Op), ops...)
+		return c.callAST(strings.ToLower(n.Op), chainOperands(n)...)
+	case "||":
+		return c.callAST("concat", chainOperands(n)...)
 	case "IN", "GLOBAL IN":
 		return c.compileIn(n.Left, n.Right, false)
 	case "NOT IN", "GLOBAL NOT IN":
@@ -405,6 +396,24 @@ func (c *compiler) binary(n *sqlparse.BinaryExpr) (*expr, error) {
 		return nil, cherr.New(cherr.NotImplemented, "operator %s is not supported", n.Op)
 	}
 	return c.callAST(name, n.Left, n.Right)
+}
+
+// chainOperands returns, left to right, the operands of the chain of n's
+// operator that n heads, parenthesized links included. It walks in a loop: a
+// chain in a VALUES row is bounded by neither the AST size nor its depth.
+func chainOperands(n *sqlparse.BinaryExpr) []sqlparse.Expr {
+	var ops []sqlparse.Expr
+	todo := []sqlparse.Expr{n}
+	for len(todo) > 0 {
+		e := todo[len(todo)-1]
+		todo = todo[:len(todo)-1]
+		if b, ok := e.(*sqlparse.BinaryExpr); ok && b.Op == n.Op {
+			todo = append(todo, b.Right, b.Left)
+			continue
+		}
+		ops = append(ops, e)
+	}
+	return ops
 }
 
 func (c *compiler) caseExpr(n *sqlparse.CaseExpr) (*expr, error) {

@@ -76,6 +76,9 @@ func (q *query) runCreateTable(s *sqlparse.CreateTableStmt) (*Result, error) {
 	}
 	stmt := *s
 	var asSelect *relation
+	// Column types copied from a table or a SELECT were rendered by the
+	// server, so they are parsed without the client length cap.
+	parse := chtype.Parse
 	if s.AsTable != "" {
 		src, err := q.lookupTable(s.AsDatabase, s.AsTable)
 		if err != nil {
@@ -86,6 +89,7 @@ func (q *query) runCreateTable(s *sqlparse.CreateTableStmt) (*Result, error) {
 				def := sqlparse.ColumnDef{Name: c.Name, Type: c.TypeText, DefaultKind: c.DefaultKind, DefaultText: c.DefaultExpr, Comment: c.Comment}
 				stmt.Columns = append(stmt.Columns, def)
 			}
+			parse = chtype.ParseStored
 		}
 		if stmt.Engine == nil {
 			if replaced != nil {
@@ -106,9 +110,10 @@ func (q *query) runCreateTable(s *sqlparse.CreateTableStmt) (*Result, error) {
 			for _, c := range rel.cols {
 				stmt.Columns = append(stmt.Columns, sqlparse.ColumnDef{Name: c.Name, Type: c.Type.String()})
 			}
+			parse = chtype.ParseStored
 		}
 	}
-	t, err := q.buildTable(db, &stmt)
+	t, err := q.buildTable(db, &stmt, parse)
 	if err != nil {
 		return nil, err
 	}
@@ -155,8 +160,9 @@ func (q *query) createTable(t *catalog.Table, ifNotExists bool, asSelect *relati
 	return &Result{WrittenRows: n}, nil
 }
 
-// buildTable converts CREATE TABLE into a catalog table definition.
-func (q *query) buildTable(db string, s *sqlparse.CreateTableStmt) (*catalog.Table, error) {
+// buildTable converts CREATE TABLE into a catalog table definition, parsing
+// column types with parse.
+func (q *query) buildTable(db string, s *sqlparse.CreateTableStmt, parse func(string) (chtype.Type, error)) (*catalog.Table, error) {
 	t := &catalog.Table{
 		Database: db, Name: s.Name, Comment: s.Comment, DDL: s.Text,
 		CreatedAt: time.Now().UTC(), Settings: map[string]string{},
@@ -167,7 +173,7 @@ func (q *query) buildTable(db string, s *sqlparse.CreateTableStmt) (*catalog.Tab
 	}
 	seen := map[string]bool{}
 	for _, def := range s.Columns {
-		col, err := q.buildColumn(def)
+		col, err := q.buildColumn(def, parse)
 		if err != nil {
 			return nil, err
 		}
@@ -282,7 +288,7 @@ func splitList(v string) []string {
 	return out
 }
 
-func (q *query) buildColumn(def sqlparse.ColumnDef) (catalog.Column, error) {
+func (q *query) buildColumn(def sqlparse.ColumnDef, parse func(string) (chtype.Type, error)) (catalog.Column, error) {
 	if err := checkColumnName(def.Name); err != nil {
 		return catalog.Column{}, err
 	}
@@ -310,7 +316,7 @@ func (q *query) buildColumn(def sqlparse.ColumnDef) (catalog.Column, error) {
 		}
 		col.Type = x.t
 	} else {
-		t, err := chtype.Parse(def.Type)
+		t, err := parse(def.Type)
 		if err != nil {
 			return catalog.Column{}, err
 		}
@@ -852,7 +858,7 @@ func (q *query) runAlter(s *sqlparse.AlterStmt) (*Result, error) {
 				}
 				return nil, cherr.New(duplicateColumn, "Cannot add column %s: column with this name already exists", cmd.Column.Name)
 			}
-			col, err := q.buildColumn(*cmd.Column)
+			col, err := q.buildColumn(*cmd.Column, chtype.Parse)
 			if err != nil {
 				return nil, err
 			}
@@ -905,8 +911,10 @@ func (q *query) runAlter(s *sqlparse.AlterStmt) (*Result, error) {
 				continue
 			}
 			def := *cmd.Column
+			parse := chtype.Parse
 			if def.Type == "" {
 				def.Type = t.Columns[i].TypeText
+				parse = chtype.ParseStored
 			}
 			if def.Default == nil && def.DefaultText == "" && def.DefaultKind == "" {
 				def.DefaultKind, def.DefaultText = t.Columns[i].DefaultKind, t.Columns[i].DefaultExpr
@@ -914,7 +922,7 @@ func (q *query) runAlter(s *sqlparse.AlterStmt) (*Result, error) {
 			if def.Comment == "" {
 				def.Comment = t.Columns[i].Comment
 			}
-			col, err := q.buildColumn(def)
+			col, err := q.buildColumn(def, parse)
 			if err != nil {
 				return nil, err
 			}

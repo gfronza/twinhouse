@@ -145,7 +145,7 @@ func New(b Backend, opts Options) Catalog {
 		s.physicalFor = func(db, table string) string { return db + "." + table }
 	}
 	if s.parse == nil {
-		s.parse = chtype.Parse
+		s.parse = chtype.ParseStored
 	}
 	return s
 }

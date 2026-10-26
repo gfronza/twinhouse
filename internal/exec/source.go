@@ -231,7 +231,7 @@ func (q *query) planFrom(te *sqlparse.TableExpr, env *planEnv) (*source, error) 
 	if te.Database == "" {
 		if c := env.lookupCTE(te.Table); c != nil {
 			c.active = true
-			rel, err := q.planSelect(c.sel, c.env)
+			rel, err := q.planSelect(c.sel, &planEnv{parent: c.env, copied: true})
 			c.active = false
 			if err != nil {
 				return nil, err
@@ -270,7 +270,7 @@ func (q *query) planFrom(te *sqlparse.TableExpr, env *planEnv) (*source, error) 
 			return nil, err
 		}
 		inner := q.withDB(v.Database)
-		rel, err := inner.planSelect(sel, &planEnv{})
+		rel, err := inner.planSelect(sel, &planEnv{copied: true})
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +295,7 @@ func (q *query) withDB(db string) *query {
 		return q
 	}
 	return &query{e: q.e, ctx: q.ctx, cat: q.cat, db: db, settings: q.settings, params: q.params, bound: q.bound,
-		now: q.now, loc: q.loc, user: q.user, id: q.id, req: q.req, depth: q.depth}
+		now: q.now, loc: q.loc, user: q.user, id: q.id, req: q.req, plan: q.plan}
 }
 
 func parseSelect(text string) (*sqlparse.SelectStmt, error) {

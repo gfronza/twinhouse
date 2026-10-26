@@ -465,7 +465,7 @@ func TestSyntaxErrorFormat(t *testing.T) {
 
 func TestDeepNestingIsBounded(t *testing.T) {
 	deep := strings.Repeat("(", 100000) + "1" + strings.Repeat(")", 100000)
-	expectErr(t, "SELECT "+deep, cherr.SyntaxError, "depth")
+	expectErr(t, "SELECT "+deep, cherr.TooDeepRecursion, "Maximum parse depth (1000) exceeded")
 	mustParse(t, "SELECT "+strings.Repeat("(", 100)+"1"+strings.Repeat(")", 100))
 	mustParse(t, "SELECT "+strings.Repeat("NOT ", 100)+"1")
 }

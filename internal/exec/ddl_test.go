@@ -168,6 +168,26 @@ func TestCreateTableAsSelectAndLike(t *testing.T) {
 	te.expectRows(`SELECT count() FROM like_src`, "0")
 }
 
+// TestCreateTableAsSelectLongType checks that a column type the server
+// renders longer than a client may send (262144 bytes) survives CREATE AS
+// SELECT, CREATE AS another table and ALTER MODIFY COLUMN without a type.
+func TestCreateTableAsSelectLongType(t *testing.T) {
+	const fields = 38000 // "UInt8, " each: about 266000 bytes of type
+	te := newTestEnv(t)
+	te.exec(`CREATE TABLE big ENGINE = MergeTree ORDER BY k AS SELECT 1 AS k, tuple(` + strings.Repeat("1,", fields-1) + `1) AS t`)
+	tb, err := te.cat.Table("default", "big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(tb.Columns[1].TypeText); n <= 262144 {
+		t.Fatalf("type text is %d bytes, want it over the client cap", n)
+	}
+	te.exec(`CREATE TABLE big2 ENGINE = MergeTree ORDER BY k AS big`)
+	te.exec(`ALTER TABLE big MODIFY COLUMN t DEFAULT t`)
+	te.expectRows(`SELECT length(toTypeName(t)) > 262144 FROM big`, "1")
+	te.expectErr(`SELECT CAST(t, '`+tb.Columns[1].TypeText+`') FROM big`, cherr.SyntaxError)
+}
+
 func TestDatabases(t *testing.T) {
 	te := newTestEnv(t)
 	te.exec(`CREATE DATABASE app`)

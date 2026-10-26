@@ -613,6 +613,30 @@ func TestCodecPreservesTimes(t *testing.T) {
 	}
 }
 
+// TestDecodeTableLongType checks that the default type parser of
+// DecodeTable takes a stored type longer than a client may send, such as a
+// big tuple a CREATE AS SELECT stored.
+func TestDecodeTableLongType(t *testing.T) {
+	text := "Tuple(" + strings.Repeat("UInt8, ", 40000) + "UInt8)"
+	typ, err := chtype.ParseStored(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbl := eventsTable("default", "t")
+	tbl.Columns = append(tbl.Columns, Column{Name: "big", Type: typ, TypeText: text})
+	b, err := EncodeTable(tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeTable(b, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Columns[4].Type.Equal(typ) {
+		t.Errorf("decoded type %.40s..., want %.40s...", got.Columns[4].Type, text)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

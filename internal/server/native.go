@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/pierrec/lz4/v4"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/format"
 )
 
 // ClickHouse "native" block compression, used over HTTP with compress=1
@@ -35,6 +37,11 @@ const (
 	nativeBlockSize = 1 << 20
 	// nativeMaxBlock bounds a single frame read from a client.
 	nativeMaxBlock = 1 << 30
+	// nativeZSTDMaxWindow bounds the window of a zstd frame, which the
+	// decoder allocates before any output; a single-segment frame's window
+	// is its declared content size. Go clients (ch-go) write frames with
+	// windows of at most 8 MiB.
+	nativeZSTDMaxWindow = 8 << 20
 )
 
 // nativeReader decodes a stream of native compressed frames.
@@ -45,6 +52,7 @@ type nativeReader struct {
 	data   []byte
 	pos    int
 	zstd   *zstd.Decoder
+	zsrc   bytes.Reader // zstd input
 	err    error
 }
 
@@ -94,14 +102,15 @@ func (n *nativeReader) readFrame() error {
 		return cherr.New(cherr.CannotDecompress, "Too large size_compressed_without_checksum: %d. Most likely corrupted data", rawSize)
 	}
 	payload := int(rawSize - nativeHeaderSize)
-	if cap(n.raw) < int(rawSize) {
-		n.raw = make([]byte, rawSize)
+	if err := checkDataSize(method, int64(payload), dataSize); err != nil {
+		return err
 	}
-	n.raw = n.raw[:rawSize]
-	copy(n.raw, h)
-	if got, err := io.ReadFull(n.r, n.raw[nativeHeaderSize:]); err != nil {
+	// The frame buffer grows as the payload arrives, so a short body cannot
+	// make it allocate rawSize up front.
+	n.raw, err = format.AppendFull(n.r, append(n.raw[:0], h...), payload)
+	if err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return cherr.New(cherr.CannotReadAllData, "Cannot read all data. Bytes read: %d. Bytes expected: %d", got, payload)
+			return cherr.New(cherr.CannotReadAllData, "Cannot read all data. Bytes read: %d. Bytes expected: %d", len(n.raw)-nativeHeaderSize, payload)
 		}
 		return err
 	}
@@ -112,36 +121,68 @@ func (n *nativeReader) readFrame() error {
 			chcompress.FormatU128(sum), rawSize)
 	}
 	body := n.raw[nativeHeaderSize:]
+	n.pos = 0
+	if method == nativeMethodZSTD {
+		return n.decodeZSTD(body, int(dataSize))
+	}
 	if cap(n.data) < int(dataSize) {
 		n.data = make([]byte, dataSize)
 	}
-	n.data, n.pos = n.data[:dataSize], 0
+	n.data = n.data[:dataSize]
 	switch method {
 	case nativeMethodNone:
-		if len(body) != int(dataSize) {
-			return cherr.New(cherr.CannotDecompress, "Cannot decompress: size mismatch")
-		}
 		copy(n.data, body)
 	case nativeMethodLZ4:
 		w, err := lz4.UncompressBlock(body, n.data)
 		if err != nil || w != int(dataSize) {
 			return cherr.New(cherr.CannotDecompress, "Cannot decompress LZ4-encoded data")
 		}
-	case nativeMethodZSTD:
-		if n.zstd == nil {
-			d, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
-			if err != nil {
-				return err
-			}
-			n.zstd = d
-		}
-		out, err := n.zstd.DecodeAll(body, n.data[:0])
-		if err != nil || len(out) != int(dataSize) {
-			return cherr.New(cherr.CannotDecompress, "Cannot decompress ZSTD-encoded data")
-		}
-		n.data = out
 	default:
 		return cherr.New(cherr.UnknownCompressionMethod, "Unknown compression method: %d", method)
+	}
+	return nil
+}
+
+// decodeZSTD decodes a zstd payload of dataSize bytes into n.data. It
+// streams with a bounded window and n.data grows as output arrives, so a
+// frame's declared sizes cannot make it allocate up front.
+func (n *nativeReader) decodeZSTD(body []byte, dataSize int) error {
+	n.zsrc.Reset(body)
+	if n.zstd == nil {
+		// WithDecodeBuffersBelow(0): small inputs would otherwise be
+		// decoded at once into a buffer sized by the frame header.
+		d, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1),
+			zstd.WithDecoderMaxWindow(nativeZSTDMaxWindow), zstd.WithDecodeBuffersBelow(0))
+		if err != nil {
+			return err
+		}
+		n.zstd = d
+	}
+	err := n.zstd.Reset(&n.zsrc)
+	if err == nil {
+		n.data, err = format.AppendFull(n.zstd, n.data[:0], dataSize)
+	}
+	if err == nil {
+		// The payload must decode to exactly dataSize bytes.
+		var extra [1]byte
+		if _, err = io.ReadFull(n.zstd, extra[:]); err == io.EOF {
+			return nil
+		}
+	}
+	return cherr.New(cherr.CannotDecompress, "Cannot decompress ZSTD-encoded data")
+}
+
+// checkDataSize rejects a frame declaring more data than its payload can
+// decompress to, before that much is allocated: an LZ4 byte yields at most
+// 255 bytes, and a 4-byte zstd RLE block at most 128 KiB.
+func checkDataSize(method byte, payload, dataSize int64) error {
+	switch {
+	case method == nativeMethodNone && dataSize != payload:
+		return cherr.New(cherr.CannotDecompress, "Cannot decompress: size mismatch")
+	case method == nativeMethodLZ4 && dataSize > 255*payload:
+		return cherr.New(cherr.CannotDecompress, "Cannot decompress LZ4-encoded data")
+	case method == nativeMethodZSTD && dataSize > 32<<10*payload:
+		return cherr.New(cherr.CannotDecompress, "Cannot decompress ZSTD-encoded data")
 	}
 	return nil
 }

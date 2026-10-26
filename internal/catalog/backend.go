@@ -65,7 +65,7 @@ type Options struct {
 	// PhysicalName maps a table to its DynamoDB table name
 	// (default: "<db>.<table>").
 	PhysicalName func(db, table string) string
-	// ParseType parses persisted column type text (default chtype.Parse).
+	// ParseType parses persisted column type text (default chtype.ParseStored).
 	ParseType func(string) (chtype.Type, error)
 	// Region is stamped as Table.HomeRegion by CreateTable ("" keeps the
 	// caller's value).

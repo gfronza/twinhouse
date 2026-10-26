@@ -263,19 +263,23 @@ func hasFloatElem(a *ArrayExpr) bool {
 
 // flatten returns the operands of a left-nested chain of the same mergeable
 // operator, as ClickHouse merges `a AND b AND c` into and(a, b, c). A chain
-// written in its own parentheses is not merged.
+// written in its own parentheses is not merged. It walks the chain in a loop:
+// a merged chain is bounded by the AST size, not its depth.
 func flatten(b *BinaryExpr) []Expr {
-	var out []Expr
-	var walk func(e Expr)
-	walk = func(e Expr) {
-		if l, ok := e.(*BinaryExpr); ok && l.Op == b.Op && (l == b || !l.Parens) {
-			walk(l.Left)
-			out = append(out, l.Right)
-			return
+	var rights []Expr
+	e := Expr(b)
+	for {
+		l, ok := e.(*BinaryExpr)
+		if !ok || l.Op != b.Op || (l != b && l.Parens) {
+			break
 		}
-		out = append(out, e)
+		rights = append(rights, l.Right)
+		e = l.Left
 	}
-	walk(b)
+	out := append(make([]Expr, 0, len(rights)+1), e)
+	for i := len(rights) - 1; i >= 0; i-- {
+		out = append(out, rights[i])
+	}
 	return out
 }
 

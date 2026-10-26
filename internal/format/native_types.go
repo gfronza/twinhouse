@@ -3,6 +3,7 @@ package format
 import (
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/limits"
 )
 
 // nativeCodec is a compiled ClickHouse type tree used by the Native format
@@ -26,6 +27,12 @@ type nativeCodec struct {
 
 	enumByName  map[string]int64
 	enumByValue map[int64]string
+
+	// noData marks types whose values have no bytes on the wire: Tuple()
+	// and tuples made only of such types. All their values are empty, one
+	// value shared by every row.
+	noData bool
+	empty  any
 }
 
 // compileNative builds the codec tree for t. It fails with NOT_IMPLEMENTED
@@ -42,6 +49,9 @@ func compileNative(t chtype.Type) (*nativeCodec, error) {
 	case chtype.FixedString:
 		if t.N <= 0 {
 			return nil, cherr.New(cherr.UnknownType, "FixedString size must be positive, got %d", t.N)
+		}
+		if t.N > limits.MaxFixedStringSize {
+			return nil, cherr.New(cherr.ArgumentOutOfBound, "FixedString size is too large")
 		}
 	case chtype.DateTime64:
 		if t.Precision < 0 || t.Precision > 9 {
@@ -104,7 +114,27 @@ func compileNative(t chtype.Type) (*nativeCodec, error) {
 	default:
 		return nil, cherr.New(cherr.UnknownType, "unsupported type kind %d", t.Kind)
 	}
+	c.setEmpty()
 	return c, nil
+}
+
+// setEmpty fills noData and empty from the compiled children.
+func (c *nativeCodec) setEmpty() {
+	switch c.kind {
+	case chtype.SimpleAggregateFunction:
+		c.noData, c.empty = c.elem.noData, c.elem.empty
+	case chtype.Tuple:
+		for _, f := range c.fields {
+			if !f.noData {
+				return
+			}
+		}
+		empty := make([]any, len(c.fields))
+		for i, f := range c.fields {
+			empty[i] = f.empty
+		}
+		c.noData, c.empty = true, empty
+	}
 }
 
 // zero returns the value written in place of NULL / used as LowCardinality default.

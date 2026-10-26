@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gfronza/twinhouse/internal/cherr"
+	"github.com/gfronza/twinhouse/internal/limits"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
@@ -12,13 +14,31 @@ import (
 // (replacement, true) is replaced (without descending into it). Other nodes
 // are shallow-copied with rewritten children. Subqueries are not descended.
 func rewrite(e sqlparse.Expr, f func(sqlparse.Expr) (sqlparse.Expr, bool)) sqlparse.Expr {
+	return rewriteAt(e, treePos{}, func(n sqlparse.Expr, _ treePos) (sqlparse.Expr, bool) { return f(n) })
+}
+
+// treePos is where a node sits in an expression tree.
+type treePos struct {
+	depth int
+	// chain is the parent's operator when that is AND, OR or ||. ClickHouse
+	// parses such a chain into one call, so a node continuing it does not
+	// add a level.
+	chain string
+}
+
+// rewriteAt is rewrite that also passes f the position of each node, e
+// being at p.
+func rewriteAt(e sqlparse.Expr, p treePos, f func(sqlparse.Expr, treePos) (sqlparse.Expr, bool)) sqlparse.Expr {
 	if e == nil {
 		return nil
 	}
-	if r, ok := f(e); ok {
+	if b, ok := e.(*sqlparse.BinaryExpr); ok && b.Op == p.chain {
+		p.depth--
+	}
+	if r, ok := f(e, p); ok {
 		return r
 	}
-	rw := func(x sqlparse.Expr) sqlparse.Expr { return rewrite(x, f) }
+	rw := func(x sqlparse.Expr) sqlparse.Expr { return rewriteAt(x, treePos{depth: p.depth + 1}, f) }
 	rws := func(xs []sqlparse.Expr) []sqlparse.Expr {
 		if xs == nil {
 			return nil
@@ -36,7 +56,11 @@ func rewrite(e sqlparse.Expr, f func(sqlparse.Expr) (sqlparse.Expr, bool)) sqlpa
 		c.Args = rws(n.Args)
 		return &c
 	case *sqlparse.BinaryExpr:
-		return &sqlparse.BinaryExpr{Op: n.Op, Left: rw(n.Left), Right: rw(n.Right)}
+		c := treePos{depth: p.depth + 1}
+		if n.Op == "AND" || n.Op == "OR" || n.Op == "||" {
+			c.chain = n.Op
+		}
+		return &sqlparse.BinaryExpr{Op: n.Op, Left: rewriteAt(n.Left, c, f), Right: rewriteAt(n.Right, c, f)}
 	case *sqlparse.UnaryExpr:
 		return &sqlparse.UnaryExpr{Op: n.Op, X: rw(n.X)}
 	case *sqlparse.BetweenExpr:
@@ -168,55 +192,157 @@ func splitAnd(e sqlparse.Expr) []sqlparse.Expr {
 
 // aliasExpander substitutes alias references (ClickHouse resolves an
 // identifier matching an alias to the aliased expression, in every clause).
+// Each node it produces counts against MaxExpandedASTElements for its
+// expression, as in ClickHouse, and against the query's node budget, so an
+// alias used twice per level cannot double the tree without bound. Expansion
+// fails once the produced tree nests deeper than MaxASTDepth or aliases nest
+// deeper than maxAliasNesting.
 type aliasExpander struct {
 	defs   map[string]sqlparse.Expr
 	active map[string]bool
+	plan   *planState
+	err    error
+	// nesting is how many alias substitutions are being expanded.
+	nesting int
+	// nodes is how many nodes the current expression has so far.
+	nodes int
 }
+
+// maxAliasNesting bounds alias references that resolve through other
+// aliases (`c0 AS c1, c1 AS c2, ...`), which add no tree level. ClickHouse
+// 25.8 accepts such a chain of 6000 aliases.
+const maxAliasNesting = 10_000
 
 // aliasPathFunc is the internal function the alias expander produces for
 // `alias.field`: Args are the original identifier, the alias expression and
 // the field names (see compiler.aliasPath).
 const aliasPathFunc = "\x00aliasPath"
 
-func newAliasExpander() *aliasExpander {
-	return &aliasExpander{defs: map[string]sqlparse.Expr{}, active: map[string]bool{}}
+func newAliasExpander(plan *planState) *aliasExpander {
+	return &aliasExpander{defs: map[string]sqlparse.Expr{}, active: map[string]bool{}, plan: plan}
 }
 
-func (a *aliasExpander) expand(e sqlparse.Expr) sqlparse.Expr {
-	return rewrite(e, func(n sqlparse.Expr) (sqlparse.Expr, bool) {
-		switch x := n.(type) {
-		case *sqlparse.Ident:
-			if len(x.Parts) == 1 {
-				if d, ok := a.defs[x.Parts[0]]; ok && !a.active[x.Parts[0]] {
-					return a.expandAs(x.Parts[0], d), true
-				}
-			}
-			if len(x.Parts) > 1 {
-				// alias.field: a named-tuple element of an aliased expression,
-				// unless the identifier resolves as a (qualified) column.
-				if d, ok := a.defs[x.Parts[0]]; ok && !a.active[x.Parts[0]] {
-					args := []sqlparse.Expr{x, a.expandAs(x.Parts[0], d)}
-					for _, f := range x.Parts[1:] {
-						args = append(args, &sqlparse.Literal{Value: f, Raw: quoteString(f)})
-					}
-					return &sqlparse.FuncCall{Name: aliasPathFunc, Args: args}, true
-				}
-			}
-		case *sqlparse.AliasExpr:
-			return a.expandAs(x.Alias, x.X), true
+func (a *aliasExpander) expand(e sqlparse.Expr) (sqlparse.Expr, error) {
+	a.nodes = 0
+	r := a.at(e, treePos{})
+	return r, a.err
+}
+
+func (a *aliasExpander) expandAs(name string, e sqlparse.Expr) (sqlparse.Expr, error) {
+	a.nodes = 0
+	r := a.asAt(name, e, treePos{})
+	return r, a.err
+}
+
+func (a *aliasExpander) at(e sqlparse.Expr, p treePos) sqlparse.Expr {
+	return rewriteAt(e, p, func(n sqlparse.Expr, p treePos) (sqlparse.Expr, bool) {
+		if a.err != nil {
+			return n, true
+		}
+		if r, ok := a.substitute(n, p); ok {
+			return r, true
+		}
+		if !a.charge(p.depth, 1) {
+			return n, true
+		}
+		switch n.(type) {
 		case *sqlparse.SubqueryExpr, *sqlparse.LambdaExpr:
 			return n, true
 		}
-		return nil, false
+		// A constant array or tuple is one literal node in ClickHouse; it
+		// has no aliases in it, so every reference shares it.
+		return n, isConstCollection(n)
 	})
 }
 
-func (a *aliasExpander) expandAs(name string, e sqlparse.Expr) sqlparse.Expr {
+// substitute expands an alias reference or an inline alias n at p, the
+// aliased expression taking n's place in the tree.
+func (a *aliasExpander) substitute(n sqlparse.Expr, p treePos) (sqlparse.Expr, bool) {
+	switch x := n.(type) {
+	case *sqlparse.Ident:
+		if len(x.Parts) == 0 {
+			return nil, false
+		}
+		d, ok := a.defs[x.Parts[0]]
+		if !ok || a.active[x.Parts[0]] {
+			return nil, false
+		}
+		if len(x.Parts) == 1 {
+			return a.asAt(x.Parts[0], d, treePos{depth: p.depth}), true
+		}
+		// alias.field: a named-tuple element of an aliased expression,
+		// unless the identifier resolves as a (qualified) column. The call,
+		// the identifier and each field name are new nodes.
+		if !a.charge(p.depth, len(x.Parts)+1) {
+			return n, true
+		}
+		args := []sqlparse.Expr{x, a.asAt(x.Parts[0], d, treePos{depth: p.depth + 1})}
+		for _, f := range x.Parts[1:] {
+			args = append(args, &sqlparse.Literal{Value: f, Raw: quoteString(f)})
+		}
+		return &sqlparse.FuncCall{Name: aliasPathFunc, Args: args}, true
+	case *sqlparse.AliasExpr:
+		return a.asAt(x.Alias, x.X, treePos{depth: p.depth}), true
+	}
+	return nil, false
+}
+
+func (a *aliasExpander) asAt(name string, e sqlparse.Expr, p treePos) sqlparse.Expr {
+	if a.nesting >= maxAliasNesting {
+		a.fail(cherr.New(cherr.TooDeepRecursion, "Maximum alias nesting (%d) exceeded", maxAliasNesting))
+		return e
+	}
 	prev := a.active[name]
 	a.active[name] = true
-	r := a.expand(e)
+	a.nesting++
+	r := a.at(e, p)
+	a.nesting--
 	a.active[name] = prev
 	return r
+}
+
+// charge adds n nodes at depth d to the expression and takes them from the
+// query's budget; false once expansion has failed. ClickHouse has no fixed
+// depth limit here: it fails when its stack runs out, with
+// TOO_DEEP_RECURSION.
+func (a *aliasExpander) charge(d, n int) bool {
+	a.nodes += n
+	switch {
+	case d > limits.MaxASTDepth:
+		a.fail(cherr.New(cherr.TooDeepRecursion, "Maximum expression depth after alias expansion (%d) exceeded", limits.MaxASTDepth))
+	case a.nodes > limits.MaxExpandedASTElements:
+		a.fail(cherr.New(cherr.BadArguments, "Query tree is too big. Maximum: %d", limits.MaxExpandedASTElements))
+	default:
+		a.fail(a.plan.take(n))
+	}
+	return a.err == nil
+}
+
+// fail records the first expansion error.
+func (a *aliasExpander) fail(err error) {
+	if a.err == nil {
+		a.err = err
+	}
+}
+
+// isConstCollection reports whether e is an array or tuple whose elements
+// are all literals or such collections.
+func isConstCollection(e sqlparse.Expr) bool {
+	var elems []sqlparse.Expr
+	switch x := e.(type) {
+	case *sqlparse.ArrayExpr:
+		elems = x.Elems
+	case *sqlparse.TupleExpr:
+		elems = x.Elems
+	default:
+		return false
+	}
+	for _, el := range elems {
+		if _, ok := el.(*sqlparse.Literal); !ok && !isConstCollection(el) {
+			return false
+		}
+	}
+	return true
 }
 
 // collect records `expr AS name` occurrences nested in e.

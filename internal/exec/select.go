@@ -10,6 +10,7 @@ import (
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
 	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/limits"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
@@ -68,6 +69,8 @@ type planEnv struct {
 	ctes    map[string]*cte
 	aliases map[string]sqlparse.Expr
 	mv      *mvSource
+	// copied is set inside a CTE or view planned for a reference to it.
+	copied bool
 }
 
 type cte struct {
@@ -85,7 +88,7 @@ type mvSource struct {
 }
 
 func (e *planEnv) nested() *planEnv {
-	return &planEnv{parent: e}
+	return &planEnv{parent: e, copied: e.copied}
 }
 
 func (e *planEnv) lookupCTE(name string) *cte {
@@ -170,13 +173,62 @@ func selectFormat(s *sqlparse.SelectStmt) string {
 // maxPlanDepth bounds nesting of subqueries, CTEs and views.
 const maxPlanDepth = 64
 
+// planState is what planning one top-level SELECT shares across its
+// subqueries, CTEs and views.
+type planState struct {
+	depth int
+	// nodesLeft is how many more nodes the expanded query may have.
+	nodesLeft int
+}
+
+// maxQueryExpandedNodes bounds the whole expanded query: the nodes of all
+// its expressions and frames, plus what each frame planned from a CTE or
+// view reference takes (copiedFrameNodes and its source's width).
+// ClickHouse checks each expression against MaxExpandedASTElements and
+// leaves the sum to max_memory_usage; until twinhouse has that limit, this
+// stops many references to one big alias and CTE or view copies that
+// double per level. A full budget of copied width plans to about 600 MiB.
+const maxQueryExpandedNodes = 6 * limits.MaxExpandedASTElements
+
+// copiedFrameNodes is what a frame copied from a CTE or view takes besides
+// its source's width. Planning one costs about as much memory as a dozen
+// source columns; rounded up, copies that double per level over a narrow
+// source fail from 15 levels (ClickHouse fails them from 12 to 14).
+const copiedFrameNodes = 32
+
+// take uses n nodes of the query's budget.
+func (p *planState) take(n int) error {
+	if n > p.nodesLeft {
+		p.nodesLeft = 0
+		return cherr.New(cherr.BadArguments, "Query tree is too big. Maximum: %d", maxQueryExpandedNodes)
+	}
+	p.nodesLeft -= n
+	return nil
+}
+
+// selectNodes approximates the nodes ClickHouse's AST has for the frame of
+// s (the query, its select list and each FROM or JOIN table element), which
+// alias expansion does not visit. ClickHouse copies a CTE or view into each
+// reference, so one used twice per level runs out of budget too.
+func selectNodes(s *sqlparse.SelectStmt) int {
+	n := 2
+	if s.From != nil {
+		n += 4
+	}
+	return n + 4*len(s.Joins)
+}
+
 // planSelect plans a SELECT including UNION branches.
 func (q *query) planSelect(s *sqlparse.SelectStmt, env *planEnv) (*relation, error) {
-	if *q.depth++; *q.depth > maxPlanDepth {
-		*q.depth--
+	p := q.plan
+	if p.depth == 0 {
+		p.nodesLeft = maxQueryExpandedNodes
+	}
+	if p.depth++; p.depth > maxPlanDepth {
+		p.depth--
 		return nil, cherr.New(tooDeepRecursion, "Maximum query nesting depth (%d) exceeded (recursive view or subquery?)", maxPlanDepth)
 	}
-	defer func() { *q.depth-- }()
+	defer func() { p.depth-- }()
 	if len(s.Union) == 0 {
 		return q.planSingle(s, env)
 	}
@@ -295,6 +347,9 @@ type selItem struct {
 
 // planSingle plans one SELECT without UNION.
 func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, error) {
+	if err := q.plan.take(selectNodes(s)); err != nil {
+		return nil, err
+	}
 	env := parent.nested()
 	env.ctes = map[string]*cte{}
 	env.aliases = map[string]sqlparse.Expr{}
@@ -315,6 +370,14 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 	}
 	if src, err = q.planJoins(src, s.Joins, s.Where, env); err != nil {
 		return nil, err
+	}
+	// A frame copied from a CTE or view holds its own scope of its source's
+	// columns, so copies that double per level over a wide table are bounded
+	// by width too.
+	if env.copied {
+		if err := q.plan.take(copiedFrameNodes + len(src.sc.cols)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Select list with * expansion and output names.
@@ -346,7 +409,7 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 	}
 
 	// Alias expansion (ClickHouse resolves aliases in every clause).
-	ax := newAliasExpander()
+	ax := newAliasExpander(q.plan)
 	for k, v := range env.withAliases() {
 		ax.defs[k] = v
 	}
@@ -361,13 +424,21 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 	for _, e := range clauseExprs(s) {
 		ax.collect(e)
 	}
+	// selNodes is what each select expression took, taken again by each
+	// clause that reuses it.
 	selExprs := make([]sqlparse.Expr, len(items))
+	selNodes := make([]int, len(items))
 	for i, it := range items {
+		before := q.plan.nodesLeft
 		if alias := aliasOf(s, it); alias != "" {
-			selExprs[i] = ax.expandAs(alias, it.expr)
-			continue
+			selExprs[i], err = ax.expandAs(alias, it.expr)
+		} else {
+			selExprs[i], err = ax.expand(it.expr)
 		}
-		selExprs[i] = ax.expand(it.expr)
+		if err != nil {
+			return nil, err
+		}
+		selNodes[i] = before - q.plan.nodesLeft
 	}
 	positional := func(e sqlparse.Expr) (sqlparse.Expr, error) {
 		if lit, ok := e.(*sqlparse.Literal); ok {
@@ -375,17 +446,19 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 				if n < 1 || int(n) > len(selExprs) {
 					return nil, cherr.New(cherr.BadArguments, "Positional argument out of bounds: %d (expected in range [1, %d])", n, len(selExprs))
 				}
-				return selExprs[n-1], nil
+				return selExprs[n-1], q.plan.take(selNodes[n-1])
 			}
 		}
-		return ax.expand(e), nil
+		return ax.expand(e)
 	}
 	var where sqlparse.Expr
 	for _, w := range []sqlparse.Expr{s.Prewhere, s.Where} {
 		if w == nil {
 			continue
 		}
-		w = ax.expand(w)
+		if w, err = ax.expand(w); err != nil {
+			return nil, err
+		}
 		if where == nil {
 			where = w
 		} else {
@@ -400,7 +473,10 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 		}
 		groupBy = append(groupBy, e)
 	}
-	having := ax.expand(s.Having)
+	having, err := ax.expand(s.Having)
+	if err != nil {
+		return nil, err
+	}
 	orderExprs := make([]sqlparse.Expr, len(s.OrderBy))
 	for i, o := range s.OrderBy {
 		if o.Collate != "" {
@@ -441,8 +517,11 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 		}
 	}
 	if s.GroupByAll {
-		for _, e := range selExprs {
+		for i, e := range selExprs {
 			if !hasAggregate(e) {
+				if err := q.plan.take(selNodes[i]); err != nil {
+					return nil, err
+				}
 				groupBy = append(groupBy, e)
 			}
 		}

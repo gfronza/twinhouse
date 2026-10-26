@@ -606,7 +606,15 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   `mapValues`, `mapContains`, `CAST` and `toTypeName`. Anything not
   registered is `UNKNOWN_FUNCTION` (46), or `NOT_IMPLEMENTED` (48) for
   known-but-unsupported features (lambdas/higher-order functions, window
-  functions, parametric functions).
+  functions, parametric functions). Deliberate deviation until the
+  per-query memory limit exists: `range` returns at most 2,000,000
+  elements per call (`ARGUMENT_OUT_OF_BOUND` 69; ClickHouse allows 500M
+  per block), and `repeat`, `replace`/`replaceAll`/`replaceOne`,
+  `replaceRegexpOne/All` and `arrayStringConcat` add at most 64 MiB to the
+  value they build (`TOO_LARGE_STRING_SIZE` 131; ClickHouse has no such
+  cap). A regexp (`match`, `like`/`ilike`, `replaceRegexp*`) may compile
+  to about 100,000 instructions, where ClickHouse's RE2 accepts about five
+  times that; a larger one fails like a pattern that does not compile.
 * **Aggregates**: `count`, `count(x)`, `count(DISTINCT x)`, `countIf`, `sum`,
   `sumIf`, `avg`, `avgIf`, `min`, `max`, `minIf`, `maxIf`, `any`, `anyLast`,
   `argMax`, `argMin`, `uniq`, `uniqExact`, `uniqIf`, `uniqExactIf`,

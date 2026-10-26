@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+
+	"github.com/gfronza/twinhouse/internal/limits"
 )
 
 // Operator priorities, lowest to highest, as in ClickHouse's
@@ -31,9 +33,15 @@ func (p *parser) parseExpr() Expr {
 	p.enter()
 	defer p.leave()
 	if params, ok := p.tryLambdaParams(); ok {
-		return &LambdaExpr{Params: params, Body: p.parseExpr()}
+		s := p.beginChildren()
+		body := p.parseExpr()
+		p.finished(p.node(p.endChildren(s)))
+		return &LambdaExpr{Params: params, Body: body}
 	}
-	return p.parseOp(0)
+	// One enter per nesting level: parseOpHeight would enter again.
+	x, h := p.parseUnary()
+	e, _ := p.parseOpFrom(x, h, 0)
+	return e
 }
 
 // parseExprAlias parses an expression optionally followed by `AS alias`; it
@@ -165,16 +173,27 @@ func (p *parser) binaryOp() (string, int, int) {
 
 // parseOp parses an expression whose operators all bind tighter than min.
 func (p *parser) parseOp(min int) Expr {
-	p.enter()
-	defer p.leave()
-	return p.parseOpFrom(p.parseUnary(), min)
+	e, _ := p.parseOpHeight(min)
+	return e
 }
 
-func (p *parser) parseOpFrom(left Expr, min int) Expr {
+// parseOpHeight is parseOp that also returns the height of the expression.
+func (p *parser) parseOpHeight(min int) (Expr, int) {
+	p.enter()
+	defer p.leave()
+	x, h := p.parseUnary()
+	return p.parseOpFrom(x, h, min)
+}
+
+// parseOpFrom continues left, of height h, with the operators that bind
+// tighter than min, and returns the expression and its height.
+func (p *parser) parseOpFrom(left Expr, h, min int) (Expr, int) {
+	prev := "" // the operator of left when this loop built it
 	for {
 		op, prec, n := p.binaryOp()
 		if op == "" || prec <= min {
-			return left
+			p.finished(h)
+			return left, h
 		}
 		if op == "<=>" {
 			notImplemented("IS [NOT] DISTINCT FROM is not supported")
@@ -184,34 +203,44 @@ func (p *parser) parseOpFrom(left Expr, min int) Expr {
 		}
 		switch op {
 		case "?":
-			then := p.parseOp(precTernary)
+			then, th := p.parseOpHeight(precTernary)
 			p.expectOp(":")
-			els := p.parseOp(precTernary)
+			els, eh := p.parseOpHeight(precTernary)
 			if p.atOp("?") {
 				p.failExpected("end of expression (nested ternary operators must be parenthesized)")
 			}
-			left = &FuncCall{Name: "if", Args: []Expr{left, then, els}}
+			left, h = &FuncCall{Name: "if", Args: []Expr{left, then, els}}, p.node(h, th, eh)
 		case "IS NULL", "IS NOT NULL":
 			// ClickHouse applies following postfix operators to the result:
 			// a IS NULL::String is CAST(isNull(a), 'String').
-			left = p.parsePostfix(&IsNullExpr{X: left, Not: op == "IS NOT NULL"}, p.last.end)
+			left, h = p.parsePostfix(&IsNullExpr{X: left, Not: op == "IS NOT NULL"}, p.node(h), p.last.end)
 		case "BETWEEN", "NOT BETWEEN":
-			lo := p.parseOp(precBetween)
+			lo, lh := p.parseOpHeight(precBetween)
 			p.expectKw("AND")
-			hi := p.parseOp(precBetween)
-			left = &BetweenExpr{X: left, Low: lo, High: hi, Not: op == "NOT BETWEEN"}
+			hi, hh := p.parseOpHeight(precBetween)
+			left, h = &BetweenExpr{X: left, Low: lo, High: hi, Not: op == "NOT BETWEEN"}, p.node(h, lh, hh)
 		case "DIV":
-			left = &FuncCall{Name: "intDiv", Args: []Expr{left, p.parseOp(prec)}}
+			right, rh := p.parseOpHeight(prec)
+			left, h = &FuncCall{Name: "intDiv", Args: []Expr{left, right}}, p.node(h, rh)
 		case "REGEXP":
-			left = &FuncCall{Name: "match", Args: []Expr{left, p.parseOp(prec)}}
+			right, rh := p.parseOpHeight(prec)
+			left, h = &FuncCall{Name: "match", Args: []Expr{left, right}}, p.node(h, rh)
 		default:
-			left = &BinaryExpr{Op: op, Left: left, Right: p.parseOp(prec)}
+			right, rh := p.parseOpHeight(prec)
+			if mergesChain(op, prev) {
+				h = p.checkHeight(max(h, rh+1))
+			} else {
+				h = p.node(h, rh)
+			}
+			left = &BinaryExpr{Op: op, Left: left, Right: right}
 		}
+		prev = op
 	}
 }
 
-// parseUnary parses prefix operators and a postfix-decorated primary.
-func (p *parser) parseUnary() Expr {
+// parseUnary parses prefix operators and a postfix-decorated primary, and
+// returns the expression and its height.
+func (p *parser) parseUnary() (Expr, int) {
 	t := p.peek()
 	if isKw(t, "NOT") {
 		p.next()
@@ -219,7 +248,9 @@ func (p *parser) parseUnary() Expr {
 			// NOT(...) is the function not(...) and binds like a primary.
 			start := p.peek().pos
 			p.next()
+			s := p.beginChildren()
 			args, distinct := p.parseCallArgs()
+			h := p.node(p.endChildren(s))
 			if distinct {
 				p.fail("DISTINCT is not allowed in NOT(...)")
 			}
@@ -229,9 +260,10 @@ func (p *parser) parseUnary() Expr {
 			} else {
 				e = &FuncCall{Name: t.text, Args: args}
 			}
-			return p.parsePostfix(e, start)
+			return p.parsePostfix(e, h, start)
 		}
-		return &UnaryExpr{Op: "NOT", X: p.parseOp(precNot)}
+		x, h := p.parseOpHeight(precNot)
+		return &UnaryExpr{Op: "NOT", X: x}, p.node(h)
 	}
 	if isOp(t, "+") {
 		// ClickHouse drops a unary plus (+1 is the literal 1). It does not
@@ -239,22 +271,26 @@ func (p *parser) parseUnary() Expr {
 		p.next()
 		if isOp(p.peek(), "-") {
 			p.next()
-			return &UnaryExpr{Op: "-", X: p.parseOp(precUnary)}
+			x, h := p.parseOpHeight(precUnary)
+			return &UnaryExpr{Op: "-", X: x}, p.node(h)
 		}
-		return p.parseOp(precUnary)
+		return p.parseOpHeight(precUnary)
 	}
 	if isOp(t, "-") {
 		n := p.peekN(1)
 		if n.kind == tNumber || (n.kind == tIdent && isInfNan(n.text) && !isOp(p.peekN(2), "(")) {
 			p.next()
 			p.next()
-			return p.parsePostfix(p.numberLiteral(n, true), t.pos)
+			return p.parsePostfix(p.numberLiteral(n, true), p.node(), t.pos)
 		}
 		p.next()
-		return &UnaryExpr{Op: "-", X: p.parseOp(precUnary)}
+		x, h := p.parseOpHeight(precUnary)
+		return &UnaryExpr{Op: "-", X: x}, p.node(h)
 	}
 	start := t.pos
-	return p.parsePostfix(p.parsePrimary(), start)
+	s := p.beginChildren()
+	x := p.parsePrimary()
+	return p.parsePostfix(x, p.node(p.endChildren(s)), start)
 }
 
 func isInfNan(s string) bool {
@@ -265,16 +301,19 @@ func isInfNan(s string) bool {
 	return false
 }
 
-// parsePostfix applies [], .N and ::Type to x, which started at offset start.
-func (p *parser) parsePostfix(x Expr, start int) Expr {
+// parsePostfix applies [], .N and ::Type to x, of height h, which started at
+// offset start. It returns the expression and its height.
+func (p *parser) parsePostfix(x Expr, h, start int) (Expr, int) {
 	for {
 		t := p.peek()
 		switch {
 		case isOp(t, "["):
 			p.next()
+			s := p.beginChildren()
 			idx := p.parseExprAlias()
+			ih := p.endChildren(s)
 			p.expectOp("]")
-			x = &IndexExpr{X: x, Index: idx}
+			x, h = &IndexExpr{X: x, Index: idx}, p.node(h, ih)
 		case isOp(t, "."):
 			n := p.peekN(1)
 			switch n.kind {
@@ -287,22 +326,26 @@ func (p *parser) parsePostfix(x Expr, start int) Expr {
 					if err != nil || i < 1 {
 						p.failAt(n, "tuple element index (a positive integer)")
 					}
-					x = &TupleAccessExpr{X: x, Index: i}
+					x, h = &TupleAccessExpr{X: x, Index: i}, p.node(h)
 				}
 			case tIdent, tQIdent:
 				p.next()
 				name, _ := p.parseIdentName()
-				x = &TupleAccessExpr{X: x, Name: name}
+				x, h = &TupleAccessExpr{X: x, Name: name}, p.node(h)
 			default:
-				return x
+				return x, h
 			}
 		case isOp(t, "::"):
 			p.next()
 			end := p.last.end
 			typ := p.typeText(func(token) bool { return true })
-			x = &CastExpr{X: castOperand(x, p.src[start:end-2]), Type: typ}
+			operand := castOperand(x, p.src[start:end-2])
+			if operand != x {
+				h = 1 // a literal now stands for x
+			}
+			x, h = &CastExpr{X: operand, Type: typ}, p.node(h)
 		default:
-			return x
+			return x, h
 		}
 	}
 }
@@ -382,7 +425,9 @@ func (p *parser) parsePrimary() Expr {
 			return p.parseParen()
 		case "[":
 			p.next()
-			return &ArrayExpr{Elems: nonNil(p.parseExprList("]"))}
+			a := &ArrayExpr{Elems: nonNil(p.parseExprList("]"))}
+			p.collection(a, len(a.Elems))
+			return a
 		case "{":
 			if p.inValues {
 				if n := p.peekN(1); n.kind == tString || n.kind == tNumber || isOp(n, "-") || isOp(n, "}") {
@@ -426,9 +471,10 @@ func (p *parser) checkStarModifiers() {
 }
 
 // looksLikeSelect reports whether the tokens at offset i start a SELECT
-// (possibly wrapped in parentheses).
+// (possibly wrapped in parentheses). It looks no further than the parse
+// depth allows, so a long run of '(' is not buffered.
 func (p *parser) looksLikeSelect(i int) bool {
-	for isOp(p.peekN(i), "(") {
+	for n := 0; isOp(p.peekN(i), "(") && n < limits.MaxParserDepth; n++ {
 		i++
 	}
 	t := p.peekN(i)
@@ -457,7 +503,9 @@ func (p *parser) parseParen() Expr {
 				break
 			}
 		}
-		return &TupleExpr{Elems: elems}
+		t := &TupleExpr{Elems: elems}
+		p.collection(t, len(elems))
+		return t
 	}
 	p.expectOp(")")
 	if b, ok := first.(*BinaryExpr); ok && (b.Op == "AND" || b.Op == "OR" || b.Op == "||") {
@@ -468,6 +516,9 @@ func (p *parser) parseParen() Expr {
 		// (('a', 'b')) = tuple(('a', 'b')).
 		return &TupleExpr{Elems: []Expr{first}}
 	}
+	// Parentheses are not a node: undo what parseUnary adds for one.
+	p.height--
+	p.elements--
 	return first
 }
 
@@ -674,6 +725,7 @@ func (p *parser) parseIdentPrimary() Expr {
 			if u == "TIMESTAMP" {
 				fn = "toDateTime"
 			}
+			p.literalChild()
 			return &FuncCall{Name: fn, Args: []Expr{&Literal{Value: n1.val, Raw: n1.text}}}
 		}
 	case "EXISTS":
@@ -682,7 +734,9 @@ func (p *parser) parseIdentPrimary() Expr {
 			if !p.looksLikeSelect(1) {
 				p.failAt(p.peekN(1), "SELECT subquery")
 			}
+			s := p.beginChildren()
 			sub := p.parseParen()
+			p.finished(p.node(p.endChildren(s)))
 			return &FuncCall{Name: "exists", Args: []Expr{sub}}
 		}
 	case "COLUMNS":
@@ -937,6 +991,7 @@ func (p *parser) parseInterval() Expr {
 			if u, ok := intervalUnit(n.text); ok {
 				p.next()
 				p.next()
+				p.literalChild()
 				return &IntervalExpr{X: &Literal{Value: t.val, Raw: t.text}, Unit: u}
 			}
 		}
@@ -946,6 +1001,7 @@ func (p *parser) parseInterval() Expr {
 			if u, ok := intervalUnit(fields[1]); ok {
 				if v, ok := parseNumber(fields[0]); ok {
 					p.next()
+					p.literalChild()
 					return &IntervalExpr{X: &Literal{Value: v, Raw: fields[0]}, Unit: u}
 				}
 			}
@@ -989,13 +1045,13 @@ func (p *parser) parsePosition(name string) Expr {
 	if p.acceptOp(")") {
 		return &FuncCall{Name: name}
 	}
-	first := p.parseOp(precCompare)
+	first, h := p.parseOpHeight(precCompare)
 	if p.acceptKw("IN") {
 		hay := p.parseExprAlias()
 		p.expectOp(")")
 		return &FuncCall{Name: "position", Args: []Expr{hay, first}}
 	}
-	first = p.parseOpFrom(first, 0)
+	first, _ = p.parseOpFrom(first, h, 0)
 	if p.acceptKw("AS") {
 		alias, _ := p.parseIdentName()
 		first = &AliasExpr{X: first, Alias: alias}
@@ -1069,7 +1125,9 @@ func (p *parser) parseTrim(lower string) Expr {
 func (p *parser) parseDateAddSub(name, op string) Expr {
 	p.next() // (
 	if u, ok := p.unitArg(); ok {
+		s := p.beginChildren()
 		n := p.parseExprAlias()
+		p.finished(p.node(p.endChildren(s))) // the interval over n
 		p.expectOp(",")
 		d := p.parseExprAlias()
 		p.expectOp(")")

@@ -56,9 +56,12 @@ func (p *parser) parseInsert() Statement {
 	return ins
 }
 
+// parseValuesRows parses the rows after VALUES. They are data, so they do
+// not count toward max_ast_elements.
 func (p *parser) parseValuesRows() [][]Expr {
+	elements := p.elements
 	p.inValues = true
-	defer func() { p.inValues = false }()
+	defer func() { p.inValues, p.elements = false, elements }()
 	var rows [][]Expr
 	for !p.atEnd() {
 		p.expectOp("(")
@@ -809,6 +812,13 @@ func (p *parser) parseExplain() Statement {
 		p.parseExpr()
 		p.acceptOp(",")
 	}
+	if st.Kind != "AST" && p.atKw("EXPLAIN") {
+		// Only EXPLAIN AST takes another EXPLAIN; elsewhere ClickHouse reads
+		// the word as an option name.
+		p.failAt(p.peekN(1), "equals sign")
+	}
+	p.enter()
+	defer p.leave()
 	st.Stmt = p.parseStatement()
 	return st
 }

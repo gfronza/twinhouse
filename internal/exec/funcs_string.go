@@ -1,13 +1,17 @@
 package exec
 
 import (
+	"math"
+	"math/bits"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/limits"
 )
 
 func init() {
@@ -113,10 +117,10 @@ func buildToFixedString(c *compiler, name string, args []*expr) (*expr, error) {
 	if err := requireString(name, args, 0); err != nil {
 		return nil, err
 	}
-	if !args[1].konst || !isIntKind(base(args[1]).Kind) || asInt(args[1].val) <= 0 {
-		return nil, cherr.New(cherr.IllegalColumn, "Second argument of function %s must be a positive constant integer", name)
+	n, err := fixedStringSize(name, args[1])
+	if err != nil {
+		return nil, err
 	}
-	n := int(asInt(args[1].val))
 	return strict(args[:1], chtype.Type{Kind: chtype.FixedString, N: n}, func(v []any) (any, error) {
 		s := v[0].(string)
 		if len(s) > n {
@@ -124,6 +128,52 @@ func buildToFixedString(c *compiler, name string, args []*expr) (*expr, error) {
 		}
 		return s + strings.Repeat("\x00", n-len(s)), nil
 	}), nil
+}
+
+// fixedStringSize reads the N of toFixedString(s, N), which must be a
+// positive constant no larger than limits.MaxFixedStringSize.
+func fixedStringSize(name string, a *expr) (int, error) {
+	if !a.konst || !isIntKind(base(a).Kind) {
+		return 0, errFixedStringSize(name)
+	}
+	if u, ok := a.val.(uint64); ok && u > limits.MaxFixedStringSize || asInt(a.val) > limits.MaxFixedStringSize {
+		return 0, cherr.New(cherr.ArgumentOutOfBound, "FixedString size is too large")
+	}
+	if asInt(a.val) <= 0 {
+		return 0, errFixedStringSize(name)
+	}
+	return int(asInt(a.val)), nil
+}
+
+func errFixedStringSize(name string) error {
+	return cherr.New(cherr.IllegalColumn, "Second argument of function %s must be a positive constant integer", name)
+}
+
+// checkResultSize rejects n bytes that an argument value would make a
+// function build, when n is over limits.MaxFunctionResultBytes. It runs
+// before they are built.
+func checkResultSize(name string, n uint64) error {
+	if n > limits.MaxFunctionResultBytes {
+		return cherr.New(cherr.TooLargeStringSize, "Too large string size (%d) in function %s, maximum is: %d",
+			n, name, limits.MaxFunctionResultBytes)
+	}
+	return nil
+}
+
+// satAdd returns a+b, or MaxUint64 if that overflows.
+func satAdd(a, b uint64) uint64 {
+	if s, carry := bits.Add64(a, b, 0); carry == 0 {
+		return s
+	}
+	return math.MaxUint64
+}
+
+// satMul returns a*b, or MaxUint64 if that overflows.
+func satMul(a, b uint64) uint64 {
+	if hi, lo := bits.Mul64(a, b); hi == 0 {
+		return lo
+	}
+	return math.MaxUint64
 }
 
 func buildLength(c *compiler, name string, args []*expr) (*expr, error) {
@@ -330,25 +380,138 @@ func replaceBuilder(all bool) builder {
 			if from == "" {
 				return s, nil
 			}
+			n := 1
 			if all {
-				return strings.ReplaceAll(s, from, to), nil
+				n = -1
 			}
-			return strings.Replace(s, from, to, 1), nil
+			if len(to) > len(from) {
+				count := strings.Count(s, from)
+				if !all {
+					count = min(count, 1)
+				}
+				grow := satMul(uint64(count), uint64(len(to)-len(from)))
+				if err := checkResultSize(name, grow); err != nil {
+					return nil, err
+				}
+			}
+			return strings.Replace(s, from, to, n), nil
 		}), nil
 	}
 }
 
-var reCache sync.Map // pattern -> *regexp.Regexp
+// maxRegexpInsts caps the estimated program size of one regexp. RE2's
+// default max_mem of 8 MiB allows about 87k instructions; Go uses about
+// 130 bytes per instruction while compiling, so one compile stays near
+// 13 MB.
+const maxRegexpInsts = 100_000
 
-func compileRegexp(p string) (*regexp.Regexp, error) {
-	if re, ok := reCache.Load(p); ok {
-		return re.(*regexp.Regexp), nil
+// compileRegexp compiles p and returns its estimated program size. A
+// pattern that does not compile, or whose program would pass
+// maxRegexpInsts, is an error with the given code.
+func compileRegexp(p string, code int) (*regexp.Regexp, int, error) {
+	tree, err := syntax.Parse(p, syntax.Perl)
+	if err != nil {
+		return nil, 0, cherr.Wrap(code, err, "cannot compile regular expression '%s'", p)
+	}
+	size := progSize(tree)
+	if size > maxRegexpInsts {
+		return nil, 0, cherr.New(code, "cannot compile regular expression '%s': pattern too large - compile failed", p)
 	}
 	re, err := regexp.Compile(p)
 	if err != nil {
-		return nil, cherr.Wrap(cherr.BadArguments, err, "cannot compile regular expression '%s'", p)
+		return nil, 0, cherr.Wrap(code, err, "cannot compile regular expression '%s'", p)
 	}
-	reCache.Store(p, re)
+	return re, size, nil
+}
+
+// progSize estimates how many instructions re compiles to. The parser
+// bounds the tree's height and its repeat counts, so neither the recursion
+// nor the products can grow large.
+func progSize(re *syntax.Regexp) int {
+	switch re.Op {
+	case syntax.OpLiteral:
+		return len(re.Rune)
+	case syntax.OpConcat, syntax.OpAlternate:
+		n := 0
+		for _, sub := range re.Sub {
+			n += progSize(sub)
+		}
+		return n
+	case syntax.OpRepeat:
+		if re.Max < 0 {
+			return progSize(re.Sub[0]) * (re.Min + 1)
+		}
+		return progSize(re.Sub[0]) * re.Max
+	}
+	n := 1
+	for _, sub := range re.Sub {
+		n += progSize(sub)
+	}
+	return n
+}
+
+// patternArg returns how to get the regexp for each value of a pattern
+// argument, after conv; code is the error for a pattern that does not
+// compile. A constant pattern is compiled once here; an error is still
+// reported per row. Other patterns go through the shared cache.
+func patternArg(a *expr, conv func(string) string, code int) func(string) (*regexp.Regexp, error) {
+	if p, ok := a.val.(string); ok && a.konst {
+		re, _, err := compileRegexp(conv(p), code)
+		return func(string) (*regexp.Regexp, error) { return re, err }
+	}
+	return func(p string) (*regexp.Regexp, error) { return regexps.get(conv(p), code) }
+}
+
+func asIs(s string) string { return s }
+
+const (
+	// maxCachedPatternBytes is the longest pattern the regexp cache keeps.
+	maxCachedPatternBytes = 4 << 10
+	// maxCachedRegexpInsts caps the estimated program size of all cached
+	// regexps together (about 50 MB).
+	maxCachedRegexpInsts = 1_000_000
+)
+
+// regexpCache holds regexps compiled from non-constant patterns. It is
+// emptied when one more entry would pass limits.MaxRegexpCacheEntries
+// entries or maxCachedRegexpInsts instructions. Patterns longer than
+// maxCachedPatternBytes are compiled for their row only.
+type regexpCache struct {
+	mu    sync.RWMutex
+	m     map[string]*regexp.Regexp
+	insts int
+}
+
+var regexps regexpCache
+
+func (c *regexpCache) get(p string, code int) (*regexp.Regexp, error) {
+	if len(p) > maxCachedPatternBytes {
+		re, _, err := compileRegexp(p, code)
+		return re, err
+	}
+	c.mu.RLock()
+	re, ok := c.m[p]
+	c.mu.RUnlock()
+	if ok {
+		return re, nil
+	}
+	re, size, err := compileRegexp(p, code)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old, ok := c.m[p]; ok {
+		return old, nil
+	}
+	if len(c.m) >= limits.MaxRegexpCacheEntries || c.insts+size > maxCachedRegexpInsts {
+		c.m, c.insts = nil, 0
+	}
+	if c.m == nil {
+		c.m = make(map[string]*regexp.Regexp)
+	}
+	c.m[p] = re
+	c.insts += size
 	return re, nil
 }
 
@@ -384,24 +547,84 @@ func regexReplaceBuilder(all bool) builder {
 		if err := requireString(name, args, 0, 1, 2); err != nil {
 			return nil, err
 		}
+		pattern := patternArg(args[1], asIs, cherr.BadArguments)
 		return strict(args, chtype.TString, func(v []any) (any, error) {
-			re, err := compileRegexp(v[1].(string))
+			re, err := pattern(v[1].(string))
 			if err != nil {
 				return nil, err
 			}
-			repl := chReplacement(v[2].(string))
-			s := v[0].(string)
 			if all {
-				return re.ReplaceAllString(s, repl), nil
+				return replaceRegexpAll(name, re, v[0].(string), v[2].(string))
 			}
-			loc := re.FindStringSubmatchIndex(s)
-			if loc == nil {
-				return s, nil
-			}
-			out := re.ExpandString(nil, repl, s, loc)
-			return s[:loc[0]] + string(out) + s[loc[1]:], nil
+			return replaceRegexpOne(name, re, v[0].(string), v[2].(string))
 		}), nil
 	}
+}
+
+// replacementShape returns the literal bytes of a ClickHouse replacement
+// string and how many \N group references it has.
+func replacementShape(r string) (lit, refs uint64) {
+	for i := 0; i < len(r); i++ {
+		if r[i] == '\\' && i+1 < len(r) {
+			i++
+			if r[i] >= '0' && r[i] <= '9' {
+				refs++
+				continue
+			}
+		}
+		lit++
+	}
+	return lit, refs
+}
+
+// replacementGrowth is the most bytes that replacing matches matched bytes
+// adds to the input: a group is never longer than its match, so each
+// reference adds at most the matched bytes.
+func replacementGrowth(matches, matched, lit, refs uint64) uint64 {
+	added := satAdd(satMul(matches, lit), satMul(refs, matched))
+	if added <= matched {
+		return 0
+	}
+	return added - matched
+}
+
+// replaceRegexpAll replaces every match of re in s. When the growth could
+// pass the cap (at most len(s)+1 matches of at most len(s) bytes in all),
+// the matches are counted first.
+func replaceRegexpAll(name string, re *regexp.Regexp, s, r string) (string, error) {
+	lit, refs := replacementShape(r)
+	n := uint64(len(s))
+	if replacementGrowth(n+1, n, lit, refs) > limits.MaxFunctionResultBytes {
+		matches, matched := countMatches(re, s)
+		if err := checkResultSize(name, replacementGrowth(matches, matched, lit, refs)); err != nil {
+			return "", err
+		}
+	}
+	return re.ReplaceAllString(s, chReplacement(r)), nil
+}
+
+// countMatches returns how many matches of re s has and their total bytes.
+func countMatches(re *regexp.Regexp, s string) (matches, matched uint64) {
+	re.ReplaceAllStringFunc(s, func(m string) string {
+		matches++
+		matched += uint64(len(m))
+		return ""
+	})
+	return matches, matched
+}
+
+func replaceRegexpOne(name string, re *regexp.Regexp, s, r string) (string, error) {
+	loc := re.FindStringSubmatchIndex(s)
+	if loc == nil {
+		return s, nil
+	}
+	lit, refs := replacementShape(r)
+	m := uint64(loc[1] - loc[0])
+	if err := checkResultSize(name, replacementGrowth(1, m, lit, refs)); err != nil {
+		return "", err
+	}
+	out := re.ExpandString(nil, chReplacement(r), s, loc)
+	return s[:loc[0]] + string(out) + s[loc[1]:], nil
 }
 
 func buildSplitByChar(c *compiler, name string, args []*expr) (*expr, error) {
@@ -515,8 +738,9 @@ func likeBuilder(ci, negate bool) builder {
 		if err := requireString(name, args, 0, 1); err != nil {
 			return nil, err
 		}
+		pattern := patternArg(args[1], func(p string) string { return likePattern(p, ci) }, cherr.CannotCompileRegexp)
 		return strict(args, chtype.TUInt8, func(v []any) (any, error) {
-			re, err := compileRegexp(likePattern(v[1].(string), ci))
+			re, err := pattern(v[1].(string))
 			if err != nil {
 				return nil, err
 			}
@@ -532,8 +756,9 @@ func buildMatch(c *compiler, name string, args []*expr) (*expr, error) {
 	if err := requireString(name, args, 0, 1); err != nil {
 		return nil, err
 	}
+	pattern := patternArg(args[1], asIs, cherr.CannotCompileRegexp)
 	return strict(args, chtype.TUInt8, func(v []any) (any, error) {
-		re, err := compileRegexp(v[1].(string))
+		re, err := pattern(v[1].(string))
 		if err != nil {
 			return nil, err
 		}

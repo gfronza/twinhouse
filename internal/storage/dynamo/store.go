@@ -58,7 +58,7 @@ type storeImpl struct {
 	now  func() time.Time
 	// tableWait bounds how long table creation/deletion is awaited.
 	tableWait time.Duration
-	// parseType parses catalog column types (nil: chtype.Parse); tests inject one.
+	// parseType parses catalog column types (nil: chtype.ParseStored); tests inject one.
 	parseType func(string) (chtype.Type, error)
 	// lastStamp is the newest write time handed out by stamp (unix nanos).
 	lastStamp atomic.Int64
@@ -68,7 +68,7 @@ func (s *storeImpl) parse(text string) (chtype.Type, error) {
 	if s.parseType != nil {
 		return s.parseType(text)
 	}
-	return chtype.Parse(text)
+	return chtype.ParseStored(text)
 }
 
 // stamp returns n consecutive write times (unix nanos) starting at the

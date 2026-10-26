@@ -16,6 +16,11 @@ import (
 	"github.com/gfronza/twinhouse/internal/cherr"
 )
 
+// zstdMaxWindow bounds the window a zstd request body may declare, which
+// sizes the decoder's buffer: libzstd's default limit, which ClickHouse
+// keeps (the Go decoder's own default is 512 MiB).
+const zstdMaxWindow = 128 << 20
+
 // decodeRequestBody wraps body according to the request Content-Encoding,
 // accepting the same names as ClickHouse (case-insensitive). Decoder failures
 // surface on Read as *cherr.Error with ClickHouse's codes.
@@ -46,7 +51,7 @@ func decodeRequestBody(encoding string, body io.Reader) (io.ReadCloser, error) {
 	case "br":
 		return &codecReader{r: brotli.NewReader(body), code: cherr.BrotliReadFailed, msg: "brotli decode error"}, nil
 	case "zstd":
-		zr, err := zstd.NewReader(body, zstd.WithDecoderConcurrency(1))
+		zr, err := zstd.NewReader(body, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(zstdMaxWindow))
 		if err != nil {
 			return nil, cherr.New(cherr.ZstdDecoderFailed, "ZSTD stream decoding failed: %v", err)
 		}
