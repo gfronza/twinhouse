@@ -84,6 +84,11 @@ type Config struct {
 	// (0: unlimited, like ClickHouse). A max_execution_time setting (URL,
 	// session or the query's SETTINGS clause) overrides it.
 	MaxExecutionTime time.Duration
+	// RejectSessions makes every request that uses HTTP sessions
+	// (session_id, session_check or session_timeout) fail with
+	// NOT_IMPLEMENTED (48): deployments without a long-lived process (the
+	// Lambda API) cannot keep per-session state between requests.
+	RejectSessions bool
 	// Now overrides the clock (tests).
 	Now func() time.Time
 }
@@ -673,6 +678,9 @@ func readLimited(r io.Reader, limit int) ([]byte, error) {
 }
 
 func (c *call) openSession() error {
+	if c.s.cfg.RejectSessions && c.usesSession() {
+		return cherr.New(cherr.NotImplemented, rejectedSessionsMsg)
+	}
 	id, ok := c.params["session_id"]
 	if !ok {
 		return nil
@@ -691,6 +699,20 @@ func (c *call) openSession() error {
 	}
 	c.sess, c.sessIn = sess, st
 	return nil
+}
+
+// rejectedSessionsMsg is the error of a session request when
+// Config.RejectSessions is set.
+const rejectedSessionsMsg = "sessions are not supported by this deployment"
+
+// usesSession reports whether the request names any session parameter.
+func (c *call) usesSession() bool {
+	for _, p := range []string{"session_id", "session_check", "session_timeout"} {
+		if _, ok := c.params[p]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // pending session changes, applied on release.

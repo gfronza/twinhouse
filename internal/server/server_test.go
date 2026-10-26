@@ -656,3 +656,67 @@ func TestPanicInExecutor(t *testing.T) {
 		t.Errorf("%d %q", r.Status, r.Body)
 	}
 }
+
+func TestRejectSessions(t *testing.T) {
+	fe := &fakeExec{fn: func(_ context.Context, req *exec.Request) (*exec.Result, error) {
+		if strings.HasPrefix(req.Query, "USE ") {
+			return &exec.Result{Database: strings.TrimPrefix(req.Query, "USE ")}, nil
+		}
+		if req.Query == "SELECT 1" {
+			return oneRow(), nil
+		}
+		return &exec.Result{}, nil
+	}}
+	_, ts := newTestServer(t, fe, func(c *Config) {
+		c.RejectSessions = true
+		c.Users = map[string]string{"default": "", "u2": "pw"}
+	})
+
+	const want = "Code: 48. DB::Exception: sessions are not supported by this deployment. (NOT_IMPLEMENTED) (version 25.8.1.1)\n"
+	for _, q := range []string{
+		"session_id=s1",
+		"session_id=",
+		"session_check=1",
+		"session_timeout=10",
+		"session_id=s1&session_timeout=10&session_check=1",
+		"session_id=s1&user=u2&password=pw",
+	} {
+		before := fe.calls()
+		r := post(t, ts.URL+"/?"+q, "SELECT 1")
+		if r.Status != 501 || r.Header.Get("X-ClickHouse-Exception-Code") != "48" || r.Body != want {
+			t.Errorf("%s: status %d code %q body %q", q, r.Status, r.Header.Get("X-ClickHouse-Exception-Code"), r.Body)
+		}
+		if fe.calls() != before {
+			t.Errorf("%s: executor was called", q)
+		}
+		// GET too. Like the other session errors, this one is raised before
+		// default_format is known, so it is always plain text.
+		r = get(t, ts.URL+"/?"+q+"&query=SELECT+1&default_format=JSONEachRow")
+		if r.Status != 501 || r.Header.Get("X-ClickHouse-Exception-Code") != "48" || r.Body != want {
+			t.Errorf("GET %s: status %d body %q", q, r.Status, r.Body)
+		}
+	}
+	// Authentication still comes first.
+	if r := post(t, ts.URL+"/?session_id=s1&user=u2&password=wrong", "SELECT 1"); r.Status != 403 || r.Header.Get("X-ClickHouse-Exception-Code") != "516" {
+		t.Errorf("bad password: %d %s", r.Status, r.Body)
+	}
+
+	// Everything else is unaffected: queries, settings, database, query_id,
+	// and a session-less USE (no lasting effect, as without sessions).
+	requireEncoders(t)
+	r := post(t, ts.URL+"/?query_id=q1&max_block_size=10&database=default", "SELECT 1")
+	if r.Status != 200 || r.Body != "1\n" || r.Header.Get("X-ClickHouse-Query-Id") != "q1" {
+		t.Errorf("plain query: %d %q %v", r.Status, r.Body, r.Header)
+	}
+	if got := fe.last(t).Settings["max_block_size"]; got != "10" {
+		t.Errorf("settings %v", fe.last(t).Settings)
+	}
+	post(t, ts.URL+"/", "USE d3")
+	post(t, ts.URL+"/", "SELECT 1")
+	if db := fe.last(t).Database; db != "default" {
+		t.Errorf("sessionless db %q", db)
+	}
+	if r := get(t, ts.URL+"/ping"); r.Status != 200 || r.Body != "Ok.\n" {
+		t.Errorf("ping: %d %q", r.Status, r.Body)
+	}
+}
