@@ -101,6 +101,10 @@ type fakeStore struct {
 	dropErr       error
 	// block makes EnsureTable/DropTable wait for ctx to end.
 	block bool
+	// streams maps physical name -> stream ARN ("" = no stream); a table
+	// missing from a non-nil map fails the lookup. streamErr fails every lookup.
+	streams   map[string]string
+	streamErr error
 }
 
 func (f *fakeStore) EnsureTable(ctx context.Context, t *catalog.Table) error {
@@ -420,3 +424,186 @@ func TestReconcilerKeepsQuarantinedTables(t *testing.T) {
 		t.Fatalf("after the quarantine cleared: %v", dropped)
 	}
 }
+
+// streams gives the fake store the optional StreamARNs capability.
+func (f *fakeStore) StreamARN(_ context.Context, physical string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.streamErr != nil {
+		return "", f.streamErr
+	}
+	if f.streams == nil {
+		return "", nil
+	}
+	arn, ok := f.streams[physical]
+	if !ok {
+		return "", errors.New("unknown table " + physical)
+	}
+	return arn, nil
+}
+
+type fakeConsumers struct {
+	mu        sync.Mutex
+	ensured   []string // "<physical>@<version>=<stream>"
+	removed   []string // "<physical>=<stream>"
+	ensureErr map[string]error
+	removeErr error
+}
+
+func (f *fakeConsumers) EnsureConsumers(_ context.Context, t *catalog.Table, streamARN string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.ensureErr[t.PhysicalName]; err != nil {
+		return err
+	}
+	f.ensured = append(f.ensured, t.PhysicalName+"@"+itoa(t.Version)+"="+streamARN)
+	return nil
+}
+
+func (f *fakeConsumers) RemoveConsumers(_ context.Context, physical, streamARN string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.removed = append(f.removed, physical+"="+streamARN)
+	return nil
+}
+
+func (f *fakeConsumers) snapshot() (ensured, removed []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.ensured), slices.Clone(f.removed)
+}
+
+func streamOf(physical string) string {
+	return "arn:aws:dynamodb:eu-west-1:123456789012:table/" + physical + "/stream/2026-01-01T00:00:00.000"
+}
+
+func TestReconcilerStreamConsumers(t *testing.T) {
+	ctx := context.Background()
+	cat := &fakeCatalog{}
+	src, rollup, other := tbl("d", "src", 1), tbl("d", "rollup", 1), tbl("d", "other", 1)
+	src.Engine, rollup.Engine, other.Engine = catalog.EngineMergeTree, catalog.EngineSummingMergeTree, catalog.EngineReplacingMergeTree
+	rollup.Replication = catalog.ReplicationRegional
+	// Rollups have no stream (the store creates them without one).
+	st := &fakeStore{ensureErr: map[string]error{}, streams: map[string]string{
+		src.PhysicalName: streamOf(src.PhysicalName), rollup.PhysicalName: "", other.PhysicalName: streamOf(other.PhysicalName)}}
+	cons := &fakeConsumers{ensureErr: map[string]error{}}
+	r := NewReconciler(ReconcilerConfig{Catalog: cat, Store: st, Consumers: cons, Logger: quietLogger()})
+
+	cat.set([]string{"d"}, src, rollup, other)
+	cons.ensureErr[other.PhysicalName] = errors.New("TooManyRequestsException")
+	r.RunOnce(ctx)
+	ensured, removed := cons.snapshot()
+	if want := []string{"p_d_src@1=" + streamOf("p_d_src")}; !slices.Equal(ensured, want) || len(removed) != 0 {
+		t.Fatalf("round 1: ensured %v removed %v", ensured, removed)
+	}
+	// The table itself was ensured although its consumers failed; the
+	// consumers are retried next round without re-ensuring the table.
+	if se, _ := st.snapshot(); len(se) != 3 {
+		t.Fatalf("tables ensured %v", se)
+	}
+	delete(cons.ensureErr, other.PhysicalName)
+	r.RunOnce(ctx)
+	ensured, _ = cons.snapshot()
+	if len(ensured) != 2 || ensured[1] != "p_d_other@1="+streamOf("p_d_other") {
+		t.Fatalf("retry: %v", ensured)
+	}
+	if se, _ := st.snapshot(); len(se) != 3 {
+		t.Fatalf("table re-ensured for a consumer retry: %v", se)
+	}
+	// Nothing is wired again while nothing changes; a new definition is.
+	r.RunOnce(ctx)
+	if ensured, _ = cons.snapshot(); len(ensured) != 2 {
+		t.Fatalf("re-wired unchanged tables: %v", ensured)
+	}
+	src2 := tbl("d", "src", 2)
+	src2.Engine = catalog.EngineMergeTree
+	cat.set([]string{"d"}, src2, rollup, other)
+	r.RunOnce(ctx)
+	if ensured, _ = cons.snapshot(); len(ensured) != 3 || ensured[2] != "p_d_src@2="+streamOf("p_d_src") {
+		t.Fatalf("new version: %v", ensured)
+	}
+
+	// A dropped table has its consumers removed (with its stream ARN)
+	// before the physical drop; a failing removal postpones the drop.
+	cat.set([]string{"d"}, src2, rollup)
+	r.RunOnce(ctx)
+	cons.mu.Lock()
+	cons.removeErr = errors.New("throttled")
+	cons.mu.Unlock()
+	r.RunOnce(ctx) // DropAfter reached, but RemoveConsumers fails
+	if _, dropped := st.snapshot(); len(dropped) != 0 {
+		t.Fatalf("dropped although consumers remain: %v", dropped)
+	}
+	cons.mu.Lock()
+	cons.removeErr = nil
+	cons.mu.Unlock()
+	r.RunOnce(ctx)
+	_, removed = cons.snapshot()
+	_, dropped := st.snapshot()
+	if !slices.Equal(removed, []string{"p_d_other=" + streamOf("p_d_other")}) || !slices.Equal(dropped, []string{"p_d_other"}) {
+		t.Fatalf("drop: removed %v dropped %v", removed, dropped)
+	}
+	// A rollup drop removes by table name only (no stream), harmlessly.
+	cat.set([]string{"d"}, src2)
+	r.RunOnce(ctx)
+	r.RunOnce(ctx)
+	_, removed = cons.snapshot()
+	if !slices.Contains(removed, "p_d_rollup=") {
+		t.Fatalf("rollup drop: %v", removed)
+	}
+	// A table whose stream cannot be resolved keeps its table ensured and
+	// is wired once the lookup works; a table already gone is unwired by name.
+	gone := tbl("d", "gone", 1)
+	cat.set([]string{"d"}, src2, gone) // not in st.streams: lookup fails
+	r.RunOnce(ctx)
+	if ensured, _ = cons.snapshot(); len(ensured) != 3 {
+		t.Fatalf("wired without a stream ARN: %v", ensured)
+	}
+	st.mu.Lock()
+	st.streams[gone.PhysicalName] = streamOf("p_d_gone")
+	st.mu.Unlock()
+	r.RunOnce(ctx)
+	if ensured, _ = cons.snapshot(); len(ensured) != 4 {
+		t.Fatalf("not wired after the lookup recovered: %v", ensured)
+	}
+	st.mu.Lock()
+	delete(st.streams, gone.PhysicalName)
+	st.mu.Unlock()
+	cat.set([]string{"d"}, src2)
+	r.RunOnce(ctx)
+	r.RunOnce(ctx)
+	_, removed = cons.snapshot()
+	if !slices.Contains(removed, "p_d_gone=") {
+		t.Fatalf("gone table not unwired by name: %v", removed)
+	}
+}
+
+// Without Consumers the reconciler never resolves streams; with Consumers
+// but a store that cannot resolve them, consumers are disabled.
+func TestReconcilerConsumersNeedStreamARNs(t *testing.T) {
+	ctx := context.Background()
+	cat := &fakeCatalog{}
+	cat.set([]string{"d"}, tbl("d", "a", 1))
+	cons := &fakeConsumers{}
+	r := NewReconciler(ReconcilerConfig{Catalog: cat, Store: panicStreamStore{}, Consumers: cons, Logger: quietLogger()})
+	r.RunOnce(ctx)
+	if ensured, _ := cons.snapshot(); len(ensured) != 0 {
+		t.Fatalf("consumers used without stream ARNs: %v", ensured)
+	}
+	// An explicit resolver works with any store.
+	st := &fakeStore{}
+	r = NewReconciler(ReconcilerConfig{Catalog: cat, Store: st, Consumers: cons, Logger: quietLogger(),
+		StreamARN: func(_ context.Context, p string) (string, error) { return streamOf(p), nil }})
+	r.RunOnce(ctx)
+	if ensured, _ := cons.snapshot(); !slices.Equal(ensured, []string{"p_d_a@1=" + streamOf("p_d_a")}) {
+		t.Fatalf("explicit resolver: %v", ensured)
+	}
+}
+
+// panicStreamStore has no StreamARN method.
+type panicStreamStore struct{ storage.Store }
+
+func (panicStreamStore) EnsureTable(context.Context, *catalog.Table) error { return nil }
