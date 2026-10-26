@@ -7,7 +7,6 @@ import (
 	"time"
 
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	sttypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 
 	"dynamodb-eventstream/internal/awsx"
 )
@@ -44,31 +43,27 @@ func TestNewValidates(t *testing.T) {
 	}
 }
 
-func rec(keys map[string]sttypes.AttributeValue) sttypes.Record {
-	return sttypes.Record{Dynamodb: &sttypes.StreamRecord{Keys: keys}}
-}
-
 func TestLaneOfIsDeterministicPerKey(t *testing.T) {
-	k1 := map[string]sttypes.AttributeValue{
-		"_pk": &sttypes.AttributeValueMemberB{Value: []byte{1, 0, 2}},
-		"_sk": &sttypes.AttributeValueMemberB{Value: []byte{3}},
+	k1 := map[string]ddbtypes.AttributeValue{
+		"_pk": &ddbtypes.AttributeValueMemberB{Value: []byte{1, 0, 2}},
+		"_sk": &ddbtypes.AttributeValueMemberB{Value: []byte{3}},
 	}
-	k2 := map[string]sttypes.AttributeValue{
-		"_sk": &sttypes.AttributeValueMemberB{Value: []byte{3}},
-		"_pk": &sttypes.AttributeValueMemberB{Value: []byte{1, 0, 2}},
+	k2 := map[string]ddbtypes.AttributeValue{
+		"_sk": &ddbtypes.AttributeValueMemberB{Value: []byte{3}},
+		"_pk": &ddbtypes.AttributeValueMemberB{Value: []byte{1, 0, 2}},
 	}
 	for range 20 {
-		if laneOf(rec(k1), 8) != laneOf(rec(k2), 8) {
+		if laneOf(k1, 8) != laneOf(k2, 8) {
 			t.Fatal("same key mapped to different lanes")
 		}
 	}
-	if laneOf(rec(k1), 1) != 0 || laneOf(sttypes.Record{}, 8) != 0 {
+	if laneOf(k1, 1) != 0 || laneOf(nil, 8) != 0 {
 		t.Fatal("degenerate lanes")
 	}
 	lanes := map[int]bool{}
 	for i := range 64 {
-		k := map[string]sttypes.AttributeValue{"_pk": &sttypes.AttributeValueMemberS{Value: string(rune('a' + i))}}
-		lanes[laneOf(rec(k), 8)] = true
+		k := map[string]ddbtypes.AttributeValue{"_pk": &ddbtypes.AttributeValueMemberS{Value: string(rune('a' + i))}}
+		lanes[laneOf(k, 8)] = true
 	}
 	if len(lanes) < 4 {
 		t.Fatalf("poor key distribution: %v", lanes)
@@ -76,10 +71,10 @@ func TestLaneOfIsDeterministicPerKey(t *testing.T) {
 }
 
 func TestAttrHelpers(t *testing.T) {
-	img := map[string]sttypes.AttributeValue{
-		"_origin": &sttypes.AttributeValueMemberS{Value: "us"},
-		"_ts":     &sttypes.AttributeValueMemberN{Value: "12"},
-		"bad":     &sttypes.AttributeValueMemberB{Value: []byte("x")},
+	img := map[string]ddbtypes.AttributeValue{
+		"_origin": &ddbtypes.AttributeValueMemberS{Value: "us"},
+		"_ts":     &ddbtypes.AttributeValueMemberN{Value: "12"},
+		"bad":     &ddbtypes.AttributeValueMemberB{Value: []byte("x")},
 	}
 	if v, ok := stringAttr(img, "_origin"); !ok || v != "us" {
 		t.Fatal("stringAttr")

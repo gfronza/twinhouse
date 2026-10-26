@@ -27,6 +27,12 @@
 // views to it in the target region: the version never enters that region's
 // stream, but the origin region applied its views to it, and rollups only
 // converge if every region's views see the same row versions (DESIGN.md §1).
+//
+// The per-record logic lives in Applier, shared by the stream poller
+// (Replicator, one pipe per table and ordered region pair) and the Lambda
+// entry point (Lambda, GLOBAL_MODE=aws: one function per region fed by the
+// event-source mappings of that region's ReplacingMergeTree tables, copying
+// its rows to every other region).
 package replicator
 
 import (
@@ -38,13 +44,11 @@ import (
 	"slices"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	sttypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 
 	"dynamodb-eventstream/internal/awsx"
 	"dynamodb-eventstream/internal/streams"
@@ -112,7 +116,7 @@ type Config struct {
 	// table the physical table, seq identifies the record). It applies
 	// materialized views to the losing version (mvworker.ImageApplier); an
 	// error fails the batch, which is retried, so it must be idempotent.
-	OnConflict func(ctx context.Context, region, table, seq string, image map[string]ddbtypes.AttributeValue) error
+	OnConflict ConflictHook
 	// Parallelism bounds concurrent writes per batch (default 8); records of
 	// the same item are always applied in stream order.
 	Parallelism int
@@ -135,8 +139,7 @@ type Stats struct {
 type Replicator struct {
 	cfg Config
 	log *slog.Logger
-
-	put, deleted, skipOrigin, skipConflict, skipInvalid, conflictViews, errs atomic.Uint64
+	counters
 
 	mu    sync.Mutex
 	pipes map[pipeKey]context.CancelFunc
@@ -198,14 +201,11 @@ func (r *Replicator) CheckpointTable() string { return r.cfg.Prefix + "__checkpo
 
 // Stats returns a snapshot of the counters.
 func (r *Replicator) Stats() Stats {
+	s := r.stats()
 	r.mu.Lock()
-	n := len(r.pipes)
+	s.Pipes = len(r.pipes)
 	r.mu.Unlock()
-	return Stats{
-		Put: r.put.Load(), Deleted: r.deleted.Load(),
-		SkippedOrigin: r.skipOrigin.Load(), SkippedConflict: r.skipConflict.Load(),
-		SkippedInvalid: r.skipInvalid.Load(), ConflictViews: r.conflictViews.Load(), Errors: r.errs.Load(), Pipes: n,
-	}
+	return s
 }
 
 // Run replicates until ctx is cancelled.
@@ -288,6 +288,20 @@ func (r *Replicator) reconcile(ctx context.Context, tables []TableSpec, wg *sync
 		readerLog := r.log.With("from", k.from, "to", k.to)
 		p := &pipe{r: r, key: k, from: r.region(k.from), to: r.region(k.to),
 			log: readerLog.With("table", k.table), readerLog: readerLog}
+		hook := r.cfg.OnConflict
+		if k.table == r.CatalogTable() {
+			hook = nil // catalog entries feed no views
+		}
+		var err error
+		p.applier, err = NewApplier(ApplierConfig{Source: k.from, Target: k.to, Client: p.to.Clients.DynamoDB,
+			Table: TableSpec{Name: k.table, VersionColumn: k.ver}, OnConflict: hook, Logger: p.log})
+		if err != nil {
+			// Unreachable: New validated the regions and the table has a name.
+			r.log.Error("cannot build applier", "table", k.table, "from", k.from, "to", k.to, "err", err)
+			cancel()
+			delete(r.pipes, k)
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -310,6 +324,7 @@ type pipe struct {
 	r         *Replicator
 	key       pipeKey
 	from, to  Region
+	applier   *Applier
 	log       *slog.Logger
 	readerLog *slog.Logger // log without the table attribute (streams adds it)
 }
@@ -373,10 +388,19 @@ func (p *pipe) waitReady(ctx context.Context) error {
 // condition.
 func (p *pipe) handle(ctx context.Context, b *streams.Batch) error {
 	received := time.Now()
-	n := min(p.r.cfg.Parallelism, len(b.Records))
-	lanes := make([][]sttypes.Record, n)
-	for _, rec := range b.Records {
-		i := laneOf(rec, n)
+	recs := make([]Record, len(b.Records))
+	for i, sr := range b.Records {
+		rec, err := RecordFromStream(sr)
+		if err != nil {
+			p.r.errs.Add(1)
+			return err
+		}
+		recs[i] = rec
+	}
+	n := min(p.r.cfg.Parallelism, len(recs))
+	lanes := make([][]Record, n)
+	for _, rec := range recs {
+		i := laneOf(rec.Keys, n)
 		lanes[i] = append(lanes[i], rec)
 	}
 	errs := make([]error, n)
@@ -400,25 +424,25 @@ func (p *pipe) handle(ctx context.Context, b *streams.Batch) error {
 	return errors.Join(errs...)
 }
 
-// laneOf hashes the record's key attributes.
-func laneOf(rec sttypes.Record, n int) int {
-	if n <= 1 || rec.Dynamodb == nil {
+// laneOf hashes the record's key attributes into one of n lanes.
+func laneOf(keys map[string]ddbtypes.AttributeValue, n int) int {
+	if n <= 1 || len(keys) == 0 {
 		return 0
 	}
 	h := fnv.New32a()
-	names := make([]string, 0, len(rec.Dynamodb.Keys))
-	for k := range rec.Dynamodb.Keys {
+	names := make([]string, 0, len(keys))
+	for k := range keys {
 		names = append(names, k)
 	}
 	slices.Sort(names)
 	for _, k := range names {
 		h.Write([]byte(k))
-		switch v := rec.Dynamodb.Keys[k].(type) {
-		case *sttypes.AttributeValueMemberS:
+		switch v := keys[k].(type) {
+		case *ddbtypes.AttributeValueMemberS:
 			h.Write([]byte(v.Value))
-		case *sttypes.AttributeValueMemberB:
+		case *ddbtypes.AttributeValueMemberB:
 			h.Write(v.Value)
-		case *sttypes.AttributeValueMemberN:
+		case *ddbtypes.AttributeValueMemberN:
 			h.Write([]byte(v.Value))
 		}
 		h.Write([]byte{0})
@@ -426,72 +450,31 @@ func laneOf(rec sttypes.Record, n int) int {
 	return int(h.Sum32() % uint32(n))
 }
 
-func (p *pipe) apply(ctx context.Context, rec sttypes.Record, received time.Time) error {
-	if rec.Dynamodb == nil {
-		p.r.skipInvalid.Add(1)
-		return nil
-	}
-	switch rec.EventName {
-	case sttypes.OperationTypeInsert, sttypes.OperationTypeModify:
-		return p.applyPut(ctx, aws.ToString(rec.Dynamodb.SequenceNumber), rec.Dynamodb.NewImage)
-	case sttypes.OperationTypeRemove:
-		if err := p.wait(ctx, received.Add(p.r.cfg.Delay)); err != nil {
-			return err
-		}
-		return p.applyDelete(ctx, rec.Dynamodb.Keys, rec.Dynamodb.OldImage)
-	default:
-		p.r.skipInvalid.Add(1)
-		return nil
-	}
-}
-
-func (p *pipe) applyPut(ctx context.Context, seq string, img map[string]sttypes.AttributeValue) error {
-	origin, ok := stringAttr(img, attrOrigin)
-	if !ok {
-		p.invalid("image without _origin")
-		return nil
-	}
-	if origin != p.from.Name {
-		p.r.skipOrigin.Add(1)
-		return nil
-	}
-	ts, ok := numberAttr(img, attrTS)
-	if !ok {
-		p.invalid("image without numeric _ts")
-		return nil
-	}
+// apply holds the record back for the artificial lag, then applies it.
+func (p *pipe) apply(ctx context.Context, rec Record, received time.Time) error {
 	if p.r.cfg.Delay > 0 {
-		if nanos, err := strconv.ParseInt(ts, 10, 64); err == nil {
-			if err := p.wait(ctx, time.Unix(0, nanos).Add(p.r.cfg.Delay)); err != nil {
+		switch rec.EventName {
+		case EventInsert, EventModify:
+			// Only images this pipe will write are delayed (by their write
+			// time); replicas from elsewhere are skipped right away.
+			if origin, ok := stringAttr(rec.NewImage, attrOrigin); ok && origin == p.from.Name {
+				if ts, ok := numberAttr(rec.NewImage, attrTS); ok {
+					if nanos, err := strconv.ParseInt(ts, 10, 64); err == nil {
+						if err := p.wait(ctx, time.Unix(0, nanos).Add(p.r.cfg.Delay)); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		case EventRemove:
+			if err := p.wait(ctx, received.Add(p.r.cfg.Delay)); err != nil {
 				return err
 			}
 		}
 	}
-	item, err := streams.ToDynamoDBItem(img)
-	if err != nil {
-		return fmt.Errorf("convert image: %w", err)
-	}
-	cond, names, values := putCondition(item, ts, origin, p.key.ver)
-	_, err = p.to.Clients.DynamoDB.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:                 aws.String(p.key.table),
-		Item:                      item,
-		ConditionExpression:       aws.String(cond),
-		ExpressionAttributeNames:  names,
-		ExpressionAttributeValues: values,
-		// On a failed condition, return the item that won, to tell a
-		// superseded version from a redelivery of this very version.
-		ReturnValuesOnConditionCheckFailure: ddbtypes.ReturnValuesOnConditionCheckFailureAllOld,
-	})
-	if err != nil && streams.IsConditionFailed(err) && p.r.cfg.OnConflict != nil && p.key.table != p.r.CatalogTable() && !sameRow(err, item) {
-		// The target keeps its (newer) version, so this one never reaches
-		// the target region's stream: feed it to the region's views here.
-		if herr := p.r.cfg.OnConflict(ctx, p.to.Name, p.key.table, p.from.Name+":"+seq, item); herr != nil {
-			p.r.errs.Add(1)
-			return fmt.Errorf("apply views of superseded %s row in %s: %w", p.key.table, p.to.Name, herr)
-		}
-		p.r.conflictViews.Add(1)
-	}
-	return p.outcome(err, &p.r.put, "put")
+	out, err := p.applier.Apply(ctx, rec)
+	p.r.record(out, err)
+	return err
 }
 
 // putCondition builds the replication write condition for an image with
@@ -523,40 +506,6 @@ func putCondition(item map[string]ddbtypes.AttributeValue, ts, origin, verCol st
 	return "attribute_not_exists(#pk) OR " + targetNull + " OR #ver < :ver OR (#ver = :ver AND " + lww + ")", names, values
 }
 
-func (p *pipe) applyDelete(ctx context.Context, keys, old map[string]sttypes.AttributeValue) error {
-	ts, ok := numberAttr(old, attrTS)
-	if !ok || len(keys) == 0 {
-		p.invalid("REMOVE without keys or old image _ts")
-		return nil
-	}
-	key, err := streams.ToDynamoDBItem(keys)
-	if err != nil {
-		return fmt.Errorf("convert keys: %w", err)
-	}
-	_, err = p.to.Clients.DynamoDB.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName:                 aws.String(p.key.table),
-		Key:                       key,
-		ConditionExpression:       aws.String("#ts <= :ts"),
-		ExpressionAttributeNames:  map[string]string{"#ts": attrTS},
-		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{":ts": &ddbtypes.AttributeValueMemberN{Value: ts}},
-	})
-	return p.outcome(err, &p.r.deleted, "delete")
-}
-
-func (p *pipe) outcome(err error, ok *atomic.Uint64, op string) error {
-	switch {
-	case err == nil:
-		ok.Add(1)
-		return nil
-	case streams.IsConditionFailed(err):
-		p.r.skipConflict.Add(1)
-		return nil
-	default:
-		p.r.errs.Add(1)
-		return fmt.Errorf("%s into %s/%s: %w", op, p.to.Name, p.key.table, err)
-	}
-}
-
 // sameRow reports whether a failed conditional put found the very row
 // version it tried to write (same _rid): a redelivery whose first put
 // succeeded, so the version is already in the target region's stream. When
@@ -570,11 +519,6 @@ func sameRow(err error, item map[string]ddbtypes.AttributeValue) bool {
 	have, ok1 := ccf.Item[attrRID].(*ddbtypes.AttributeValueMemberS)
 	want, ok2 := item[attrRID].(*ddbtypes.AttributeValueMemberS)
 	return ok1 && ok2 && have.Value == want.Value
-}
-
-func (p *pipe) invalid(why string) {
-	p.r.skipInvalid.Add(1)
-	p.log.Warn("skipping record that cannot be replicated", "reason", why)
 }
 
 // wait sleeps until t (artificial lag).
@@ -596,16 +540,16 @@ func (p *pipe) wait(ctx context.Context, t time.Time) error {
 	}
 }
 
-func stringAttr(img map[string]sttypes.AttributeValue, name string) (string, bool) {
-	v, ok := img[name].(*sttypes.AttributeValueMemberS)
+func stringAttr(img map[string]ddbtypes.AttributeValue, name string) (string, bool) {
+	v, ok := img[name].(*ddbtypes.AttributeValueMemberS)
 	if !ok {
 		return "", false
 	}
 	return v.Value, true
 }
 
-func numberAttr(img map[string]sttypes.AttributeValue, name string) (string, bool) {
-	v, ok := img[name].(*sttypes.AttributeValueMemberN)
+func numberAttr(img map[string]ddbtypes.AttributeValue, name string) (string, bool) {
+	v, ok := img[name].(*ddbtypes.AttributeValueMemberN)
 	if !ok {
 		return "", false
 	}
