@@ -9,6 +9,9 @@
 # Go fuzz cache / coverage
 coverage*.txt
 
+# Python bytecode from the golden-data generators
+__pycache__/
+
 # OS / editor
 .DS_Store
 .idea/
