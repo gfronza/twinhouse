@@ -1,5 +1,5 @@
 // Command reconciler-lambda runs the catalog reconciler (DESIGN.md §2) as
-// an AWS Lambda function of the serverless deployment (deploy/aws): each
+// an AWS Lambda function of the serverless deployment (deploy/aws-lambda): each
 // invocation ensures the system tables, wires the {prefix}__catalog stream
 // to this function, and runs one reconcile round, which creates and drops
 // this region's physical tables and manages the Lambda event-source

@@ -1,6 +1,6 @@
 // Command chserver-lambda is the ClickHouse-compatible HTTP API (the same
 // server as cmd/chserver) packaged as an AWS Lambda function behind an API
-// Gateway REST API with Lambda proxy integration (deploy/aws).
+// Gateway REST API with Lambda proxy integration (deploy/aws-lambda).
 //
 // Differences from cmd/chserver: there are no background loops (the catalog
 // snapshot is reloaded at the start of a request when it is older than

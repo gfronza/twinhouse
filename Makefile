@@ -1,5 +1,5 @@
 # Developer entry points. The local stack is deploy/local/docker-compose.yml;
-# the serverless AWS deployment (SAM) is deploy/aws (targets aws-*).
+# the serverless AWS deployment (SAM) is deploy/aws-lambda (targets aws-*).
 
 GO              ?= go
 COMPOSE_PROJECT ?= dhdev
@@ -83,9 +83,9 @@ multiregion:
 	$(GO) test -tags multiregion -count=1 -v -timeout 20m ./tests/multiregion/...
 
 # ---------------------------------------------------------------------------
-# Serverless AWS deployment (deploy/aws, SAM): the API on Lambda behind a
+# Serverless AWS deployment (deploy/aws-lambda, SAM): the API on Lambda behind a
 # private REST API Gateway, stream worker / replicator / reconciler Lambdas.
-# Run from the deploy/aws directory so samconfig.toml and .aws-sam/ live there.
+# Run from the deploy/aws-lambda directory so samconfig.toml and .aws-sam/ live there.
 #   make aws-validate                      # sam validate --lint (no credentials needed)
 #   make aws-build                         # cross-compiles the four arm64 bootstraps
 #   make aws-local-api                     # sam local start-api on :3000 against the
@@ -93,10 +93,10 @@ multiregion:
 #   make aws-local-e2e                     # tests/e2e against the emulated API (in
 #                                          # another terminal; session tests skip)
 #   make aws-deploy ENV=us                 # deploy the home region (needs credentials
-#   make aws-deploy ENV=eu                 # and the VpcEndpointId in samconfig, see deploy/aws/README.md)
+#   make aws-deploy ENV=eu                 # and the VpcEndpointId in samconfig, see deploy/aws-lambda/README.md)
 #   make aws-deploy ENV=us SAM_CONFIG=samconfig.local.toml   # a git-ignored copy with secrets
 SAM             ?= sam
-SAM_DIR         ?= deploy/aws
+SAM_DIR         ?= deploy/aws-lambda
 SAM_CONFIG      ?= samconfig.toml
 ENV             ?= us
 SAM_DEPLOY_ARGS ?=

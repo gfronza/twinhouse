@@ -15,7 +15,7 @@ writes are accepted everywhere, and all regions converge to the same data.
 > **Status: experimental.** The design is stable and well tested against
 > emulated global tables, but it has no production track record yet. The
 > `GLOBAL_MODE=aws` deployment path (real DynamoDB global tables) and the
-> serverless deployment ([deploy/aws](deploy/aws/README.md), Lambda behind
+> serverless deployment ([deploy/aws-lambda](deploy/aws-lambda/README.md), Lambda behind
 > a private API Gateway) are implemented and unit-tested, and the API
 > Lambda passes the e2e suite under `sam local`, but the automated suites
 > have not run against real AWS. Expect rough edges, and benchmark costs
@@ -533,7 +533,7 @@ use Go syntax such as `500ms` or `2s`).
 | `DISPLAY_NAME` | hostname`-<REGION>` | `displayName()` and `X-ClickHouse-Server-Display-Name`. |
 
 `cmd/chserver-lambda` (the API as a Lambda function behind API Gateway,
-[deploy/aws](deploy/aws/README.md)) reads the same variables except
+[deploy/aws-lambda](deploy/aws-lambda/README.md)) reads the same variables except
 `LISTEN_ADDR` and `RUN_STREAM_WORKER`; it rejects HTTP sessions
 (`session_id`) with `NOT_IMPLEMENTED` (48), reloads the catalog at the
 start of a request when the snapshot is older than `CATALOG_REFRESH`, and
@@ -592,7 +592,7 @@ the Lambda event-source mappings of the table streams
 
 ### Serverless (recommended)
 
-[deploy/aws](deploy/aws/README.md) is an AWS SAM template that deploys
+[deploy/aws-lambda](deploy/aws-lambda/README.md) is an AWS SAM template that deploys
 everything as Lambda functions, **one stack per region**, deployed once per
 region (`us-east-1` as the home region, then `eu-west-1`):
 
@@ -648,17 +648,17 @@ region (`us-east-1` as the home region, then `eu-west-1`):
 ```sh
 make aws-validate                # sam validate --lint (no credentials needed)
 make aws-build                   # the four arm64 bootstraps
-# fill in VpcEndpointId in deploy/aws/samconfig.toml (both environments) first
+# fill in VpcEndpointId in deploy/aws-lambda/samconfig.toml (both environments) first
 make aws-deploy ENV=us           # home region first; wait for its first reconcile
 make aws-deploy ENV=eu
 ```
 
-[deploy/aws/README.md](deploy/aws/README.md) has the prerequisites (a VPC
+[deploy/aws-lambda/README.md](deploy/aws-lambda/README.md) has the prerequisites (a VPC
 endpoint for `execute-api` per region), every parameter, how to point
 clickhouse-go and curl at the stage URL, operations and cost notes.
 
 **Limitations of the serverless deployment**, detailed in
-[deploy/aws/README.md](deploy/aws/README.md#limits-of-the-lambda-deployment):
+[deploy/aws-lambda/README.md](deploy/aws-lambda/README.md#limits-of-the-lambda-deployment):
 
 - **6 MB payloads.** Request and response bodies are bounded by the Lambda
   invocation payload (base64 inflates binary bodies by about a third
@@ -703,7 +703,7 @@ region**, run:
      per view-source table, `ReportBatchItemFailures` enabled. The
      reconciler manages the mappings when `MVWORKER_FUNCTION_ARN` names the
      function (set it on chserver, or deploy `cmd/reconciler-lambda` as in
-     `deploy/aws`); otherwise you manage them yourself, and a dropped and
+     `deploy/aws-lambda`); otherwise you manage them yourself, and a dropped and
      re-created table has a new physical name, so it needs a new mapping;
    - in-process, with `RUN_STREAM_WORKER=true` on chserver.
 
@@ -750,7 +750,7 @@ deployment). The container deployment needs, per role:
 | reconciler (chserver or reconciler-lambda) | `dynamodb:ListTables` (no resource scoping): finds physical tables of the deployment whose catalog entry vanished while no reconciler was running |
 | reconciler with `MVWORKER_FUNCTION_ARN` (chserver or reconciler-lambda) | `dynamodb:DescribeTable` (stream ARNs), `lambda:ListEventSourceMappings` (no resource scoping), `lambda:CreateEventSourceMapping`, `UpdateEventSourceMapping`, `DeleteEventSourceMapping` scoped with `lambda:FunctionArn` to the stream worker, replicator and reconciler functions |
 
-The SAM template (`deploy/aws/template.yaml`) splits this per function to
+The SAM template (`deploy/aws-lambda/template.yaml`) splits this per function to
 the calls each binary makes in Lambda mode: the **API** gets the item
 actions plus `DescribeTable`/`CreateTable`/`UpdateTable`/`DeleteTable`
 (it creates and drops tables but never touches replicas or TTL: replicas
@@ -760,7 +760,7 @@ own region, `DescribeTable`, `CreateTable` and the TTL actions (its
 same with item and table actions in every region (its targets); the
 **reconciler** everything above including the replica actions, the
 service-linked role, `ListTables` and the `lambda:*EventSourceMapping`
-actions. `go test ./deploy/aws/` checks the scoping.
+actions. `go test ./deploy/aws-lambda/` checks the scoping.
 
 **Cost model.** Writes dominate. Costs below are in DynamoDB on-demand
 units (a write is 1 WRU per started KB of the item, 2 WRU in a
@@ -821,7 +821,7 @@ make e2e                # tests/e2e against :8123 (single-region; also works wit
 make compat             # tests/compat: differential tests against the reference ClickHouse
 
 make aws-validate && make aws-build   # SAM template lint + the four Lambda bootstraps
-go test ./deploy/aws/   # template vs. the binaries' contract (env vars, IAM scope, private API, schedule)
+go test ./deploy/aws-lambda/   # template vs. the binaries' contract (env vars, IAM scope, private API, schedule)
 make aws-local-api      # the API Lambda under sam local (:3000) against the dhdev DynamoDB Local
 make aws-local-e2e      # tests/e2e against it; the suite detects Lambda mode and skips sessions
 go test -tags samlocal -count=1 ./cmd/chserver-lambda/   # API Gateway specifics (base64 bodies, compression) against sam local

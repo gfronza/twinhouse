@@ -1,4 +1,4 @@
-// Package deployaws holds the AWS SAM deployment of dynamodb-eventstream
+// Package deployawslambda holds the AWS SAM deployment of dynamodb-eventstream
 // (template.yaml, samconfig.toml, local-env.json, README.md): the
 // ClickHouse-compatible HTTP API on Lambda behind a private REST API
 // Gateway, with the stream worker, the replicator and the reconciler as
@@ -9,4 +9,4 @@
 // environment variable names the code reads, IAM scoped to TABLE_PREFIX,
 // private endpoint configuration) and lint it with the SAM CLI when
 // installed.
-package deployaws
+package deployawslambda

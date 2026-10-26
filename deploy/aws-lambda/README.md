@@ -95,7 +95,7 @@ rejects the placeholder, so a forgotten one cannot deploy).
 
 ```sh
 make aws-validate                      # sam validate --lint, no credentials needed
-make aws-build                         # four arm64 bootstraps under deploy/aws/.aws-sam/
+make aws-build                         # four arm64 bootstraps under deploy/aws-lambda/.aws-sam/
 
 # 1. home region
 make aws-deploy ENV=us
@@ -117,7 +117,7 @@ it. Values that must not be committed, `ChUsers` above all, go into a
 git-ignored copy of the file with the full parameter lists:
 
 ```sh
-cp deploy/aws/samconfig.toml deploy/aws/samconfig.local.toml   # git-ignored
+cp deploy/aws-lambda/samconfig.toml deploy/aws-lambda/samconfig.local.toml   # git-ignored
 # add "ChUsers=analytics:<password>" to both parameter lists (or let CI write the file from a secret)
 make aws-deploy ENV=us SAM_CONFIG=samconfig.local.toml
 ```
@@ -429,7 +429,7 @@ the session test. The other functions can be exercised with
 `sam local invoke` against the same DynamoDB Local, for example
 
 ```sh
-cd deploy/aws
+cd deploy/aws-lambda
 sam local generate-event cloudwatch scheduled-event > /tmp/schedule.json
 sam local invoke ReconcilerFunction -t .aws-sam/build/template.yaml \
   --docker-network dhdev_default --env-vars local-env.json -e /tmp/schedule.json
@@ -442,7 +442,7 @@ inline views already applied is a no-op thanks to the exactly-once markers.
 
 ## Verification without an AWS account
 
-`go test ./deploy/aws/` checks the template against the contract the
+`go test ./deploy/aws-lambda/` checks the template against the contract the
 binaries implement (functions and their `cmd` directories, every environment
 variable set here is read by some binary, IAM scoped to `TablePrefix`,
 private endpoint, schedule, outputs) and runs `sam validate --lint` and

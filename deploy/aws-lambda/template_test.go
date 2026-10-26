@@ -1,4 +1,4 @@
-package deployaws_test
+package deployawslambda_test
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// repoRoot is the module root (deploy/aws is two levels down).
+// repoRoot is the module root (deploy/aws-lambda is two levels down).
 var repoRoot = filepath.Join("..", "..")
 
 func readFile(t *testing.T, path string) string {

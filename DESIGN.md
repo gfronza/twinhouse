@@ -23,7 +23,7 @@ This file is the contract for all contributors. Code-level contracts live in:
 | Config / AWS clients | `internal/config/config.go`, `internal/awsx/awsx.go` |
 | Reconciler hooks (stream consumers, discovery) | `internal/server/reconcile.go` |
 | Lambda event-source mappings | `internal/esm/manager.go`, `consumers.go` |
-| Serverless deployment (SAM) | `deploy/aws/template.yaml`, `deploy/aws/README.md` |
+| Serverless deployment (SAM) | `deploy/aws-lambda/template.yaml`, `deploy/aws-lambda/README.md` |
 
 When a change alters behaviour described here, update this file in the
 same change. User-facing documentation is in `README.md`.
@@ -62,7 +62,7 @@ copies rows between them with a version-aware condition (see "Consistency
 model" below and §6).
 
 The diagram shows the long-running processes of the local stack
-(`deploy/local`). The **serverless deployment** (`deploy/aws`, one AWS SAM
+(`deploy/local`). The **serverless deployment** (`deploy/aws-lambda`, one AWS SAM
 stack per region) runs the same roles as Lambda functions and changes no
 storage contract: `cmd/chserver-lambda` serves the HTTP API behind a
 private REST API Gateway (§2 "Lambda API mode"), `cmd/mvworker` and
@@ -251,7 +251,7 @@ in the serverless deployment behind API Gateway, see "Lambda API mode"):
   `Timeout exceeded: elapsed <x> ms, maximum: <y> ms`. Unparseable values
   fail like ClickHouse (27 / 72). `MAX_EXECUTION_TIME` (seconds or a Go
   duration, default 0) is the server-wide default a query may override.
-* **Lambda API mode** (`cmd/chserver-lambda`, `deploy/aws`): the same
+* **Lambda API mode** (`cmd/chserver-lambda`, `deploy/aws-lambda`): the same
   `server.Server` wired exactly like `cmd/chserver` (same `exec.Config` and
   `server.Config`), served to API Gateway REST proxy events through
   `aws-lambda-go-api-proxy/httpadapter`, with these additive differences:
@@ -410,7 +410,7 @@ in the serverless deployment behind API Gateway, see "Lambda API mode"):
   also needs `dynamodb:CreateTableReplica` and `DeleteTableReplica`, the
   table and item actions in every replica region, and
   `iam:CreateServiceLinkedRole` for `replication.dynamodb.amazonaws.com`.
-  The serverless deployment (`deploy/aws/template.yaml`, one inline policy
+  The serverless deployment (`deploy/aws-lambda/template.yaml`, one inline policy
   per function, every DynamoDB statement scoped to `table/{prefix}*`,
   `/index/*` and `/stream/*`) narrows this per function: the API Lambda
   gets the item actions plus `DescribeTable`, `CreateTable`, `UpdateTable`
@@ -424,7 +424,7 @@ in the serverless deployment behind API Gateway, see "Lambda API mode"):
   service-linked role, `dynamodb:ListTables` and the
   `lambda:*EventSourceMapping` actions (create/update/delete conditioned on
   `lambda:FunctionArn` naming the three target functions; `List` cannot be
-  scoped). `go test ./deploy/aws/` asserts the scoping.
+  scoped). `go test ./deploy/aws-lambda/` asserts the scoping.
 
 ---
 
@@ -1181,7 +1181,7 @@ without a stream logs once and keeps polling for one instead of failing).
 
 ### Stream worker as a Lambda (`internal/esm`, `cmd/reconciler-lambda`)
 
-In the serverless deployment (`deploy/aws`) no process polls streams: Lambda
+In the serverless deployment (`deploy/aws-lambda`) no process polls streams: Lambda
 event-source mappings (ESMs) deliver each table's stream records to the
 worker. Tables are created at runtime, so their ESMs are too: the
 **reconciler** (§2) owns them, idempotently, in every region.
@@ -1227,7 +1227,7 @@ worker. Tables are created at runtime, so their ESMs are too: the
 
 ---
 
-## 6. Multi-region: local emulation and AWS (`cmd/replicator`, `deploy/local`, `deploy/aws`)
+## 6. Multi-region: local emulation and AWS (`cmd/replicator`, `deploy/local`, `deploy/aws-lambda`)
 
 The local stack (`deploy/local/docker-compose.yml`, `make up`):
 
@@ -1285,7 +1285,7 @@ The local stack (`deploy/local/docker-compose.yml`, `make up`):
   for availability. While it is down, ReplacingMergeTree rows written in
   one region are not visible in the others; they catch up from the streams
   (24 h retention) when it restarts.
-* **Replicator as a Lambda** (the serverless deployment, `deploy/aws`):
+* **Replicator as a Lambda** (the serverless deployment, `deploy/aws-lambda`):
   `cmd/replicator -lambda` (automatic when `AWS_LAMBDA_RUNTIME_API` is set)
   runs the same per-record logic without a poller. The per-record logic is
   `replicator.Applier` (`NewApplier(source, target, table, conflict hook)`,
@@ -1322,7 +1322,7 @@ The local stack (`deploy/local/docker-compose.yml`, `make up`):
 (`clickhouse/clickhouse-server:25.8-alpine`, port 18123) used by the
 differential compatibility tests.
 
-* **Serverless stack** (`deploy/aws`, AWS SAM, `GLOBAL_MODE=aws`): one
+* **Serverless stack** (`deploy/aws-lambda`, AWS SAM, `GLOBAL_MODE=aws`): one
   CloudFormation stack per region with four functions (API, stream
   worker, replicator, reconciler), a private REST API (resource policy
   allowing one `execute-api` VPC endpoint, `BinaryMediaTypes */*`), the
@@ -1373,7 +1373,7 @@ differential compatibility tests.
   gzip/zstd, errors, sessions, the stale-catalog reload, the
   `Content-Length` shim); `cmd/reconciler-lambda` and `internal/esm` test
   event classification, deadline handling and the mapping state machine
-  with a fake Lambda API; `go test ./deploy/aws/` checks `template.yaml`
+  with a fake Lambda API; `go test ./deploy/aws-lambda/` checks `template.yaml`
   against the binaries (function code directories, every environment
   variable set is read by some binary, IAM scoped to `TablePrefix`,
   private endpoint, schedule, `samconfig.toml` environments, Makefile
