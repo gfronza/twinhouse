@@ -1411,4 +1411,4 @@ generic, and add a compat scenario for any new SQL behaviour.
 
 ## License
 
-License: TBD.
+Apache License 2.0, the same license as ClickHouse. See [LICENSE](LICENSE).
