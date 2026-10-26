@@ -178,6 +178,10 @@ func StripIncarnation(rel string) string {
 	return strings.Join(parts, ".")
 }
 
+// IsIncarnationID reports whether s is a per-incarnation physical-name
+// suffix as CreateTable generates it (8 lowercase base32 characters).
+func IsIncarnationID(s string) bool { return isIncarnationID(s) }
+
 func isIncarnationID(s string) bool {
 	if len(s) != incarnationIDLen {
 		return false

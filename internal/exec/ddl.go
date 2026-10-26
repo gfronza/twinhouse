@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -759,7 +760,7 @@ func (q *query) runDrop(s *sqlparse.DropStmt) (*Result, error) {
 			return nil, err
 		}
 		for _, t := range cat.Tables(s.Name) {
-			if err := q.e.cfg.Store.DropTable(q.ctx, t); err != nil {
+			if err := q.dropPhysical(t); err != nil {
 				return nil, err
 			}
 		}
@@ -791,7 +792,22 @@ func (q *query) dropTable(t *catalog.Table) error {
 	if err := q.cat.DropTable(q.ctx, t.Database, t.Name, false); err != nil {
 		return err
 	}
-	return q.e.cfg.Store.DropTable(q.ctx, t)
+	return q.dropPhysical(t)
+}
+
+// dropPhysical drops t's physical table once its catalog entry is gone. A
+// deletion the store defers (storage.ErrDeleteDeferred: DynamoDB's 24 hour
+// restriction on the source of a global table, or a non-waiting store) is
+// success for the client: the table no longer exists logically and the
+// reconciler deletes the physical table once the service allows it.
+func (q *query) dropPhysical(t *catalog.Table) error {
+	err := q.e.cfg.Store.DropTable(q.ctx, t)
+	if err != nil && errors.Is(err, storage.ErrDeleteDeferred) {
+		q.e.logger().Info("physical table deletion deferred; the reconciler completes it",
+			"table", t.FullName(), "physical", t.PhysicalName, "reason", err)
+		return nil
+	}
+	return err
 }
 
 func (q *query) runTruncate(s *sqlparse.TruncateStmt) (*Result, error) {

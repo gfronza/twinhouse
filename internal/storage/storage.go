@@ -196,3 +196,10 @@ type StreamRecord struct {
 // home region (GLOBAL_MODE=aws); callers retrying periodically may treat
 // it as progress rather than a failure.
 var ErrAwaitingReplica = errors.New("awaiting the global table replica")
+
+// ErrDeleteDeferred is in the cause chain of a DropTable error that only
+// means the physical table could not be deleted yet although its catalog
+// entry is gone (DynamoDB refuses to delete the source table of a global
+// table within 24 hours of adding a replica): the reconciler finishes the
+// deletion once the service allows it, so the DDL may report success.
+var ErrDeleteDeferred = errors.New("physical table deletion deferred")

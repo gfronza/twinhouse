@@ -22,6 +22,7 @@ type ddbAPI interface {
 	DescribeTable(context.Context, *dynamodb.DescribeTableInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
 	UpdateTable(context.Context, *dynamodb.UpdateTableInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateTableOutput, error)
 	DeleteTable(context.Context, *dynamodb.DeleteTableInput, ...func(*dynamodb.Options)) (*dynamodb.DeleteTableOutput, error)
+	ListTables(context.Context, *dynamodb.ListTablesInput, ...func(*dynamodb.Options)) (*dynamodb.ListTablesOutput, error)
 	DescribeTimeToLive(context.Context, *dynamodb.DescribeTimeToLiveInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeTimeToLiveOutput, error)
 	UpdateTimeToLive(context.Context, *dynamodb.UpdateTimeToLiveInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateTimeToLiveOutput, error)
 	PutItem(context.Context, *dynamodb.PutItemInput, ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
@@ -151,7 +152,10 @@ func (s *storeImpl) physical(t *catalog.Table) string {
 	return s.opts.Prefix + t.Database + "." + t.Name
 }
 
-func membersTable(physical string) string { return physical + ".members" }
+// membersSuffix marks the side table of an aggregate table's set members.
+const membersSuffix = ".members"
+
+func membersTable(physical string) string { return physical + membersSuffix }
 
 func (s *storeImpl) markersTable() string { return s.opts.Prefix + "__mv_markers" }
 

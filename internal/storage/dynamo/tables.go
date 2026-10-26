@@ -132,6 +132,93 @@ func (s *Store) ensureSystemTables(ctx context.Context) error {
 	return nil
 }
 
+// checkSystemTables is CheckSystemTables: DescribeTable only. A table that
+// is UPDATING (a replica being added) accepts item operations, so it is
+// ready; CREATING or missing is not.
+func (s *Store) checkSystemTables(ctx context.Context) error {
+	for _, spec := range s.impl.systemSpecs() {
+		desc, err := s.impl.describe(ctx, spec.name)
+		if err != nil {
+			return ddbError(err, "cannot describe DynamoDB table %s", spec.name)
+		}
+		switch {
+		case desc == nil:
+			return cherr.New(cherr.Unavailable, "system table %s does not exist in %s yet: the reconciler (or chserver) creates it; "+
+				"deploy the home region first and wait for its first reconcile", spec.name, s.impl.opts.Region)
+		case desc.TableStatus == types.TableStatusCreating:
+			return cherr.New(cherr.Unavailable, "system table %s is still being created", spec.name)
+		}
+		if err := s.impl.checkKeySchema(desc, spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// systemTable reports a system table name ({prefix}__catalog, __mv_markers,
+// __checkpoints, the stream worker's __dead_letters, ...).
+func (s *storeImpl) systemTable(name string) bool {
+	return strings.HasPrefix(name, s.opts.Prefix+"__")
+}
+
+// ownRowTable reports a row table of this deployment by name shape:
+// "<prefix><db>.<table>.<incarnation>" as catalog.CreateTable names them
+// (identifiers without dots, the 8-character incarnation suffix). System
+// tables, ".members" side tables and tables of other deployments (a
+// prefix that starts with this one's does not produce this shape unless
+// the rest of it is itself "<db>." of a valid name, so prefixes sharing an
+// account should not be prefixes of one another) are excluded; tables of
+// older builds without the suffix are only dropped when their catalog
+// entry was observed.
+func (s *storeImpl) ownRowTable(name string) bool {
+	if !strings.HasPrefix(name, s.opts.Prefix) || s.systemTable(name) || strings.HasSuffix(name, membersSuffix) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(name, s.opts.Prefix), ".")
+	if len(parts) != 3 || !catalog.IsIncarnationID(parts[2]) {
+		return false
+	}
+	return catalog.ValidateName("database", parts[0]) == nil && catalog.ValidateName("table", parts[1]) == nil
+}
+
+// listPhysicalTables is ListPhysicalTables.
+func (s *storeImpl) listPhysicalTables(ctx context.Context) ([]string, error) {
+	var out []string
+	in := &dynamodb.ListTablesInput{Limit: aws.Int32(100)}
+	for {
+		var page *dynamodb.ListTablesOutput
+		err := withRetry(ctx, func() (err error) {
+			page, err = s.ddb.ListTables(ctx, in)
+			return err
+		})
+		if err != nil {
+			return nil, ddbError(err, "cannot list DynamoDB tables")
+		}
+		for _, name := range page.TableNames {
+			if s.ownRowTable(name) {
+				out = append(out, name)
+			}
+		}
+		if page.LastEvaluatedTableName == nil || *page.LastEvaluatedTableName == "" {
+			return out, nil
+		}
+		next := *in
+		next.ExclusiveStartTableName = page.LastEvaluatedTableName
+		in = &next
+	}
+}
+
+// dropPhysicalTable is DropPhysicalTable.
+func (s *Store) dropPhysicalTable(ctx context.Context, physical string) error {
+	if physical == "" || !strings.HasPrefix(physical, s.impl.opts.Prefix) || s.impl.systemTable(physical) {
+		return cherr.New(cherr.BadArguments, "refusing to drop DynamoDB table %q: not a row table of prefix %q", physical, s.impl.opts.Prefix)
+	}
+	if err := s.impl.dropPhysical(ctx, physical, true); err != nil {
+		return err
+	}
+	return s.impl.dropPhysical(ctx, membersTable(physical), false)
+}
+
 func (s *Store) ensureTable(ctx context.Context, t *catalog.Table) error {
 	l, err := s.impl.layoutOf(t)
 	if err != nil {
@@ -153,11 +240,15 @@ func (s *Store) dropTable(ctx context.Context, t *catalog.Table) error {
 	if err != nil {
 		return err
 	}
-	if err := s.impl.dropPhysical(ctx, l.physical, s.impl.awsReplicas(t)); err != nil {
-		return err
+	rowErr := s.impl.dropPhysical(ctx, l.physical, s.impl.awsReplicas(t))
+	if rowErr != nil && !errors.Is(rowErr, storage.ErrDeleteDeferred) {
+		return rowErr
 	}
 	// Always attempt the side table: an ALTER may have changed the layout.
-	return s.impl.dropPhysical(ctx, membersTable(l.physical), false)
+	if err := s.impl.dropPhysical(ctx, membersTable(l.physical), false); err != nil {
+		return err
+	}
+	return rowErr
 }
 
 // truncateTable deletes this region's rows and members of t and starts a
@@ -296,7 +387,10 @@ func (s *storeImpl) ensurePhysical(ctx context.Context, spec tableSpec) error {
 			return err
 		}
 	}
-	if spec.global && s.opts.GlobalMode == config.GlobalAWS {
+	if spec.global && s.opts.GlobalMode == config.GlobalAWS && !s.opts.AsyncDDL {
+		// With AsyncDDL the home region's reconciler adds the replicas
+		// (it runs EnsureTable for every catalog entry): adding one takes
+		// minutes, far beyond an API request's budget.
 		return s.ensureReplicas(ctx, spec.name)
 	}
 	return nil
@@ -485,6 +579,27 @@ func replicaExistsAsTable(err error) bool {
 		strings.Contains(ae.ErrorMessage(), "already exist")
 }
 
+// isDeleteRestricted reports DynamoDB's refusal to delete the source table
+// (or replica) of a global table within 24 hours of adding a replica, a
+// ValidationException whose message mentions the 24 hour window. The exact
+// wording is not documented; the match is kept loose (fix on a real
+// deployment if the service's text differs).
+func isDeleteRestricted(err error) bool {
+	var ae smithy.APIError
+	if !errors.As(err, &ae) || ae.ErrorCode() != "ValidationException" {
+		return false
+	}
+	msg := strings.ToLower(ae.ErrorMessage())
+	return strings.Contains(msg, "24 hours") || strings.Contains(msg, "24 hrs") || strings.Contains(msg, "twenty-four hours")
+}
+
+// deleteDeferred is the error of a physical deletion the reconciler
+// completes later (storage.ErrDeleteDeferred in the cause chain).
+func deleteDeferred(name, why string) error {
+	return &cherr.Error{Code: cherr.Unavailable, Cause: storage.ErrDeleteDeferred,
+		Msg: fmt.Sprintf("DynamoDB table %s cannot be deleted now: %s", name, why)}
+}
+
 // updateReplicas applies one replica update, retrying while the table is busy.
 func (s *storeImpl) updateReplicas(ctx context.Context, in *dynamodb.UpdateTableInput) error {
 	for attempt := 0; ; attempt++ {
@@ -504,7 +619,9 @@ func (s *storeImpl) updateReplicas(ctx context.Context, in *dynamodb.UpdateTable
 
 // dropPhysical deletes a table (idempotent) and waits until it is gone. With
 // removeReplicas in GLOBAL_MODE=aws, the other regions' replicas are removed
-// first, so DROP removes the global table everywhere.
+// first, so DROP removes the global table everywhere. With Options.AsyncDDL
+// the deletion is issued but not awaited, and a table that still has
+// replicas is left to the reconciler (ErrDeleteDeferred).
 func (s *storeImpl) dropPhysical(ctx context.Context, name string, removeReplicas bool) error {
 	desc, err := s.describe(ctx, name)
 	if err != nil {
@@ -519,7 +636,13 @@ func (s *storeImpl) dropPhysical(ctx context.Context, name string, removeReplica
 			if region == s.opts.Region {
 				continue
 			}
+			if s.opts.AsyncDDL {
+				return deleteDeferred(name, fmt.Sprintf("it has a replica in %s; the reconciler removes the replicas and the table", region))
+			}
 			if err := s.updateReplicas(ctx, replicaDeleteInput(name, region)); err != nil && !isNotFound(err) {
+				if isDeleteRestricted(err) {
+					return deleteDeferred(name, err.Error())
+				}
 				return ddbError(err, "cannot remove replica %s of DynamoDB table %s", region, name)
 			}
 		}
@@ -529,10 +652,16 @@ func (s *storeImpl) dropPhysical(ctx context.Context, name string, removeReplica
 	for attempt := 0; ; attempt++ {
 		_, err := s.ddb.DeleteTable(wctx, &dynamodb.DeleteTableInput{TableName: aws.String(name)})
 		switch {
-		case err == nil, isInUse(err):
+		case err == nil && s.opts.AsyncDDL:
+			return nil // deletion accepted; not awaited
+		case err == nil, isInUse(err) && !s.opts.AsyncDDL:
 			// Deleting (or busy): poll until it disappears.
+		case isInUse(err):
+			return deleteDeferred(name, "it is busy (CREATING or UPDATING); the reconciler deletes it")
 		case isNotFound(err):
 			return nil
+		case isDeleteRestricted(err):
+			return deleteDeferred(name, err.Error())
 		case !isRetryable(err):
 			return ddbError(err, "cannot delete DynamoDB table %s", name)
 		}

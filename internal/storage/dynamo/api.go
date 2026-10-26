@@ -32,6 +32,17 @@ type Options struct {
 	ScanSegments int
 	// MarkerTTLDays is the exactly-once marker retention (default 7).
 	MarkerTTLDays int
+	// AsyncDDL makes EnsureTable and DropTable return without waiting for
+	// the slow parts of a DDL, for a process whose requests have a short
+	// budget (the API Lambda behind API Gateway, 29 s): EnsureTable creates
+	// the table and waits for it to become ACTIVE but leaves adding the
+	// global-table replicas (minutes) to the reconciler of the home region,
+	// and DropTable issues the deletion of a table without replicas but
+	// does not wait for it and leaves a table that still has replicas to
+	// the reconciler (which drops physical tables whose catalog entry is
+	// gone). CheckSystemTables is the matching replacement for
+	// EnsureSystemTables.
+	AsyncDDL bool
 }
 
 // Store implements storage.Store on DynamoDB.
@@ -46,6 +57,29 @@ func New(c *awsx.Clients, opts Options) (*Store, error) { return newStore(c, opt
 
 // EnsureSystemTables creates __catalog, __mv_markers and __checkpoints if missing.
 func (s *Store) EnsureSystemTables(ctx context.Context) error { return s.ensureSystemTables(ctx) }
+
+// CheckSystemTables reports whether the system tables exist and accept
+// item operations (one DescribeTable each; nothing is created, updated or
+// awaited). A missing or still CREATING table is cherr.Unavailable: the
+// process that converges them (chserver, cmd/reconciler-lambda) has not
+// run yet.
+func (s *Store) CheckSystemTables(ctx context.Context) error { return s.checkSystemTables(ctx) }
+
+// ListPhysicalTables lists this region's row tables with the deployment
+// prefix (system tables {prefix}__* and ".members" side tables excluded),
+// paginating ListTables. The reconciler uses it to find physical tables
+// whose catalog entry is gone (server.PhysicalTables).
+func (s *Store) ListPhysicalTables(ctx context.Context) ([]string, error) {
+	return s.impl.listPhysicalTables(ctx)
+}
+
+// DropPhysicalTable drops the row table physical (its replicas first, in
+// GLOBAL_MODE=aws) and its ".members" side table, like DropTable does for a
+// catalog table (idempotent). The reconciler uses it for tables it found
+// with ListPhysicalTables, whose catalog entry no longer exists.
+func (s *Store) DropPhysicalTable(ctx context.Context, physical string) error {
+	return s.dropPhysicalTable(ctx, physical)
+}
 
 // PhysicalName returns the DynamoDB table name for a ClickHouse table.
 func (s *Store) PhysicalName(db, table string) string { return s.physicalName(db, table) }

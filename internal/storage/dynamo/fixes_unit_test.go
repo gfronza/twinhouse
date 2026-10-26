@@ -3,6 +3,7 @@ package dynamo
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -131,15 +132,24 @@ func TestHomeRegion(t *testing.T) {
 type fakeWorld struct {
 	mu          sync.Mutex
 	createDelay time.Duration
-	tables      map[string]map[string]*fakeTable // region -> name -> table
-	creates     []string
+	// replicaDelay keeps the source table UPDATING after a replica was
+	// added (AWS: minutes).
+	replicaDelay time.Duration
+	// deleteErr fails every DeleteTable (e.g. the 24 hour restriction).
+	deleteErr error
+	// listPage splits ListTables responses (0: all at once).
+	listPage int32
+	tables   map[string]map[string]*fakeTable // region -> name -> table
+	creates  []string
+	deletes  []string // "<region>:<name>"
 }
 
 type fakeTable struct {
-	in     *dynamodb.CreateTableInput
-	ready  time.Time
-	group  *[]string
-	stream bool
+	in       *dynamodb.CreateTableInput
+	ready    time.Time
+	updating time.Time
+	group    *[]string
+	stream   bool
 }
 
 func newFakeWorld(delay time.Duration) *fakeWorld {
@@ -187,8 +197,11 @@ func (f *fakeRegion) DescribeTable(_ context.Context, in *dynamodb.DescribeTable
 		return nil, notFound(name)
 	}
 	status := types.TableStatusActive
-	if time.Now().Before(tb.ready) {
+	switch now := time.Now(); {
+	case now.Before(tb.ready):
 		status = types.TableStatusCreating
+	case now.Before(tb.updating):
+		status = types.TableStatusUpdating
 	}
 	d := &types.TableDescription{TableName: in.TableName, TableStatus: status, KeySchema: tb.in.KeySchema,
 		AttributeDefinitions: tb.in.AttributeDefinitions, LatestStreamArn: aws.String("arn:" + f.region + ":" + name)}
@@ -232,8 +245,71 @@ func (f *fakeRegion) UpdateTable(_ context.Context, in *dynamodb.UpdateTableInpu
 		}
 		*tb.group = append(*tb.group, r)
 		f.w.tables[r][name] = &fakeTable{in: tb.in, ready: time.Now(), group: tb.group, stream: tb.stream}
+		tb.updating = time.Now().Add(f.w.replicaDelay)
+	}
+	for _, u := range in.ReplicaUpdates {
+		if u.Delete == nil {
+			continue
+		}
+		r := aws.ToString(u.Delete.RegionName)
+		if f.w.tables[r] == nil || f.w.tables[r][name] == nil {
+			return nil, notFound(name)
+		}
+		delete(f.w.tables[r], name)
+		g := (*tb.group)[:0]
+		for _, m := range *tb.group {
+			if m != r {
+				g = append(g, m)
+			}
+		}
+		*tb.group = g
 	}
 	return &dynamodb.UpdateTableOutput{}, nil
+}
+
+// DeleteTable removes the table at once (the fake has no DELETING state)
+// and leaves the replication group; f.w.deleteErr fails it instead.
+func (f *fakeRegion) DeleteTable(_ context.Context, in *dynamodb.DeleteTableInput, _ ...func(*dynamodb.Options)) (*dynamodb.DeleteTableOutput, error) {
+	f.w.mu.Lock()
+	defer f.w.mu.Unlock()
+	name := aws.ToString(in.TableName)
+	tb := f.w.tables[f.region][name]
+	if tb == nil {
+		return nil, notFound(name)
+	}
+	if f.w.deleteErr != nil {
+		return nil, f.w.deleteErr
+	}
+	f.w.deletes = append(f.w.deletes, f.region+":"+name)
+	delete(f.w.tables[f.region], name)
+	g := (*tb.group)[:0]
+	for _, m := range *tb.group {
+		if m != f.region {
+			g = append(g, m)
+		}
+	}
+	*tb.group = g
+	return &dynamodb.DeleteTableOutput{}, nil
+}
+
+// ListTables lists the region's tables in name order, paginated by listPage.
+func (f *fakeRegion) ListTables(_ context.Context, in *dynamodb.ListTablesInput, _ ...func(*dynamodb.Options)) (*dynamodb.ListTablesOutput, error) {
+	f.w.mu.Lock()
+	defer f.w.mu.Unlock()
+	var names []string
+	for name := range f.w.tables[f.region] {
+		if start := aws.ToString(in.ExclusiveStartTableName); start == "" || name > start {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	out := &dynamodb.ListTablesOutput{}
+	if f.w.listPage > 0 && int(f.w.listPage) < len(names) {
+		names = names[:f.w.listPage]
+		out.LastEvaluatedTableName = aws.String(names[len(names)-1])
+	}
+	out.TableNames = names
+	return out, nil
 }
 
 func (f *fakeRegion) DescribeTimeToLive(context.Context, *dynamodb.DescribeTimeToLiveInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeTimeToLiveOutput, error) {
@@ -249,10 +325,13 @@ func (f *fakeRegion) PutItem(_ context.Context, in *dynamodb.PutItemInput, _ ...
 	return nil, notFound(aws.ToString(in.TableName))
 }
 
-func awsStore(t *testing.T, w *fakeWorld, region string) *Store {
+func awsStore(t *testing.T, w *fakeWorld, region string, opts ...func(*Options)) *Store {
 	t.Helper()
-	s, err := newStoreWithAPI(w.region(region), region, Options{Prefix: "p_", GlobalMode: "aws",
-		ReplicaRegions: []string{"us-east-1", "eu-west-1"}})
+	o := Options{Prefix: "p_", GlobalMode: "aws", ReplicaRegions: []string{"us-east-1", "eu-west-1"}}
+	for _, f := range opts {
+		f(&o)
+	}
+	s, err := newStoreWithAPI(w.region(region), region, o)
 	if err != nil {
 		t.Fatal(err)
 	}
