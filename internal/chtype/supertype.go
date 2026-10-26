@@ -181,7 +181,7 @@ func supertype(ts ...Type) (Type, error) {
 	nDT, nDT64 := countKind(ts, DateTime), countKind(ts, DateTime64)
 	if nDate+nDate32+nDT+nDT64 > 0 {
 		if nDate+nDate32+nDT+nDT64 != len(ts) {
-			return noCommon("because some of them are Date/Date32/DateTime/DateTime64 and some of them are not")
+			return noCommon("some of them are Date/Date32/DateTime/DateTime64 and some of them are not")
 		}
 		if nDT64 == 0 && nDate32 == 0 {
 			for _, t := range ts {
