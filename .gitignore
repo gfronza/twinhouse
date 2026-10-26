@@ -16,3 +16,10 @@ coverage*.txt
 
 # Local session notes
 /.project/
+
+# AWS SAM build output (deploy/aws) and the operator's copy of samconfig.toml
+# with account-specific values and secrets (ChUsers)
+.aws-sam/
+/deploy/aws/samconfig.local.toml
+/chserver-lambda
+/reconciler-lambda

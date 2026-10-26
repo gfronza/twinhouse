@@ -1,0 +1,133 @@
+# SAM CLI configuration: one stack per region, deployed from this directory.
+#
+#   make aws-validate                 # sam validate --lint
+#   make aws-build                    # sam build (cross-compiles arm64 bootstraps)
+#   make aws-deploy ENV=us            # home region first (us-east-1)
+#   make aws-deploy ENV=eu            # then eu-west-1
+#
+# Every parameter of a stack is set in its [<env>.deploy.parameters]
+# section below. VpcEndpointId (the execute-api interface endpoint of the
+# region's VPC) is account-specific and has no template default: replace
+# the vpce-CHANGE_ME placeholder before the first deploy (CloudFormation
+# rejects the placeholder). Do NOT pass `--parameter-overrides` on the
+# command line: the SAM CLI then REPLACES this whole list for the run, so
+# every parameter left out falls back to the template default (first
+# deploy) or keeps the stack's previous value (update). Values that must
+# not be committed (ChUsers) go into a git-ignored copy of this file,
+# deployed with `make aws-deploy ENV=us SAM_CONFIG=samconfig.local.toml`.
+version = 0.1
+
+[default.global.parameters]
+template_file = "template.yaml"
+
+[default.build.parameters]
+# The go1.x builder's cache only hashes the function's CodeUri (cmd/<fn>);
+# a change under internal/ or in go.mod would not invalidate it and a
+# stale bootstrap would be deployed, so the cache is off.
+cached = false
+parallel = true
+# The Go builder compiles each cmd directory in place (go.mod is two levels
+# up), so the artifacts are only the bootstrap binaries.
+build_in_source = true
+
+[default.validate.parameters]
+lint = true
+
+[default.local_start_api.parameters]
+# Against the local Docker stack (deploy/local): DynamoDB Local of the "us"
+# region on the dhdev_default network, GLOBAL_MODE=emulated, no event-source
+# mappings (MVWORKER_FUNCTION_ARN empty). See `make aws-local-api`.
+# Serve the compiled bootstraps of `sam build`, not the source directories.
+template_file = ".aws-sam/build/template.yaml"
+docker_network = "dhdev_default"
+env_vars = "local-env.json"
+warm_containers = "EAGER"
+port = 3000
+# The VPC endpoint id is only used by the API's resource policy, which
+# `sam local` does not evaluate; any syntactically valid id works. The
+# endpoint is a template parameter because `sam local` only overrides
+# environment variables the template declares (local-env.json covers the
+# declared ones: GLOBAL_MODE=emulated, MVWORKER_FUNCTION_ARN empty, ...).
+parameter_overrides = "VpcEndpointId=vpce-00000000000000000 GlobalMode=none DynamoDBEndpoint=http://dynamodb-us:8000"
+
+# ---------------------------------------------------------------------------
+# us-east-1: the home region (creates the global system tables). Deploy first.
+# ---------------------------------------------------------------------------
+[us.deploy.parameters]
+stack_name = "dynamodb-eventstream"
+region = "us-east-1"
+resolve_s3 = true
+s3_prefix = "dynamodb-eventstream"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+disable_rollback = false
+tags = "Application=dynamodb-eventstream"
+parameter_overrides = [
+  "TablePrefix=chddb_",
+  "GlobalMode=aws",
+  "ReplicaRegions=us-east-1,eu-west-1",
+  "HomeRegion=us-east-1",
+  # ChUsers ("user:password,..."; template default "default:" = user default
+  # without a password) belongs in a git-ignored copy of this file, see the
+  # header. NoEcho hides it from CloudFormation output only: the resolved
+  # value is readable by anyone with lambda:GetFunctionConfiguration on the
+  # API function unless KmsKeyArn names a key whose policy restricts
+  # kms:Decrypt.
+  "LogLevel=info",
+  "InlineViews=true",
+  "StreamViews=true",
+  "CatalogRefresh=5s",
+  "ApiTimeoutSeconds=29",
+  "ApiIntegrationTimeoutMillis=29000",
+  "MaxExecutionTime=25",
+  "ApiMemorySize=1024",
+  "MvWorkerMemorySize=1024",
+  "ReplicatorMemorySize=1024",
+  "ReconcilerMemorySize=512",
+  "EsmBatchSize=100",
+  "LogRetentionDays=30",
+  "ManageApiGatewayAccount=true",
+  "VpcEndpointId=vpce-CHANGE_ME",   # the execute-api endpoint of the us-east-1 VPC
+]
+
+# ---------------------------------------------------------------------------
+# eu-west-1: a replica region. Deploy after the home region's stack is up.
+# ---------------------------------------------------------------------------
+[eu.deploy.parameters]
+stack_name = "dynamodb-eventstream"
+region = "eu-west-1"
+resolve_s3 = true
+s3_prefix = "dynamodb-eventstream"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+disable_rollback = false
+tags = "Application=dynamodb-eventstream"
+parameter_overrides = [
+  "TablePrefix=chddb_",
+  "GlobalMode=aws",
+  "ReplicaRegions=us-east-1,eu-west-1",
+  "HomeRegion=us-east-1",
+  # ChUsers ("user:password,..."; template default "default:" = user default
+  # without a password) belongs in a git-ignored copy of this file, see the
+  # header. NoEcho hides it from CloudFormation output only: the resolved
+  # value is readable by anyone with lambda:GetFunctionConfiguration on the
+  # API function unless KmsKeyArn names a key whose policy restricts
+  # kms:Decrypt.
+  "LogLevel=info",
+  "InlineViews=true",
+  "StreamViews=true",
+  "CatalogRefresh=5s",
+  "ApiTimeoutSeconds=29",
+  "ApiIntegrationTimeoutMillis=29000",
+  "MaxExecutionTime=25",
+  "ApiMemorySize=1024",
+  "MvWorkerMemorySize=1024",
+  "ReplicatorMemorySize=1024",
+  "ReconcilerMemorySize=512",
+  "EsmBatchSize=100",
+  "LogRetentionDays=30",
+  "ManageApiGatewayAccount=true",
+  "VpcEndpointId=vpce-CHANGE_ME",   # the execute-api endpoint of the eu-west-1 VPC
+]

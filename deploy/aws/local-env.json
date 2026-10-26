@@ -1,0 +1,13 @@
+{
+  "Parameters": {
+    "DYNAMODB_ENDPOINT": "http://dynamodb-us:8000",
+    "GLOBAL_MODE": "emulated",
+    "CATALOG_REFRESH": "1s",
+    "LOG_LEVEL": "debug",
+    "INLINE_VIEWS": "true",
+    "STREAM_VIEWS": "true",
+    "MAX_EXECUTION_TIME": "25",
+    "MVWORKER_FUNCTION_ARN": "",
+    "REPLICATOR_FUNCTION_ARN": ""
+  }
+}

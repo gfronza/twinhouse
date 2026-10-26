@@ -1,0 +1,735 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  dynamodb-eventstream: a ClickHouse-compatible HTTP API on Lambda behind a
+  private REST API Gateway, with the materialized-view stream worker, the
+  ReplacingMergeTree replicator and the catalog reconciler as Lambdas on
+  DynamoDB streams. One stack per region (DESIGN.md section 1 and 6); no
+  DynamoDB tables are declared here, the functions create them at runtime.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  TablePrefix:
+    Type: String
+    Default: chddb_
+    Description: >-
+      Prefix of every physical DynamoDB table (TABLE_PREFIX). The IAM policies
+      below are scoped to tables with this prefix.
+    AllowedPattern: '^[A-Za-z0-9_.-]{1,64}$'
+  GlobalMode:
+    Type: String
+    Default: aws
+    AllowedValues: [aws, none]
+    Description: >-
+      GLOBAL_MODE: aws (multi-region, real DynamoDB global tables plus the
+      replicator for ReplacingMergeTree tables) or none (single region, no
+      replicator).
+  ReplicaRegions:
+    Type: CommaDelimitedList
+    Default: us-east-1,eu-west-1
+    Description: >-
+      Every region of the deployment, this one included; use the same value
+      in every stack. REPLICA_REGIONS drops the current region itself and the
+      replicator's REGIONS lists them all with empty endpoints (real AWS).
+  HomeRegion:
+    Type: String
+    Default: us-east-1
+    Description: >-
+      GLOBAL_HOME_REGION: the region that creates the global system tables
+      and global tables without a home region. Deploy this region's stack
+      first.
+  VpcEndpointId:
+    Type: String
+    Description: >-
+      The execute-api interface VPC endpoint (vpce-...) that is allowed to
+      call the private REST API. The API's resource policy denies every other
+      source.
+    AllowedPattern: '^vpce-[0-9a-f]{8,17}$'
+  ApiStageName:
+    Type: String
+    Default: v1
+    Description: >-
+      REST API stage, which is also the path prefix clients use
+      (https://.../v1/ping). Map a private custom domain to the stage to drop
+      the prefix.
+    AllowedPattern: '^[A-Za-z0-9_-]{1,64}$'
+  ChUsers:
+    Type: String
+    Default: 'default:'
+    NoEcho: true
+    Description: 'CH_USERS: "user:password,user2:password2" ("default:" = user default without a password).'
+  LogLevel:
+    Type: String
+    Default: info
+    AllowedValues: [debug, info, warn, error]
+  InlineViews:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: INLINE_VIEWS of the API (read-your-writes for rollups in the writing region).
+  StreamViews:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      STREAM_VIEWS of the API: a stream worker (MvWorkerFunction) applies the
+      materialized views, so a failing inline application does not fail the
+      INSERT.
+  CatalogRefresh:
+    Type: String
+    Default: 5s
+    Description: >-
+      CATALOG_REFRESH (Go duration): the API reloads its catalog snapshot at
+      the start of a request when the snapshot is older than this; the stream
+      worker and replicator do the same per invocation. Every reload is a
+      consistent Scan of the catalog table.
+    AllowedPattern: '^[0-9]+(ms|s|m|h)$'
+  ApiTimeoutSeconds:
+    Type: Number
+    Default: 29
+    MinValue: 1
+    MaxValue: 900
+    Description: >-
+      Lambda timeout of the API function. API Gateway's integration timeout
+      (ApiIntegrationTimeoutMillis) is what the client observes.
+  ApiIntegrationTimeoutMillis:
+    Type: Number
+    Default: 29000
+    MinValue: 50
+    MaxValue: 900000
+    Description: >-
+      API Gateway integration timeout. Values above 29000 need the
+      "integration timeout" quota increase for REST APIs in the account.
+  MaxExecutionTime:
+    Type: String
+    Default: '25'
+    Description: >-
+      MAX_EXECUTION_TIME of the API (seconds or a Go duration, 0 = unlimited):
+      keep it below the integration timeout so a slow query fails with
+      ClickHouse's TIMEOUT_EXCEEDED instead of an API Gateway 504.
+  ApiMemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 128
+    MaxValue: 10240
+  MvWorkerMemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 128
+    MaxValue: 10240
+  MvWorkerTimeoutSeconds:
+    Type: Number
+    Default: 120
+    MinValue: 1
+    MaxValue: 900
+  ReplicatorMemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 128
+    MaxValue: 10240
+  ReplicatorTimeoutSeconds:
+    Type: Number
+    Default: 120
+    MinValue: 1
+    MaxValue: 900
+  ReconcilerMemorySize:
+    Type: Number
+    Default: 512
+    MinValue: 128
+    MaxValue: 10240
+  ReconcilerTimeoutSeconds:
+    Type: Number
+    Default: 300
+    MinValue: 1
+    MaxValue: 900
+    Description: >-
+      The reconciler waits for tables and replicas to become ACTIVE (global
+      table replicas take minutes); an invocation that times out is retried
+      by the next schedule tick, and every step is idempotent.
+  EsmBatchSize:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    MaxValue: 10000
+    Description: ESM_BATCH_SIZE of the event-source mappings the reconciler creates.
+  ReconcilerReservedConcurrency:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 100
+    Description: >-
+      Reserved concurrency of the reconciler (0 = unreserved). 1 serializes
+      the catalog-stream and scheduled invocations of a region; a scheduled
+      tick that lands during a long round (creating a global table takes
+      minutes) is then throttled and dropped (EventInvokeConfig), which is
+      expected and shows in the function's Throttles metric.
+  ApiReservedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 10000
+    Description: Reserved concurrency of the API function (0 = unreserved).
+  ApiProvisionedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 1000
+    Description: >-
+      Provisioned concurrency of the API function's "live" alias (0 = none).
+      Removes cold starts at a fixed hourly cost.
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+  DynamoDBEndpoint:
+    Type: String
+    Default: ''
+    Description: >-
+      DYNAMODB_ENDPOINT, for `sam local` against DynamoDB Local only (the
+      binaries reject it with GLOBAL_MODE=aws). Leave empty on AWS.
+  ManageApiGatewayAccount:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      API Gateway writes access logs only when the account's per-region
+      CloudWatch Logs role (AWS::ApiGateway::Account) is set; without it the
+      stage fails to deploy. true creates that role and setting in this
+      stack (the setting is shared by every REST API of the region); false
+      when another stack or an operator owns it already.
+  KmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional KMS key (ARN) encrypting the API function's environment
+      variables, which hold CH_USERS: with it, only principals allowed to
+      kms:Decrypt by the key policy can read the resolved value through
+      lambda:GetFunctionConfiguration (NoEcho only masks CloudFormation).
+      Empty: the AWS managed key (any principal with Lambda read access
+      sees the value).
+    AllowedPattern: '^(|arn:[a-z-]+:kms:[a-z0-9-]+:[0-9]{12}:key/.+)$'
+
+Conditions:
+  IsGlobal: !Equals [!Ref GlobalMode, aws]
+  HasDynamoDBEndpoint: !Not [!Equals [!Ref DynamoDBEndpoint, '']]
+  ReconcilerReserved: !Not [!Equals [!Ref ReconcilerReservedConcurrency, 0]]
+  ApiReserved: !Not [!Equals [!Ref ApiReservedConcurrency, 0]]
+  ApiProvisioned: !Not [!Equals [!Ref ApiProvisionedConcurrency, 0]]
+  ManageApiGwAccount: !Equals [!Ref ManageApiGatewayAccount, 'true']
+  HasKmsKey: !Not [!Equals [!Ref KmsKeyArn, '']]
+
+# ---------------------------------------------------------------------------
+# Globals: every function is a Go binary (bootstrap) on provided.al2023/arm64
+# built by `sam build` (Metadata BuildMethod go1.x, go.mod two levels up).
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [arm64]
+    Handler: bootstrap
+    Environment:
+      Variables:
+        # REGION defaults to AWS_REGION, which Lambda injects (internal/config).
+        TABLE_PREFIX: !Ref TablePrefix
+        GLOBAL_MODE: !Ref GlobalMode
+        REPLICA_REGIONS: !Join [',', !Ref ReplicaRegions]
+        GLOBAL_HOME_REGION: !Ref HomeRegion
+        LOG_LEVEL: !Ref LogLevel
+        CATALOG_REFRESH: !Ref CatalogRefresh
+        # Only set for `sam local` (DynamoDB Local); absent on AWS.
+        DYNAMODB_ENDPOINT: !If [HasDynamoDBEndpoint, !Ref DynamoDBEndpoint, !Ref 'AWS::NoValue']
+
+Resources:
+  # -------------------------------------------------------------------------
+  # Private REST API in front of the ClickHouse HTTP API.
+  # -------------------------------------------------------------------------
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      StageName: !Ref ApiStageName
+      EndpointConfiguration:
+        Type: PRIVATE
+        VPCEndpointIds: [!Ref VpcEndpointId]
+      # Every content type is binary: query results (Native, compressed
+      # bodies) and INSERT payloads pass base64-encoded through the proxy
+      # integration; the httpadapter sets isBase64Encoded accordingly.
+      BinaryMediaTypes: ['*~1*']
+      Auth:
+        ResourcePolicy:
+          # Allow only calls arriving through the VPC endpoint.
+          IntrinsicVpceWhitelist: [!Ref VpcEndpointId]
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "requestTime":"$context.requestTime","httpMethod":"$context.httpMethod",
+          "path":"$context.path","status":"$context.status",
+          "responseLength":"$context.responseLength","latency":"$context.responseLatency",
+          "integrationStatus":"$context.integration.status","error":"$context.error.message"}
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          MetricsEnabled: true
+      Tags:
+        Application: dynamodb-eventstream
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-api'
+      RetentionInDays: !Ref LogRetentionDays
+      # The stage (AccessLogSetting) depends on this log group; the tag's
+      # conditional Ref makes it depend on the account setting too, so the
+      # stage is created after the CloudWatch Logs role is in place (a
+      # DependsOn cannot name a conditional resource).
+      Tags:
+        - Key: ApiGatewayAccount
+          Value: !If [ManageApiGwAccount, !Ref ApiGatewayAccount, external]
+
+  # The account-level (per region) CloudWatch Logs role API Gateway needs
+  # for access logging; a singleton shared by every REST API of the region.
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Condition: ManageApiGwAccount
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Condition: ManageApiGwAccount
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  # -------------------------------------------------------------------------
+  # API function: cmd/chserver-lambda (server.Server behind httpadapter).
+  # -------------------------------------------------------------------------
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-api'
+      Description: ClickHouse-compatible HTTP API (cmd/chserver-lambda)
+      CodeUri: ../../cmd/chserver-lambda
+      MemorySize: !Ref ApiMemorySize
+      Timeout: !Ref ApiTimeoutSeconds
+      ReservedConcurrentExecutions: !If [ApiReserved, !Ref ApiReservedConcurrency, !Ref 'AWS::NoValue']
+      AutoPublishAlias: live
+      ProvisionedConcurrencyConfig: !If
+        - ApiProvisioned
+        - ProvisionedConcurrentExecutions: !Ref ApiProvisionedConcurrency
+        - !Ref 'AWS::NoValue'
+      LoggingConfig:
+        LogGroup: !Ref ApiLogGroup
+      KmsKeyArn: !If [HasKmsKey, !Ref KmsKeyArn, !Ref 'AWS::NoValue']
+      Environment:
+        Variables:
+          CH_USERS: !Ref ChUsers
+          INLINE_VIEWS: !Ref InlineViews
+          STREAM_VIEWS: !Ref StreamViews
+          MAX_EXECUTION_TIME: !Ref MaxExecutionTime
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /
+            Method: ANY
+            TimeoutInMillis: !Ref ApiIntegrationTimeoutMillis
+        Proxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /{proxy+}
+            Method: ANY
+            TimeoutInMillis: !Ref ApiIntegrationTimeoutMillis
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # Query path (exec -> storage/dynamo): GetItem/Query/Scan for
+            # SELECT, PutItem/UpdateItem/DeleteItem/BatchWriteItem/
+            # TransactWriteItems for INSERT, materialized-view merges and
+            # mutations, BatchGetItem for key lookups, ConditionCheckItem for
+            # the transactional conditions; __catalog reads and conditional
+            # writes (catalog.Catalog over the store); __mv_markers for
+            # exactly-once view output; indexes for secondary-key queries.
+            - Sid: Items
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:BatchGetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:ConditionCheckItem
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+            # DDL path (exec/ddl.go -> Store.EnsureTable / DropTable /
+            # TruncateTable with dynamo.Options.AsyncDDL, plus
+            # CheckSystemTables on the first request): DescribeTable (every
+            # statement, table waits, the system-table check), CreateTable
+            # (+ streams NEW_AND_OLD_IMAGES; the table is awaited, its
+            # replicas are added by the reconciler), UpdateTable (stream
+            # spec of a table created by an older build), DeleteTable (DROP
+            # TABLE of a table without replicas, not awaited). Replica
+            # operations (CreateTableReplica, DeleteTableReplica, the
+            # replication service-linked role) belong to the reconciler
+            # only. Region "*": DescribeTable of replicas.
+            - Sid: Tables
+              Effect: Allow
+              Action:
+                - dynamodb:DescribeTable
+                - dynamodb:CreateTable
+                - dynamodb:UpdateTable
+                - dynamodb:DeleteTable
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+        # Environment variables encrypted with the customer managed key
+        # (KmsKeyArn): the execution role decrypts them at initialization.
+        - !If
+          - HasKmsKey
+          - Version: '2012-10-17'
+            Statement:
+              - Sid: DecryptEnvironment
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref KmsKeyArn
+          - !Ref 'AWS::NoValue'
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-api'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # -------------------------------------------------------------------------
+  # Stream worker: cmd/mvworker in Lambda mode (AWS_LAMBDA_RUNTIME_API set).
+  # Its event-source mappings (one per source table stream) are created by
+  # the reconciler, not here: the tables only exist at runtime.
+  # -------------------------------------------------------------------------
+  MvWorkerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-mvworker'
+      Description: Materialized-view stream worker (cmd/mvworker, DynamoDB stream events)
+      CodeUri: ../../cmd/mvworker
+      MemorySize: !Ref MvWorkerMemorySize
+      Timeout: !Ref MvWorkerTimeoutSeconds
+      LoggingConfig:
+        LogGroup: !Ref MvWorkerLogGroup
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # exec.ApplyViews -> Store.Merge: reads of the source row and
+            # the catalog (__catalog Scan on refresh), conditional writes of
+            # rollup rows, __mv_markers (exactly-once) and the reset items,
+            # PutItem into __dead_letters for poison records.
+            - Sid: Items
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:BatchGetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:ConditionCheckItem
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+            # DescribeTable before every merge target (table status, physical
+            # names); CreateTable/UpdateTimeToLive for the regional
+            # __dead_letters table on first use (mvworker.DeadLetterTableName).
+            - Sid: Tables
+              Effect: Allow
+              Action:
+                - dynamodb:DescribeTable
+                - dynamodb:CreateTable
+                - dynamodb:DescribeTimeToLive
+                - dynamodb:UpdateTimeToLive
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*'
+            # Lambda's event-source mapping poller reads the source-table
+            # streams with the function's role.
+            - Sid: Streams
+              Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetShardIterator
+                - dynamodb:GetRecords
+                - dynamodb:ListStreams
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/stream/*'
+
+  MvWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-mvworker'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # -------------------------------------------------------------------------
+  # Replicator: cmd/replicator in Lambda mode, GLOBAL_MODE=aws only. Fed by
+  # the streams of this region's ReplacingMergeTree tables (event-source
+  # mappings created by the reconciler); writes to every other region.
+  # -------------------------------------------------------------------------
+  ReplicatorFunction:
+    Type: AWS::Serverless::Function
+    Condition: IsGlobal
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-replicator'
+      Description: ReplacingMergeTree cross-region replicator (cmd/replicator, DynamoDB stream events)
+      CodeUri: ../../cmd/replicator
+      MemorySize: !Ref ReplicatorMemorySize
+      Timeout: !Ref ReplicatorTimeoutSeconds
+      LoggingConfig:
+        LogGroup: !Ref ReplicatorLogGroup
+      Environment:
+        Variables:
+          # Lambda mode replicates from this region (REGION) to
+          # REPLICA_REGIONS (Globals); REGIONS is only for the local stack.
+          APPLY_CONFLICT_VIEWS: 'true'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # replicator.applyPut/applyDelete: conditional PutItem/DeleteItem
+            # into the target regions' copies (the put asks for the existing
+            # item); catalog reads (__catalog Scan) for table discovery and
+            # VersionColumn; the conflict hook applies the target region's
+            # materialized views like the stream worker (rollup merges,
+            # __mv_markers, __dead_letters). Region "*": targets are the
+            # other regions.
+            - Sid: Items
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:BatchGetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:ConditionCheckItem
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+            # DescribeTable of the copied tables (status, stream ARN) in
+            # every region it lists; the regional __dead_letters table of a
+            # target region may be created on first conflict.
+            - Sid: Tables
+              Effect: Allow
+              Action:
+                - dynamodb:DescribeTable
+                - dynamodb:CreateTable
+                - dynamodb:DescribeTimeToLive
+                - dynamodb:UpdateTimeToLive
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+            # The event-source mapping poller reads this region's
+            # ReplacingMergeTree table streams.
+            - Sid: Streams
+              Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetShardIterator
+                - dynamodb:GetRecords
+                - dynamodb:ListStreams
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/stream/*'
+
+  ReplicatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: IsGlobal
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-replicator'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # -------------------------------------------------------------------------
+  # Reconciler: cmd/reconciler-lambda. Invoked by the {prefix}__catalog
+  # stream (an event-source mapping it creates for itself) and every minute
+  # by EventBridge as the safety net. Each invocation: EnsureSystemTables +
+  # Reconciler.RunOnce (EnsureTable/DropTable + event-source mappings).
+  # -------------------------------------------------------------------------
+  ReconcilerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-reconciler'
+      Description: Catalog reconciler (cmd/reconciler-lambda, catalog stream + schedule)
+      CodeUri: ../../cmd/reconciler-lambda
+      MemorySize: !Ref ReconcilerMemorySize
+      Timeout: !Ref ReconcilerTimeoutSeconds
+      ReservedConcurrentExecutions: !If [ReconcilerReserved, !Ref ReconcilerReservedConcurrency, !Ref 'AWS::NoValue']
+      # A scheduled tick that lands while a long round runs (reserved
+      # concurrency 1: creating a global table takes minutes) is throttled;
+      # drop it instead of queueing asynchronous retries for hours, since
+      # the next tick comes a minute later and every round is idempotent.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 60
+      LoggingConfig:
+        LogGroup: !Ref ReconcilerLogGroup
+      Environment:
+        Variables:
+          MVWORKER_FUNCTION_ARN: !GetAtt MvWorkerFunction.Arn
+          REPLICATOR_FUNCTION_ARN: !If [IsGlobal, !GetAtt ReplicatorFunction.Arn, !Ref 'AWS::NoValue']
+          # RECONCILER_FUNCTION_ARN defaults to AWS_LAMBDA_FUNCTION_NAME
+          # inside Lambda (the reconciler wires the catalog stream to itself).
+          ESM_BATCH_SIZE: !Ref EsmBatchSize
+      Events:
+        Schedule:
+          Type: Schedule
+          Properties:
+            Name: !Sub '${AWS::StackName}-reconcile'
+            Description: Reconciler safety net (catalog re-read, ensure/drop tables, event-source mappings)
+            Schedule: rate(1 minute)
+            Enabled: true
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # server.Reconciler.RunOnce: consistent Scan of __catalog
+            # (fresh catalog read), reset items in __mv_markers and the row
+            # deletes of a TRUNCATE applied by EnsureTable (Query/Scan +
+            # BatchWriteItem/DeleteItem).
+            - Sid: Items
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:BatchGetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:ConditionCheckItem
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*/index/*'
+            # Store.EnsureSystemTables / EnsureTable / DropTable: Create,
+            # Describe, Update (streams, ReplicaUpdates in the home region),
+            # Delete (tables whose catalog entry vanished, replicas first),
+            # TTL on the system tables. Region "*": replica operations.
+            - Sid: Tables
+              Effect: Allow
+              Action:
+                - dynamodb:DescribeTable
+                - dynamodb:CreateTable
+                - dynamodb:UpdateTable
+                - dynamodb:DeleteTable
+                - dynamodb:DescribeTimeToLive
+                - dynamodb:UpdateTimeToLive
+                - dynamodb:CreateTableReplica
+                - dynamodb:DeleteTableReplica
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/${TablePrefix}*'
+            - Sid: ReplicationServiceLinkedRole
+              Effect: Allow
+              Action: iam:CreateServiceLinkedRole
+              Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/replication.dynamodb.amazonaws.com/*'
+              Condition:
+                StringEquals:
+                  iam:AWSServiceName: replication.dynamodb.amazonaws.com
+            # The __catalog stream event-source mapping polls with this role.
+            - Sid: Streams
+              Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetShardIterator
+                - dynamodb:GetRecords
+                - dynamodb:ListStreams
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TablePrefix}*/stream/*'
+            # Store.ListPhysicalTables: the reconciler finds the physical
+            # tables of this deployment whose catalog entry vanished while
+            # no reconciler observed it (e.g. between two execution
+            # environments) and drops them. ListTables cannot be scoped.
+            - Sid: ListTables
+              Effect: Allow
+              Action: dynamodb:ListTables
+              Resource: '*'
+            # internal/esm.Manager: ListEventSourceMappings(FunctionName)
+            # has no resource-level scoping.
+            - Sid: ListEventSourceMappings
+              Effect: Allow
+              Action: lambda:ListEventSourceMappings
+              Resource: '*'
+            # CreateEventSourceMapping is authorized on the target function:
+            # the stream worker, the replicator and the reconciler itself
+            # (its ARN is spelled out: a function cannot GetAtt itself).
+            - Sid: CreateEventSourceMapping
+              Effect: Allow
+              Action: lambda:CreateEventSourceMapping
+              Resource: '*'
+              Condition:
+                ArnLike:
+                  lambda:FunctionArn:
+                    - !GetAtt MvWorkerFunction.Arn
+                    - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-replicator'
+                    - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-reconciler'
+            # Update/Delete act on the mapping resource, scoped by the
+            # function it targets (esm.Manager updates drifted settings and
+            # removes the mappings of dropped tables).
+            - Sid: ManageEventSourceMappings
+              Effect: Allow
+              Action:
+                - lambda:UpdateEventSourceMapping
+                - lambda:DeleteEventSourceMapping
+              Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:event-source-mapping:*'
+              Condition:
+                ArnLike:
+                  lambda:FunctionArn:
+                    - !GetAtt MvWorkerFunction.Arn
+                    - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-replicator'
+                    - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-reconciler'
+
+  ReconcilerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-reconciler'
+      RetentionInDays: !Ref LogRetentionDays
+
+# ---------------------------------------------------------------------------
+Outputs:
+  RestApiId:
+    Description: REST API id
+    Value: !Ref Api
+  ApiEndpoint:
+    Description: >-
+      Invoke URL (resolves only from the VPC when the execute-api endpoint
+      has private DNS enabled)
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${ApiStageName}'
+  ApiVpceEndpoint:
+    Description: Invoke URL through the VPC endpoint's public DNS name (no private DNS needed)
+    Value: !Sub 'https://${Api}-${VpcEndpointId}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${ApiStageName}'
+  ApiFunctionArn:
+    Value: !GetAtt ApiFunction.Arn
+  MvWorkerFunctionArn:
+    Value: !GetAtt MvWorkerFunction.Arn
+  ReconcilerFunctionArn:
+    Value: !GetAtt ReconcilerFunction.Arn
+  ReplicatorFunctionArn:
+    Condition: IsGlobal
+    Value: !GetAtt ReplicatorFunction.Arn

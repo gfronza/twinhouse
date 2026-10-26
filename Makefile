@@ -1,4 +1,5 @@
-# Developer entry points. The local stack is deploy/local/docker-compose.yml.
+# Developer entry points. The local stack is deploy/local/docker-compose.yml;
+# the serverless AWS deployment (SAM) is deploy/aws (targets aws-*).
 
 GO              ?= go
 COMPOSE_PROJECT ?= dhdev
@@ -22,7 +23,8 @@ ITEST_PORT_A   ?= 18101
 ITEST_PORT_B   ?= 18102
 DDB_LOCAL_IMG  ?= amazon/dynamodb-local:latest
 
-.PHONY: all build image test vet fmt test-integration up up-single down logs ps e2e compat multiregion
+.PHONY: all build image test vet fmt test-integration up up-single down logs ps e2e compat multiregion \
+        aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy
 
 all: build test
 
@@ -79,3 +81,59 @@ compat:
 
 multiregion:
 	$(GO) test -tags multiregion -count=1 -v -timeout 20m ./tests/multiregion/...
+
+# ---------------------------------------------------------------------------
+# Serverless AWS deployment (deploy/aws, SAM): the API on Lambda behind a
+# private REST API Gateway, stream worker / replicator / reconciler Lambdas.
+# Run from the deploy/aws directory so samconfig.toml and .aws-sam/ live there.
+#   make aws-validate                      # sam validate --lint (no credentials needed)
+#   make aws-build                         # cross-compiles the four arm64 bootstraps
+#   make aws-local-api                     # sam local start-api on :3000 against the
+#                                          # dhdev DynamoDB Local (make up first)
+#   make aws-local-e2e                     # tests/e2e against the emulated API (in
+#                                          # another terminal; session tests skip)
+#   make aws-deploy ENV=us                 # deploy the home region (needs credentials
+#   make aws-deploy ENV=eu                 # and the VpcEndpointId in samconfig, see deploy/aws/README.md)
+#   make aws-deploy ENV=us SAM_CONFIG=samconfig.local.toml   # a git-ignored copy with secrets
+SAM             ?= sam
+SAM_DIR         ?= deploy/aws
+SAM_CONFIG      ?= samconfig.toml
+ENV             ?= us
+SAM_DEPLOY_ARGS ?=
+SAM_LOCAL_URL   ?= http://127.0.0.1:3000
+
+aws-validate:
+	cd $(SAM_DIR) && $(SAM) validate --lint
+
+aws-build:
+	cd $(SAM_DIR) && $(SAM) build
+
+# Dummy credentials: DynamoDB Local accepts anything, and an expired SSO
+# session on the host would otherwise stop the Lambda containers from starting.
+# The API Lambda only checks that the system tables exist (the reconciler
+# creates them), so one reconciler round runs first against the same
+# DynamoDB Local (host port $(DDB_US_ENDPOINT)), with the settings of
+# $(SAM_DIR)/local-env.json.
+SAM_LOCAL_ENV   ?= local-env.json
+aws-local-reconcile:
+	env -u AWS_PROFILE -u AWS_SESSION_TOKEN AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local \
+		REGION=us-east-1 DYNAMODB_ENDPOINT=$(DDB_US_ENDPOINT) TABLE_PREFIX=$(TABLE_PREFIX) GLOBAL_MODE=emulated \
+		MVWORKER_FUNCTION_ARN= REPLICATOR_FUNCTION_ARN= $(GO) run ./cmd/reconciler-lambda -once
+
+aws-local-api: aws-build aws-local-reconcile
+	cd $(SAM_DIR) && env -u AWS_PROFILE -u AWS_SESSION_TOKEN AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local \
+		AWS_DEFAULT_REGION=us-east-1 $(SAM) local start-api --env-vars $(SAM_LOCAL_ENV)
+
+# The e2e suite against the emulated API (make aws-local-api running). The
+# suite detects Lambda mode (session_id answered with NOT_IMPLEMENTED) and
+# skips the tests of features the serverless deployment does not offer.
+aws-local-e2e:
+	CHDDB_URL=$(SAM_LOCAL_URL) $(GO) test -tags e2e -count=1 -v ./tests/e2e/...
+
+# Never run by the test suites: it needs AWS credentials and creates
+# resources. Every parameter comes from $(SAM_CONFIG) (VpcEndpointId must be
+# filled in there); `--parameter-overrides` is refused because the SAM CLI
+# replaces the whole parameter list of the environment with it.
+aws-deploy: aws-build
+	$(if $(findstring --parameter-overrides,$(SAM_DEPLOY_ARGS)),$(error SAM_DEPLOY_ARGS must not contain --parameter-overrides: it REPLACES every parameter of [$(ENV).deploy.parameters]; edit $(SAM_DIR)/$(SAM_CONFIG) or deploy a git-ignored copy with SAM_CONFIG=samconfig.local.toml))
+	cd $(SAM_DIR) && $(SAM) deploy --config-file $(SAM_CONFIG) --config-env $(ENV) $(SAM_DEPLOY_ARGS)
