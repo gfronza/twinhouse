@@ -9,4 +9,11 @@
 // and drops them at the end.
 //
 //	go test -tags e2e -count=1 ./tests/e2e/...
+//
+// Against the serverless deployment (the API Lambda behind API Gateway, or
+// `make aws-local-api`, CHDDB_URL=http://127.0.0.1:3000) the suite detects
+// Lambda mode (a session_id request answered with NOT_IMPLEMENTED, or
+// E2E_LAMBDA=1), sends Accept: */* so API Gateway returns binary responses
+// decoded, and skips the tests of features that deployment does not offer
+// (HTTP sessions).
 package e2e

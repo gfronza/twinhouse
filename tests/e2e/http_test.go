@@ -163,6 +163,7 @@ func TestHTTPLoader(t *testing.T) {
 		hr, _ := http.NewRequest("GET", baseURL+"/?"+url.Values{"enable_http_compression": {"1"}, "database": {db},
 			"query": {"SELECT tenant_id FROM http_metrics ORDER BY tenant_id"}}.Encode(), nil)
 		hr.Header.Set("Accept-Encoding", "gzip")
+		acceptAll(hr.Header)
 		resp, err := httpClient.Do(hr)
 		if err != nil {
 			t.Fatal(err)
@@ -337,6 +338,7 @@ func TestHTTPLoader(t *testing.T) {
 	})
 
 	t.Run("session", func(t *testing.T) {
+		skipInLambda(t, "HTTP sessions (session_id)")
 		sid := "e2e-session-" + runID
 		r := doHTTP(t, req{Params: url.Values{"session_id": {sid}}, Body: strings.NewReader("USE " + db)})
 		if r.Status != 200 {

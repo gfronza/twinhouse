@@ -55,9 +55,16 @@ func hostPort() string {
 	return u.Host
 }
 
-// need skips the test when the target server is unreachable.
-func need(t testing.TB) {
-	t.Helper()
+// lambdaMode is true when CHDDB_URL is the serverless deployment (the API
+// Lambda behind API Gateway, or its `sam local start-api` emulation): HTTP
+// sessions are rejected with NOT_IMPLEMENTED (48) and bodies are bounded by
+// the Lambda payload limit (6 MB). Detected by probe (detect), or forced
+// with E2E_LAMBDA=1. Tests of those features skip (skipInLambda) instead of
+// weakening their assertions.
+var lambdaMode bool
+
+// detect pings the target once and probes for Lambda mode.
+func detect() {
 	reachOnce.Do(func() {
 		c := &http.Client{Timeout: 3 * time.Second}
 		resp, err := c.Get(baseURL + "/ping")
@@ -69,10 +76,48 @@ func need(t testing.TB) {
 		b, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != 200 || string(b) != "Ok.\n" {
 			reachErr = fmt.Errorf("ping: status %d body %q", resp.StatusCode, b)
+			return
 		}
+		if os.Getenv("E2E_LAMBDA") == "1" {
+			lambdaMode = true
+			return
+		}
+		pr, err := c.Get(baseURL + "/?" + url.Values{"session_id": {"e2e-probe-" + runID}, "query": {"SELECT 1"}}.Encode())
+		if err != nil {
+			return
+		}
+		defer pr.Body.Close()
+		_, _ = io.Copy(io.Discard, pr.Body)
+		lambdaMode = pr.Header.Get("X-ClickHouse-Exception-Code") == "48"
 	})
+}
+
+// need skips the test when the target server is unreachable.
+func need(t testing.TB) {
+	t.Helper()
+	detect()
 	if reachErr != nil {
 		t.Skipf("chserver at %s unreachable: %v", baseURL, reachErr)
+	}
+}
+
+// skipInLambda skips a test of a feature the serverless deployment does not
+// offer (sessions, bodies above the Lambda payload limit).
+func skipInLambda(t testing.TB, feature string) {
+	t.Helper()
+	need(t)
+	if lambdaMode {
+		t.Skipf("%s: not available in Lambda mode (serverless deployment)", feature)
+	}
+}
+
+// acceptAll sets Accept: */* in Lambda mode when the request has no Accept:
+// API Gateway (BinaryMediaTypes */*) and its emulator base64-decode a binary
+// response only for a request whose Accept matches a binary media type, and
+// Go clients send no Accept by default (curl and Python requests send */*).
+func acceptAll(h http.Header) {
+	if lambdaMode && h.Get("Accept") == "" {
+		h.Set("Accept", "*/*")
 	}
 }
 
@@ -128,6 +173,8 @@ func doHTTPErr(r req) (httpResp, error) {
 	for k, v := range r.Headers {
 		hr.Header.Set(k, v)
 	}
+	detect()
+	acceptAll(hr.Header)
 	resp, err := httpClient.Do(hr)
 	if err != nil {
 		return httpResp{}, fmt.Errorf("%s %s: %w", r.Method, abbrev(u), err)
@@ -195,7 +242,8 @@ func newDB(t testing.TB, name string) string {
 // clickhouse-go helpers
 
 func baseOptions(db string) *clickhouse.Options {
-	return &clickhouse.Options{
+	detect()
+	o := &clickhouse.Options{
 		Addr:     []string{hostPort()},
 		Protocol: clickhouse.HTTP,
 		Auth: clickhouse.Auth{
@@ -206,6 +254,11 @@ func baseOptions(db string) *clickhouse.Options {
 		DialTimeout: 10 * time.Second,
 		ReadTimeout: opTimeout,
 	}
+	if lambdaMode {
+		// See acceptAll: clickhouse-go sends no Accept header by default.
+		o.HttpHeaders = map[string]string{"Accept": "*/*"}
+	}
+	return o
 }
 
 // openSQL opens a database/sql handle via clickhouse.OpenDB.
