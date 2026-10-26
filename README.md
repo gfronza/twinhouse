@@ -14,11 +14,14 @@ writes are accepted everywhere, and all regions converge to the same data.
 
 > **Status: experimental.** The design is stable and well tested against
 > emulated global tables, but it has no production track record yet. The
-> `GLOBAL_MODE=aws` deployment path (real DynamoDB global tables) and the
-> serverless deployment ([deploy/aws-lambda](deploy/aws-lambda/README.md), Lambda behind
-> a private API Gateway) are implemented and unit-tested, and the API
-> Lambda passes the e2e suite under `sam local`, but the automated suites
-> have not run against real AWS. Expect rough edges, and benchmark costs
+> `GLOBAL_MODE=aws` deployment path (real DynamoDB global tables), the
+> serverless deployment ([deploy/aws-lambda](deploy/aws-lambda/README.md),
+> Lambda behind a private API Gateway) and the container deployment
+> ([deploy/aws-ecs](deploy/aws-ecs/README.md), ECS Fargate behind an
+> internal load balancer) are implemented and unit-tested; the API Lambda
+> passes the e2e suite under `sam local` and the ECS task definitions pass
+> it as local containers, but the automated suites have not run against
+> real AWS. Expect rough edges, and benchmark costs
 > before relying on it.
 
 ---
@@ -31,7 +34,7 @@ writes are accepted everywhere, and all regions converge to the same data.
 - [Quickstart](#quickstart)
 - [SQL support](#sql-support)
 - [Configuration](#configuration)
-- [Deploying on AWS](#deploying-on-aws)
+- [Deployment](#deployment)
 - [Testing](#testing)
 - [Project layout](#project-layout)
 - [Limitations and roadmap](#limitations-and-roadmap)
@@ -129,8 +132,8 @@ All three suites, `go vet` and `go test ./...` currently pass.
   Lambda functions: the HTTP API behind a private API Gateway, the stream
   worker and the replicator on DynamoDB-stream event-source mappings, and
   the reconciler on the `__catalog` stream plus a one-minute schedule
-  (see [Deploying on AWS](#deploying-on-aws)). The local stack runs the
-  long-running binaries in containers.
+  (see [Deployment](#deployment)). The local stack and the ECS
+  deployment run the long-running binaries in containers.
 
 [`DESIGN.md`](DESIGN.md) is the detailed contract: physical layout,
 encodings, write conditions, reset epochs, stream handling and error
@@ -450,7 +453,8 @@ framing.
 
 - The native TCP protocol and the MySQL/PostgreSQL/gRPC interfaces (HTTP
   only). The server itself has no TLS: terminate it at a load balancer
-  (the serverless deployment gets it from API Gateway).
+  (the serverless deployment gets it from API Gateway, the ECS deployment
+  from its load balancer's optional HTTPS listener).
 - `Decimal`, `Int128/256`, `UInt128/256`, `IPv4/6`, `JSON`, `Variant`,
   `Dynamic`, `Nested`, geo types.
 - Window functions, lambdas and higher-order functions (`arrayMap`,
@@ -500,7 +504,9 @@ framing.
 ## Configuration
 
 Every binary reads environment variables (`internal/config`; durations
-use Go syntax such as `500ms` or `2s`).
+use Go syntax such as `500ms` or `2s`). The deployment templates set them
+from stack parameters; [Self-managed containers](#self-managed-containers)
+lists the ones each process needs.
 
 ### Common (every binary, the Lambda functions included)
 
@@ -584,17 +590,220 @@ the Lambda event-source mappings of the table streams
 
 ---
 
-## Deploying on AWS
+## Deployment
 
-> Untested against real AWS by the automated suites (the API Lambda has
-> been exercised under `sam local` only). Read [DESIGN.md §1, §2, §5,
-> §6](DESIGN.md) before you try it.
+Every deployment runs the same binaries (`cmd/*`, or the image built from
+`deploy/Dockerfile`) against the same DynamoDB layout, configured with the
+environment variables of [Configuration](#configuration). The options
+differ in where the processes run and what starts them.
 
-### Serverless (recommended)
+> **Not run on real AWS yet.** The automated suites have not run against
+> real AWS. The API Lambda passes the e2e suite under `sam local`, and the
+> ECS task definitions pass it as local containers (`make ecs-local`), both
+> against DynamoDB Local. Read [DESIGN.md §1, §2, §5, §6](DESIGN.md) before
+> you deploy.
 
-[deploy/aws-lambda](deploy/aws-lambda/README.md) is an AWS SAM template that deploys
-everything as Lambda functions, **one stack per region**, deployed once per
-region (`us-east-1` as the home region, then `eu-west-1`):
+### Options
+
+| Option | Directory | What runs | Use it for |
+|---|---|---|---|
+| Local stack | [`deploy/local`](deploy/local/docker-compose.yml) | Docker Compose: two DynamoDB Local instances as two regions, `chserver` and `mvworker` per region, the replicator emulating global tables (`GLOBAL_MODE=emulated`). | Development, the test suites, evaluation and demos. Not for production data. |
+| AWS serverless | [`deploy/aws-lambda`](deploy/aws-lambda/README.md) | One AWS SAM stack per region: the API as a Lambda behind a private REST API Gateway, the stream worker and the replicator as Lambdas on DynamoDB-stream event-source mappings, and a reconciler Lambda that manages tables and mappings. | Low or spiky traffic, nothing to keep running, requests and responses under 6 MB, queries under about 25 s. |
+| AWS containers | [`deploy/aws-ecs`](deploy/aws-ecs/README.md) | One CloudFormation stack per region on ECS Fargate in an existing VPC: `chserver` behind an internal Application Load Balancer on port 8123, an `mvworker` service (or the worker in-process), the replicator in the home region. | Steady traffic, large `INSERT`s and results, queries up to about 100 s, HTTP sessions, clients that switch by host and port only. |
+| Self-managed containers | [`deploy/Dockerfile`](deploy/Dockerfile) | The same image and environment variables on Kubernetes, EC2 or any other scheduler, with your own load balancer, secrets and IAM. | A platform you already operate, or load balancer limits you need to control. |
+| Hybrids | none | Combinations the binaries support but no template deploys, such as the container API with Lambda stream consumers. | See [Hybrid deployments](#hybrid-deployments). |
+
+A short decision guide:
+
+1. Not on AWS yet, or developing: use the **local stack**. It needs only
+   Docker and holds its data in memory.
+2. On AWS, if every request and response fits in 6 MB, every query
+   finishes in about 25 s and no client needs `session_id`: use
+   **serverless**. It has the lowest idle cost and no servers to size.
+3. On AWS otherwise, or if clients must reach the server by host and port
+   like a ClickHouse server: use **ECS containers**.
+4. With an existing Kubernetes cluster or VM fleet: use **self-managed
+   containers**, with `deploy/aws-ecs` as the worked example.
+
+All options use the same tables, so the choice is per region and can be
+changed later (see [Moving between options](#moving-between-options)).
+
+### Comparison
+
+| | Serverless (`deploy/aws-lambda`) | Containers (`deploy/aws-ecs`, or self-managed) |
+|---|---|---|
+| How clients connect | HTTPS on 443 from inside the VPC, through the `execute-api` interface endpoint: `https://<api-id>-<vpce-id>.execute-api.<region>.amazonaws.com/v1` (`ApiVpceEndpoint` output), or the plain invoke URL when the endpoint has private DNS. The stage is a path prefix, so clickhouse-go needs `HttpUrlPath: "v1"`; a private custom domain mapped with an empty base path removes it. Go clients must send `Accept: */*`. | `http://<internal-alb-dns>:8123` (ECS `ClickHouseUrl` output): a ClickHouse client switches by host and port only. HTTPS-only ECS stacks (`CertificateArn` set, `KeepHttpListener=false`) have no 8123 listener and no `ClickHouseUrl` output: clients use `https://<alias the certificate covers>:8443`. Self-managed: the address of your load balancer. |
+| TLS termination | Always, at API Gateway. | ECS: optional HTTPS listener on 8443 with an ACM certificate (`CertificateArn`); plain HTTP on 8123 inside the VPC unless `KeepHttpListener=false`. Self-managed: your load balancer or proxy. chserver itself has no TLS. |
+| HTTP sessions (`session_id`) | Rejected with `NOT_IMPLEMENTED` (48). | Supported. A session lives in the memory of one process, so with several instances every request of a session must reach the same one. |
+| Request size | 6 MB per request (Lambda invocation payload). Request bodies reach the function base64-encoded, which inflates them by about a third toward that limit. | No fixed limit on `INSERT` data: a body over 1 MiB is split at the start of its inline data and streamed into the statement. Query text is limited to 256 MiB. |
+| Response size | 6 MB per response. | No fixed limit. The result rows are held in memory before they are encoded, so process memory bounds a result. |
+| Response streaming | No: the whole response is buffered and returned at the end. | Yes: once 1 MiB of encoded output is buffered, the rest is sent as it is encoded. `wait_end_of_query=1` buffers the whole response, so a late error still gets its HTTP status. |
+| Query time limit | The API Gateway integration timeout, 29 s by default (`ApiIntegrationTimeoutMillis`; more needs a quota increase). `MaxExecutionTime` defaults to 25 s, so a slow query gets `TIMEOUT_EXCEEDED` (159) instead of a 504 without a ClickHouse error body. | ECS: `MaxExecutionTime` 100 s by default, below the load balancer idle timeout (`LoadBalancerIdleTimeout`, at most 115 s). Self-managed: chserver has no limit besides `MAX_EXECUTION_TIME`; the load balancer's idle timeout bounds a query that has not started sending, and it must stay below chserver's fixed 120 s keep-alive idle timeout. |
+| DDL with `GLOBAL_MODE=aws` | Asynchronous. `CREATE TABLE` returns once the table is `ACTIVE` in the issuing region, and the reconciler adds the replicas (minutes). `DROP TABLE` returns at once, and the reconcilers delete tables and mappings within about two rounds. | Synchronous. `CREATE TABLE` of a global table waits until its replicas exist (minutes), which can outlast the load balancer idle timeout. The client then gets a timeout, but the catalog entry is already written and the reconciler completes the table. |
+| Cold starts | A new execution environment checks the system tables and loads the catalog before its first request. `ApiProvisionedConcurrency` keeps environments warm at an hourly cost. | None once a process runs. chserver starts listening only after the system tables are ready. On the first start of a `GLOBAL_MODE=aws` deployment that takes minutes: the home region adds the `__catalog` replicas and waits for them, and another region waits for its replica. |
+| Scaling model | API: one invocation per request, up to the account's concurrency or `ApiReservedConcurrency`. Stream worker and replicator: one concurrent invocation per stream shard. | chserver: add instances (ECS: `ChserverDesiredCount`, or CPU target tracking up to `ChserverMaxCount`). mvworker: instances share the shards through leases. Replicator: one per deployment. |
+| Stream consumers managed by | The reconciler Lambda: it creates, updates and removes one event-source mapping per table stream as tables appear and disappear. | mvworker and the replicator themselves: they find tables in the catalog and read the streams with shard leases and checkpoints in `{prefix}__checkpoints`. |
+| Reconciler | `cmd/reconciler-lambda`, on the `__catalog` stream and a one-minute schedule. | Inside every chserver process, every `CATALOG_REFRESH`. |
+| Replicator (`GLOBAL_MODE=aws`) | One Lambda per region, on that region's ReplacingMergeTree streams. | One long-running process for the whole deployment, tailing every region's streams (ECS: in the home region). |
+| Multi-region | One stack per region, home region first. | One stack (or set of processes) per region, home region first. |
+| Network | The functions run outside your VPC; only the API is reached through the VPC endpoint. | Private subnets with a NAT gateway (or other internet egress) in every region. The stream consumers read DynamoDB Streams, which the DynamoDB gateway endpoint does not cover, and the replicator reaches the other regions' DynamoDB. VPC endpoints for DynamoDB, ECR, CloudWatch Logs and Secrets Manager are optional and reduce NAT traffic. |
+| Idle cost | Low: the interface endpoint's hourly charge per Availability Zone, one scheduled reconciler run per minute, DynamoDB storage. | Tasks bill while they run (ECS defaults per region: two chserver tasks of 1 vCPU / 2 GB, one mvworker of 0.5 vCPU / 1 GB, and one replicator of 0.5 vCPU / 1 GB in the home region), and the load balancer and the NAT gateway or interface endpoints bill per hour. |
+| Operational burden | No servers to size or patch. Event-source mappings are not stack resources, and API Gateway has client-side quirks (the `Accept` header, `+` in query strings, the `/v1` prefix). | Image builds and pushes per region, task sizes and counts, VPC networking. Self-managed adds the load balancer, the secret store, IAM and process supervision. |
+
+### Common to every AWS deployment
+
+**Regions and `GLOBAL_MODE`.**
+
+- **Several regions:** use `GLOBAL_MODE=aws`. Source tables and `__catalog`
+  become DynamoDB global tables, `ReplacingMergeTree` tables get one table
+  per region kept in sync by the replicator, and rollups are regional
+  (see [Consistency model](#consistency-model)).
+- **One region:** use `GLOBAL_MODE=none`. Nothing is replicated and no
+  replicator runs.
+- **`emulated`** is for DynamoDB Local only. `GLOBAL_MODE=aws` refuses a
+  `DYNAMODB_ENDPOINT` and needs at least one other region in
+  `REPLICA_REGIONS`.
+- **Same settings in every stack:** use the same `TablePrefix`, the same
+  `ReplicaRegions` (every region, the stack's own included) and the same
+  `HomeRegion` everywhere. `REPLICA_REGIONS` drops the process's own
+  region, so the same list works in every region. `GLOBAL_HOME_REGION`
+  defaults to the first of the sorted region list; set it explicitly.
+
+**Deploy the home region first.** With `GLOBAL_MODE=aws` the home region
+(`GLOBAL_HOME_REGION`) creates `__catalog` and adds its replicas. The
+other regions wait at startup until their replica exists, and they join
+global tables the same way rather than creating their own. AWS refuses to
+add a replica where a table of that name already exists, so a replica
+region deployed first would have to be undone by deleting its tables; the
+server reports that case with the region holding the stray table. Tables
+created later with `CREATE TABLE` are created and replicated by the region
+that ran the statement; the other regions' reconcilers join them.
+
+**Table prefix.** `TABLE_PREFIX` (default `chddb_`) prefixes every physical
+table and is also the IAM scope (`table/<prefix>*`), so one account can
+host several deployments with different prefixes. Prefixes must not be
+prefixes of one another (`chddb_` and `chddb_prod_`). Otherwise the
+shorter one's policies would cover the other's tables, and its reconciler,
+which drops physical tables of its deployment that no catalog entry
+names, could take the other's tables for its own.
+
+**Users and secrets.** `CH_USERS` is `user:password,user2:password2`. The
+default, `default:`, is the user `default` without a password, so set it
+in every real deployment. Authentication is ClickHouse's user and password
+only. The network boundary is the VPC endpoint's security group
+(serverless) or the load balancer's (containers).
+
+- **Serverless:** the `ChUsers` parameter. It is `NoEcho`, which masks it
+  only in CloudFormation output; the value is in the API function's
+  environment. Keep it in a git-ignored `samconfig.local.toml`, and set
+  `KmsKeyArn` to restrict who can decrypt it (deploy/aws-lambda/README.md
+  gives the order of the key policy and the deploys).
+- **ECS:** a Secrets Manager secret (`ChUsersSecretArn`) that ECS injects
+  at task start. The password never appears in a parameter, the task
+  definition or the environment shown by the console.
+- **Self-managed:** pass it from your secret store as an environment
+  variable.
+
+**Credentials.** The binaries use the AWS SDK's default credential chain:
+the Lambda execution role, the ECS task role, EKS pod roles (IRSA or Pod
+Identity), an EC2 instance profile or environment variables. Leave
+`DYNAMODB_ENDPOINT` unset: it is for DynamoDB Local and switches to dummy
+credentials. `REGION` falls back to `AWS_REGION`, which Lambda and ECS set.
+
+**Tables are created at runtime.** No template declares a DynamoDB table.
+The processes create them, so one stack serves any schema. All tables are
+`PAY_PER_REQUEST`. Streams (`NEW_AND_OLD_IMAGES`) are on the catalog and
+on every row table except the regional Aggregating and Summing rollups,
+which have no stream consumer.
+
+| Table | Kind |
+|---|---|
+| `{prefix}__catalog` | Global table. The home region (`GLOBAL_HOME_REGION`) creates it and adds the replicas; the other regions wait for their replica. |
+| `{prefix}{db}.{table}.{id}` for `MergeTree` / `Memory` / `Log` | Global table, created in the region that ran the `CREATE`, plus replicas. |
+| `{prefix}{db}.{table}.{id}` for `ReplacingMergeTree` | One table per region (each region's reconciler creates it), kept in sync by the replicator. |
+| `{prefix}{db}.{table}.{id}` for `Aggregating` / `SummingMergeTree` (+ `.members` for `uniq*` / `groupUniqArray` states) | Regional: one independent copy per region. |
+| `{prefix}__mv_markers` (TTL on `_exp`), `{prefix}__checkpoints`, `{prefix}__dead_letters` | Regional system tables. |
+
+**Deleting a stack never deletes data.** CloudFormation does not own the
+tables, so remove them deliberately: replicas first, then the table, as
+in [deploy/aws-ecs/README.md](deploy/aws-ecs/README.md#teardown).
+DynamoDB allows removing a replica, or deleting a table that was the
+source of a replica, only 24 hours after the replica was added.
+
+#### Moving between options
+
+Every option reads and writes the same tables under the same
+`TABLE_PREFIX`. To move a region:
+
+1. Deploy the other option with the same `TablePrefix`,
+   `ReplicaRegions` and `HomeRegion`.
+2. Move the clients to it.
+3. Delete the old stack. The tables stay.
+
+While both run, views are still applied once, because the exactly-once
+markers deduplicate them as they do for inline views and the worker. The
+cost is duplicate stream processing. After removing a serverless stack,
+delete any event-source mappings that its function deletion left behind.
+
+#### IAM permissions
+
+The tables below list what each role needs. Each option's subsection
+lists what its template grants, and `go test ./deploy/aws-lambda/ ./deploy/aws-ecs/`
+checks the scoping. The resources are
+`arn:aws:dynamodb:*:*:table/{prefix}*` and
+`arn:aws:dynamodb:*:*:table/{prefix}*/stream/*`, in every region of the
+deployment.
+
+| Who | Actions |
+|---|---|
+| chserver | `dynamodb:DescribeTable`, `CreateTable`, `UpdateTable`, `DeleteTable`, `DescribeTimeToLive`, `UpdateTimeToLive`, and the item actions `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchGetItem`, `BatchWriteItem`, `ConditionCheckItem`, `Query`, `Scan` (`TransactWriteItems` is authorized through Put/Update/ConditionCheck) |
+| mvworker | the same as chserver without `DeleteTable` |
+| replicator | the item actions, `DescribeTable` and `CreateTable` (its checkpoint and `__dead_letters` tables) |
+| stream consumers (mvworker, replicator, chserver with `RUN_STREAM_WORKER`) | `dynamodb:DescribeStream`, `GetShardIterator`, `GetRecords` (Lambda event-source mappings also need `ListStreams`) |
+| chserver or reconciler-lambda with `GLOBAL_MODE=aws` (adds and removes replicas) | `dynamodb:CreateTableReplica`, `DeleteTableReplica`, and `iam:CreateServiceLinkedRole` for `replication.dynamodb.amazonaws.com`. Adding a replica also needs `CreateTable`, `UpdateTable` and the item actions on the table in the replica region. In the home region mvworker needs the same for `{prefix}__catalog` only (`EnsureSystemTables` at startup). |
+| reconciler (chserver or reconciler-lambda) | `dynamodb:ListTables` (no resource scoping): finds physical tables of the deployment whose catalog entry vanished while no reconciler was running |
+| reconciler with `MVWORKER_FUNCTION_ARN` (chserver or reconciler-lambda) | `dynamodb:DescribeTable` (stream ARNs), `lambda:ListEventSourceMappings` (no resource scoping), `lambda:CreateEventSourceMapping`, `UpdateEventSourceMapping`, `DeleteEventSourceMapping` scoped with `lambda:FunctionArn` to the stream worker, replicator and reconciler functions |
+
+### Local stack (`deploy/local`)
+
+`make up` builds the image and starts
+[`deploy/local/docker-compose.yml`](deploy/local/docker-compose.yml) as the
+compose project `dhdev`:
+
+- two DynamoDB Local instances, in memory, standing in for `us-east-1`
+  (host port 18000) and `eu-west-1` (18001);
+- a `chserver` per region: `us` on `:8123`, `eu` on `:8124`;
+- an `mvworker` per region;
+- the replicator, copying every global table between the two instances
+  with last-writer-wins (`GLOBAL_MODE=emulated`, DESIGN.md §6).
+
+```sh
+make up                   # two regions: :8123 (us), :8124 (eu)
+make up PROFILES=compat   # also the reference ClickHouse 25.8 on :18123 (tests/compat)
+make up-single            # one region, no replication, worker in-process: :8125
+make logs                 # follow the logs; make ps lists the services
+make down                 # remove the containers and their data
+```
+
+- **Ports and projects:** the host ports can be overridden (`US_HTTP_PORT`,
+  `EU_HTTP_PORT`, `DDB_US_PORT`, `DDB_EU_PORT`, `CH_REF_PORT`,
+  `DDB_SINGLE_PORT`, `SINGLE_HTTP_PORT`), and `COMPOSE_PROJECT` runs a
+  second stack beside the first (see [Testing](#testing)).
+- **Users:** no `CH_USERS` is set, so the user is `default` without a
+  password.
+- **Data:** DynamoDB Local keeps everything in memory, and `make down`
+  discards it. DynamoDB Local also slows down as state accumulates (see
+  [Testing](#testing)).
+- **Upgrades:** `make up` rebuilds the image and recreates the containers
+  whose image changed.
+- **Not for production:** the stack has no TLS, no real global tables and
+  no durability.
+
+### AWS serverless (`deploy/aws-lambda`)
+
+[deploy/aws-lambda](deploy/aws-lambda/README.md) is an AWS SAM template
+that deploys everything as Lambda functions, **one stack per region**
+(`us-east-1` as the home region, then `eu-west-1`):
 
 ```
                  application VPC (region A)                        (same stack in region B)
@@ -624,26 +833,38 @@ region (`us-east-1` as the home region, then `eu-west-1`):
                                       │ EventBridge rate(1 minute), the safety net
 ```
 
-- The **API Lambda** wraps the same `server.Server` as `cmd/chserver`
-  (`aws-lambda-go-api-proxy`). It has no background loops: at the start of
-  a request it checks the system tables exist and reloads the catalog
-  snapshot when it is older than `CATALOG_REFRESH`. HTTP sessions are
-  rejected with `NOT_IMPLEMENTED` (48).
-- The **stream worker** and the **replicator** are the existing binaries in
-  Lambda mode (detected through `AWS_LAMBDA_RUNTIME_API`), fed by
-  DynamoDB-stream **event-source mappings (ESMs)** with
-  `ReportBatchItemFailures` and unlimited retries; the exactly-once markers
-  make redeliveries harmless.
-- The **reconciler Lambda** runs one reconcile round per invocation:
-  system tables, this region's physical tables (and replicas in the home
-  region), and the ESMs: one per source-table stream to the worker, one per
-  ReplacingMergeTree stream to the replicator, and the `__catalog` stream
-  to itself, so a DDL in any region triggers a round within seconds; the
-  schedule is the safety net. Mappings of dropped tables are removed.
-- **No DynamoDB table is declared in the template.** The reconciler and
-  the API create them at runtime exactly like the long-running binaries,
-  so one stack serves any schema. Deploy the home region first: it creates
-  `__catalog` and adds the other regions as replicas.
+**What it creates:** the four functions (three with `GlobalMode=none`:
+no replicator), one scoped role per function,
+the private REST API with a resource policy that allows only
+`VpcEndpointId`, the reconciler's schedule and the log groups. By default
+it also creates the region's API Gateway CloudWatch Logs role
+(`ManageApiGatewayAccount`).
+
+- **API Lambda:** wraps the same `server.Server` as `cmd/chserver`
+  (`aws-lambda-go-api-proxy`). It has no background loops. At the start of
+  a request it checks that the system tables exist and reloads the
+  catalog snapshot when it is older than `CATALOG_REFRESH`. HTTP sessions
+  are rejected with `NOT_IMPLEMENTED` (48).
+- **Stream worker and replicator:** the existing binaries in Lambda mode
+  (detected through `AWS_LAMBDA_RUNTIME_API`). DynamoDB-stream
+  **event-source mappings (ESMs)** feed them, with
+  `ReportBatchItemFailures` and unlimited retries; the exactly-once
+  markers make redeliveries harmless.
+- **Reconciler Lambda:** runs one reconcile round per invocation. It
+  ensures the system tables and this region's physical tables (and their
+  replicas, in the region that owns them). It also keeps the ESMs: one per
+  source-table stream to the worker, one per ReplacingMergeTree stream to
+  the replicator, and the `__catalog` stream to itself. A DDL in any
+  region therefore triggers a round within seconds, and the schedule is
+  the safety net. Mappings of dropped tables are removed.
+
+**Prerequisites:**
+
+- An interface VPC endpoint for `execute-api` in every region.
+- The SAM CLI.
+- Go, for `sam build`.
+
+**Quick start:**
 
 ```sh
 make aws-validate                # sam validate --lint (no credentials needed)
@@ -651,121 +872,356 @@ make aws-build                   # the four arm64 bootstraps
 # fill in VpcEndpointId in deploy/aws-lambda/samconfig.toml (both environments) first
 make aws-deploy ENV=us           # home region first; wait for its first reconcile
 make aws-deploy ENV=eu
+make up && make aws-local-api    # optional: the API Lambda under sam local (:3000), no AWS
 ```
 
-[deploy/aws-lambda/README.md](deploy/aws-lambda/README.md) has the prerequisites (a VPC
-endpoint for `execute-api` per region), every parameter, how to point
-clickhouse-go and curl at the stage URL, operations and cost notes.
+`make aws-deploy` refuses `--parameter-overrides`, because the SAM CLI
+would replace the environment's whole parameter list with it. Secrets go
+into a git-ignored copy of the file instead
+(`make aws-deploy ENV=us SAM_CONFIG=samconfig.local.toml`).
 
-**Limitations of the serverless deployment**, detailed in
+**Limits**, detailed in
 [deploy/aws-lambda/README.md](deploy/aws-lambda/README.md#limits-of-the-lambda-deployment):
 
-- **6 MB payloads.** Request and response bodies are bounded by the Lambda
-  invocation payload (base64 inflates binary bodies by about a third
-  toward that limit). Split large `INSERT`s and page large `SELECT`s.
-- **No HTTP sessions.** `session_id`, `session_check` and `session_timeout`
-  fail with `NOT_IMPLEMENTED` (48); use URL or `SETTINGS` settings and
-  `database=` instead of `SET` and `USE`.
+- **6 MB payloads.** The Lambda invocation payload bounds request and
+  response bodies, and base64 inflates binary bodies by about a third
+  toward that limit. Split large `INSERT`s and page large `SELECT`s.
+- **No HTTP sessions.** `session_id`, `session_check` and
+  `session_timeout` fail with `NOT_IMPLEMENTED` (48). Use URL or
+  `SETTINGS` settings instead of `SET`, and `database=` instead of `USE`.
 - **Timeouts.** The API Gateway integration timeout (29 s by default)
-  bounds a query; keep `MAX_EXECUTION_TIME` below it so a slow query gets
+  bounds a query. Keep `MAX_EXECUTION_TIME` below it, so a slow query gets
   `TIMEOUT_EXCEEDED` instead of a 504.
 - **Cold starts.** A new execution environment first checks the system
-  tables and loads the catalog before its first request; provisioned
+  tables and loads the catalog before its first request. Provisioned
   concurrency removes the cold start at an hourly cost.
-- **DDL propagation.** `CREATE TABLE` returns when the table is `ACTIVE`
-  in the issuing region; the home region's reconciler adds the replicas
-  (minutes), during which the table is unknown in the other regions.
-  `DROP TABLE` returns at once and the reconcilers delete the physical
-  tables and mappings within about two rounds; DynamoDB allows deleting a
-  table only 24 hours after a replica was added to it, so the reconciler
-  retries until then.
+- **DDL propagation.**
+  - `CREATE TABLE` returns when the table is `ACTIVE` in the issuing
+    region. The reconciler then adds the replicas, which takes minutes;
+    until then the table is unknown in the other regions.
+  - `DROP TABLE` returns at once. The reconcilers delete the physical
+    tables and mappings within about two rounds. DynamoDB allows deleting
+    a table only 24 hours after a replica was added to it, so the
+    reconciler retries until then.
 - **Binary responses from Go clients.** API Gateway decodes a base64
-  response only for a request whose `Accept` matches a binary type; send
+  response only for a request whose `Accept` matches a binary type. Send
   `Accept: */*` from `net/http` and clickhouse-go (curl does by default).
+- **Private only.** There is no public endpoint.
 
-### Containers (alternative)
+**Permissions:** the template gives each function only the calls it makes
+in Lambda mode:
 
-The image built from `deploy/Dockerfile` contains all binaries. **Per
-region**, run:
+- **API:** the item actions, plus `DescribeTable`, `CreateTable`,
+  `UpdateTable` and `DeleteTable`. It creates and drops tables but never
+  touches replicas or TTL; replicas are the reconciler's job.
+- **Stream worker:** the item actions in its own region, `DescribeTable`,
+  `CreateTable` (for its `__dead_letters` table) and the stream actions.
+  It needs no TTL actions: `__dead_letters` has no TTL, and in Lambda mode
+  the worker does not create the system tables.
+- **Replicator:** the same, with the item and table actions in every
+  region (its targets).
+- **Reconciler:** everything above, including the replica actions, the
+  service-linked role, `ListTables` and the `lambda:*EventSourceMapping`
+  actions.
 
-1. **chserver** behind a load balancer (ECS, EKS or EC2). Use
-   `GLOBAL_MODE=aws`, `REGION=<this region>` and
-   `REPLICA_REGIONS=<the other regions>`, with the same `TABLE_PREFIX`
-   everywhere. Several instances per region are fine. Leave
-   `DYNAMODB_ENDPOINT` unset.
-2. **mvworker** with the same settings. You can run it in one of three
-   ways:
-   - as a long-running service (one or more tasks; shard leases split the
-     work). It discovers view-source tables from the catalog by itself,
-     which makes it the simplest option;
-   - as an **AWS Lambda** function (the same binary detects
-     `AWS_LAMBDA_RUNTIME_API`), with a DynamoDB-stream event-source mapping
-     per view-source table, `ReportBatchItemFailures` enabled. The
-     reconciler manages the mappings when `MVWORKER_FUNCTION_ARN` names the
-     function (set it on chserver, or deploy `cmd/reconciler-lambda` as in
-     `deploy/aws-lambda`); otherwise you manage them yourself, and a dropped and
-     re-created table has a new physical name, so it needs a new mapping;
-   - in-process, with `RUN_STREAM_WORKER=true` on chserver.
+SAM also attaches `AWSLambdaBasicExecutionRole` (CloudWatch Logs) to every
+role.
 
-**Once** (anywhere, optionally one per region for availability; shard
-leases keep the instances from conflicting), run:
+**Upgrade:** `make aws-build`, then `make aws-deploy ENV=us` and
+`ENV=eu`. Deploy the home region first when a release changes the table
+layout or the catalog format. The API publishes a new version behind its
+`live` alias. To roll back, deploy the previous build.
 
-3. **replicator** with `GLOBAL_MODE=aws` and
-   `REGIONS=us-east-1=,eu-west-1=` (empty endpoints = real AWS). In AWS mode
-   it copies only `ReplacingMergeTree` tables. AWS's item-level
-   last-writer-wins could let a lower version written later win, and it
-   would silently drop the losing version of a concurrent write, which
-   then never reaches that region's views. The replicator uses a
-   version-aware conditional put and applies the views to the versions it
-   rejects. Without it, `ReplacingMergeTree` tables stay regional.
+**Teardown:** `sam delete --config-env eu`, then `--config-env us`, run in
+`deploy/aws-lambda`. This removes the functions, the API and the roles.
+With `ManageApiGatewayAccount=true` (the default) one of those roles is the
+region's API Gateway CloudWatch Logs role, so other REST APIs of the region
+that log through it lose their logging; set `cloudwatchRoleArn` again (or
+hand the setting to another owner first). It leaves the tables and the
+reconciler-created event-source mappings; delete those deliberately. To
+remove only one region, see
+[deploy/aws-lambda/README.md](deploy/aws-lambda/README.md#rolling-out-a-new-version).
 
-**What gets created** (all `PAY_PER_REQUEST`; streams `NEW_AND_OLD_IMAGES`
-on the catalog and on every row table except regional Aggregating/Summing
-rollups, which have no stream consumer):
+[deploy/aws-lambda/README.md](deploy/aws-lambda/README.md) has every
+parameter, how to point clickhouse-go and curl at the stage URL, the
+`ChUsers` and KMS handling, operations, scaling, cost notes and the
+local `sam local` runs.
 
-| Table | Kind |
-|---|---|
-| `{prefix}__catalog` | Global table. The home region (`GLOBAL_HOME_REGION`) creates it and adds the replicas; the other regions wait for their replica. |
-| `{prefix}{db}.{table}.{id}` for `MergeTree` / `Memory` / `Log` | Global table, created in the region that ran the `CREATE`, plus replicas. |
-| `{prefix}{db}.{table}.{id}` for `ReplacingMergeTree` | One table per region (each region's reconciler creates it), kept in sync by the replicator. |
-| `{prefix}{db}.{table}.{id}` for `Aggregating` / `SummingMergeTree` (+ `.members` for `uniq*` / `groupUniqArray` states) | Regional: one independent copy per region. |
-| `{prefix}__mv_markers` (TTL on `_exp`), `{prefix}__checkpoints`, `{prefix}__dead_letters` | Regional system tables. |
+### AWS containers on ECS Fargate (`deploy/aws-ecs`)
 
-Start the home region's chserver first. The other regions wait at
-startup until the home region has added their `__catalog` replica, and
-they join global tables the same way rather than creating their own.
-AWS refuses to add a replica where a table of that name already exists,
-and the server reports that case with the region holding the stray
-table.
+[deploy/aws-ecs](deploy/aws-ecs/README.md) is a plain CloudFormation
+template that runs the long-running binaries on ECS Fargate in an
+existing VPC, **one stack per region**. It has no SAM transform; it is
+deployed with `sam deploy` for parity with the serverless stack.
 
-**IAM permissions** (on `arn:aws:dynamodb:*:*:table/{prefix}*` and
-`arn:aws:dynamodb:*:*:table/{prefix}*/stream/*`, in every region of the
-deployment). The container deployment needs, per role:
+```
+            application VPC (region A)                     (same stack in region B,
+                   │ http :8123 / https :8443                without the replicator)
+     ┌─────────────▼──────────────┐
+     │ internal Application LB    │  health check /ping
+     └─────────────┬──────────────┘
+     ┌─────────────▼──────────────┐
+     │ chserver service           │  cmd/chserver: HTTP API + reconciler
+     └─────────────┬──────────────┘
+   ┌───────────────▼─────────────────────────────────────────────┐
+   │ DynamoDB (region A)   global tables ◄──replication──────────┼──► region B
+   └───────┬──────────────────────────────────────┬──────────────┘
+           │ source-table streams                 │ ReplacingMergeTree streams of every region
+   ┌───────▼──────────┐                 ┌─────────▼───────────────────┐
+   │ mvworker service │                 │ replicator service          │
+   │ (or in-process)  │                 │ (home region only)          │
+   └──────────────────┘                 └─────────────────────────────┘
+```
 
-| Who | Actions |
-|---|---|
-| chserver, mvworker, replicator | `dynamodb:DescribeTable`, `CreateTable`, `UpdateTable`, `DeleteTable`, `DescribeTimeToLive`, `UpdateTimeToLive`, `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchGetItem`, `BatchWriteItem`, `ConditionCheckItem`, `Query`, `Scan` (`TransactWriteItems` is authorized through Put/Update/ConditionCheck) |
-| stream consumers (mvworker, replicator, chserver with `RUN_STREAM_WORKER`) | `dynamodb:DescribeStream`, `GetShardIterator`, `GetRecords` (Lambda event-source mappings also need `ListStreams`) |
-| chserver with `GLOBAL_MODE=aws` (adds and removes replicas) | `dynamodb:CreateTableReplica`, `DeleteTableReplica`, and `iam:CreateServiceLinkedRole` for `replication.dynamodb.amazonaws.com` |
-| reconciler (chserver or reconciler-lambda) | `dynamodb:ListTables` (no resource scoping): finds physical tables of the deployment whose catalog entry vanished while no reconciler was running |
-| reconciler with `MVWORKER_FUNCTION_ARN` (chserver or reconciler-lambda) | `dynamodb:DescribeTable` (stream ARNs), `lambda:ListEventSourceMappings` (no resource scoping), `lambda:CreateEventSourceMapping`, `UpdateEventSourceMapping`, `DeleteEventSourceMapping` scoped with `lambda:FunctionArn` to the stream worker, replicator and reconciler functions |
+**What it creates:** the ECS cluster (or it uses `ExistingClusterName`),
+the internal Application Load Balancer, its listeners and target group,
+the security groups, the log groups, a task execution role, one task role
+per service, and these services:
 
-The SAM template (`deploy/aws-lambda/template.yaml`) splits this per function to
-the calls each binary makes in Lambda mode: the **API** gets the item
-actions plus `DescribeTable`/`CreateTable`/`UpdateTable`/`DeleteTable`
-(it creates and drops tables but never touches replicas or TTL: replicas
-are the reconciler's); the **stream worker** gets the item actions in its
-own region, `DescribeTable`, `CreateTable` and the TTL actions (its
-`__dead_letters` table) and the stream actions; the **replicator** the
-same with item and table actions in every region (its targets); the
-**reconciler** everything above including the replica actions, the
-service-linked role, `ListTables` and the `lambda:*EventSourceMapping`
-actions. `go test ./deploy/aws-lambda/` checks the scoping.
+- **chserver** runs behind the load balancer, whose listener uses
+  ClickHouse's HTTP port **8123**, so clients switch by host and port
+  only. An optional HTTPS listener on **8443** uses an ACM certificate.
+  The target group checks `/ping`. `CH_USERS` comes from a Secrets
+  Manager secret through the task definition's `Secrets`.
+- **mvworker** is a separate service (`WorkerMode=service`; shard leases
+  split the work between its tasks), or it runs inside every chserver task
+  (`WorkerMode=in-process`, `RUN_STREAM_WORKER=true`).
+- **replicator** runs once per deployment, by default in the home region
+  (`RunReplicator=auto`), with `REGIONS=us-east-1=,eu-west-1=` built from
+  `ReplicaRegions`.
+- **Access:** the load balancer accepts only `AllowedCidr` and
+  `ClientSecurityGroupId`, and the tasks accept only the load balancer.
+- **Parameters** set optional CPU target-tracking autoscaling for
+  chserver, log retention, task sizes and counts.
 
-**Cost model.** Writes dominate. Costs below are in DynamoDB on-demand
+**Prerequisites** in every region:
+
+- Private subnets in two or more Availability Zones, with a NAT gateway
+  (or other internet egress). mvworker, the in-process worker and the
+  replicator read DynamoDB Streams, which the DynamoDB gateway endpoint
+  does not cover, and the replicator calls the other regions. VPC
+  endpoints for DynamoDB, ECR, CloudWatch Logs and Secrets Manager are
+  optional; STS is not needed.
+- An ECR repository.
+- The `CH_USERS` secret.
+
+**Quick start:**
+
+```sh
+make ecs-validate                                   # sam validate --lint (no credentials needed)
+make image-push IMAGE_REPO=<account>.dkr.ecr.us-east-1.amazonaws.com/dynamodb-eventstream \
+  IMAGE_TAG=v1 PLATFORM=linux/arm64                 # after docker login to ECR; per region
+# fill in the CHANGE_ME values in deploy/aws-ecs/samconfig.toml (both environments) first
+make ecs-deploy ENV=us                              # home region first
+make ecs-deploy ENV=eu
+make ecs-local                                      # optional: the task definitions as local
+                                                    # containers + tests/e2e, no AWS (make up first)
+```
+
+The `CHANGE_ME` placeholders are `ImageUri`, `VpcId`, `SubnetIds`,
+`AllowedCidr` and `ChUsersSecretArn`, and CloudFormation rejects them, so
+a forgotten one cannot deploy. As with `aws-deploy`, `make ecs-deploy`
+refuses `--parameter-overrides`. Use a git-ignored copy instead
+(`ECS_CONFIG=samconfig.local.toml`).
+
+**Limits:**
+
+- **Sessions with several tasks.** A session lives in one chserver task.
+  The load balancer keeps a client on one task only with target-group
+  stickiness and a client that returns its cookie, which most ClickHouse
+  clients do not. Prefer URL settings and `database=`, or run one task.
+- **Query time.** `MaxExecutionTime` (100 s) must stay below
+  `LoadBalancerIdleTimeout` (110 s, at most 115 s), which must stay below
+  chserver's fixed 120 s keep-alive. Otherwise the load balancer can reuse
+  a connection chserver just closed and return sporadic 502s.
+- **DDL.** A global `CREATE TABLE` waits for its replicas (minutes) and
+  can outlast the idle timeout (see [Comparison](#comparison)).
+- **No Lambda permissions.** The template grants none, so event-source
+  mappings are not used (`MVWORKER_FUNCTION_ARN` stays unset).
+
+**Permissions:** each service has its own task role:
+
+- **chserver:**
+  - the item and table actions (`DeleteTable` included) and the TTL
+    actions in its region, and `ListTables`;
+  - with `GLOBAL_MODE=aws`, the replica actions, limited by
+    `aws:RequestedRegion` to the deployment's regions;
+  - the stream reads only with the in-process worker.
+- **mvworker:** the item, table (no `DeleteTable`), TTL and stream actions
+  in its region, plus the `__catalog` replica actions in the home region.
+- **replicator:** the item actions, `DescribeTable`, `CreateTable` and the
+  stream actions in every region of the deployment.
+
+The task execution role pulls the image, writes logs and reads the
+`CH_USERS` secret.
+
+**Upgrade:**
+
+1. Push a new tag (`make image-push ... IMAGE_TAG=v2`).
+2. Set `ImageUri` to it in each environment of `samconfig.toml`, or of the
+   local copy.
+3. Run `make ecs-deploy`, home region first when a release changes the
+   table layout or the catalog format.
+
+Each service rolls out with 100% minimum healthy, and the deployment
+circuit breaker rolls back a version whose tasks keep failing. Stopping
+tasks first leave the load balancer for `DeregistrationDelay` (110 s), so
+in-flight queries finish.
+
+**Teardown:** `sam delete --config-env eu`, then `--config-env us`, run in
+`deploy/aws-ecs`. This removes the services, the load balancer, the roles
+and the log groups, not the tables.
+
+[deploy/aws-ecs/README.md](deploy/aws-ecs/README.md) has the full
+prerequisites, the image build for `linux/arm64` or `linux/amd64`, every
+parameter, how to verify a stack, operations, scaling, upgrades, teardown
+with table deletion, and what `make ecs-local` checks.
+
+### Self-managed containers
+
+The image built from `deploy/Dockerfile` contains `chserver`, `mvworker`
+and `replicator` as static binaries on Alpine.
+
+- **Command:** the container command picks the binary; the default is
+  `chserver`.
+- **Runtime:** it runs as the non-root user `app` (uid 10001) and exposes
+  port 8123. The binaries need no writable filesystem, so a read-only
+  root filesystem works, and they log JSON lines to stderr.
+- **Building:** `make image-push IMAGE_REPO=<registry>/<repo> IMAGE_TAG=<tag>
+  PLATFORM=linux/arm64` (or `linux/amd64`) builds and pushes it to any
+  registry you are logged in to.
+
+`deploy/aws-ecs/template.yaml` is a worked example of the following.
+
+**Processes.** Run the following per region, plus one replicator for the
+whole deployment:
+
+| Process | How many | Required settings | Often set |
+|---|---|---|---|
+| `chserver` | One or more per region, behind a load balancer | `REGION` (or `AWS_REGION`), `TABLE_PREFIX`, `GLOBAL_MODE`; with `aws` also `REPLICA_REGIONS` and `GLOBAL_HOME_REGION`; `CH_USERS` from your secret store | `MAX_EXECUTION_TIME`, `INLINE_VIEWS`, `RUN_STREAM_WORKER`, `CATALOG_REFRESH`, `LOG_LEVEL`, `LISTEN_ADDR` (default `:8123`) |
+| `mvworker` | One or more per region, unless chserver runs the worker in-process (`RUN_STREAM_WORKER=true`) | The same `REGION`, `TABLE_PREFIX`, `GLOBAL_MODE`, `REPLICA_REGIONS` and `GLOBAL_HOME_REGION` as chserver | `MV_POISON_POLICY`, `STREAM_LEASE_DURATION`, `STATS_INTERVAL` |
+| `replicator` | Once per deployment, typically in the home region; only with `GLOBAL_MODE=aws` | `GLOBAL_MODE=aws`, `REGIONS=us-east-1=,eu-west-1=` (every region; empty endpoints mean real AWS), `TABLE_PREFIX` | `APPLY_CONFLICT_VIEWS` (default `true`), `MV_POISON_POLICY`, `STREAM_LEASE_DURATION` |
+
+Keep `STREAM_VIEWS=true` (the default) on chserver whenever a worker runs.
+Leave `DYNAMODB_ENDPOINT` unset. Give each process the permissions of
+[IAM permissions](#iam-permissions).
+
+**Why the replicator is needed.** In AWS mode it copies only the
+`ReplacingMergeTree` tables. AWS's item-level last-writer-wins could let a
+lower version written later win, and it would silently drop the losing
+version of a concurrent write, which then never reaches that region's
+views. The replicator uses a version-aware conditional put and applies the
+views to the versions it rejects. Without it, `ReplacingMergeTree` tables
+stay regional. It needs network access to DynamoDB in every listed region.
+
+**Health checks.**
+
+- **chserver:** `GET /ping` answers `Ok.` without authentication and
+  without calling DynamoDB. Use it for the load balancer and for
+  readiness. chserver starts listening only once the system tables are
+  ready. On the first start of a `GLOBAL_MODE=aws` deployment that takes
+  minutes: the home region adds the `__catalog` replicas and waits until
+  they are `ACTIVE` (up to 5 minutes per attempt), and another region
+  waits for its replica. Allow for that in the startup grace period (ECS
+  uses 600 s). Later starts are fast.
+- **mvworker and the replicator:** no HTTP endpoint. Supervise the
+  process, and watch their progress log lines (every `STATS_INTERVAL`).
+
+**Graceful shutdown.**
+
+- **chserver:** on SIGTERM it stops its background loops (reconciler,
+  in-process worker) and drains in-flight requests for up to 15 s, then
+  exits. Take an instance out of the load balancer before sending SIGTERM,
+  for as long as your longest query (ECS: `DeregistrationDelay`;
+  Kubernetes: a `preStop` delay). Allow at least 15 s more before SIGKILL.
+- **mvworker and the replicator:** on SIGTERM they stop their shard
+  consumers. A lease that was not released expires after
+  `STREAM_LEASE_DURATION` (30 s), and another instance resumes the shard
+  from its checkpoint. The exactly-once markers make re-application
+  harmless.
+- **Timeouts:** keep the load balancer's idle timeout below chserver's
+  120 s keep-alive, and `MAX_EXECUTION_TIME` below the idle timeout.
+
+**Scaling.**
+
+- **chserver** is stateless apart from HTTP sessions. Several instances
+  per region are fine, and each runs its own reconciler.
+- **mvworker** instances share the streams' shards through leases in
+  `{prefix}__checkpoints`. More instances help with many source tables or
+  shards, and a second instance gives fail-over within the lease
+  duration.
+- **The replicator** runs once per deployment. Several instances are safe,
+  because shard leases keep them from conflicting, but each one tails
+  every region.
+
+### Hybrid deployments
+
+The binaries support these combinations, but neither template deploys
+them; you assemble them from the pieces above.
+
+- **Container API with Lambda stream consumers.**
+  1. Run `chserver` (ECS, Kubernetes, EC2) without an mvworker service,
+     without `RUN_STREAM_WORKER` and without a replicator process.
+  2. Deploy `cmd/mvworker` as a Lambda function. With `GLOBAL_MODE=aws`,
+     also deploy `cmd/replicator` as a Lambda in every region. The same
+     binaries switch to Lambda mode under `AWS_LAMBDA_RUNTIME_API`;
+     package them as `deploy/aws-lambda/template.yaml` does
+     (`provided.al2023`, arm64).
+  3. Set `MVWORKER_FUNCTION_ARN` (and `REPLICATOR_FUNCTION_ARN`) on
+     chserver. Its reconciler, which runs every `CATALOG_REFRESH`, then
+     creates or updates a table's event-source mappings when it first sees
+     that table definition, and removes them before the table is dropped.
+     It does not check them again for an unchanged definition, so a
+     mapping deleted or disabled outside chserver stays that way until
+     chserver restarts or the table definition changes.
+
+  Several chserver instances may manage them concurrently, because a
+  concurrent creation converges on the existing mapping. The `__catalog`
+  stream is not wired to anything in this setup, since chserver reloads
+  the catalog on its own interval. The chserver role needs the Lambda
+  permissions of the reconciler row in
+  [IAM permissions](#iam-permissions), which the ECS template does not
+  grant.
+- **Container API with event-source mappings you manage yourself.**
+  Instead of setting `MVWORKER_FUNCTION_ARN`, create the mappings the
+  reconciler would create:
+  - one from the stream of every table a view can read from (MergeTree,
+    ReplacingMergeTree, Memory and Log tables) to the stream worker
+    function;
+  - with `GLOBAL_MODE=aws`, one from the stream of every global
+    ReplacingMergeTree table to the replicator function, or run
+    `cmd/replicator` as a long-running process instead. Without one of the
+    two, those tables are not replicated to the other regions.
+
+  Create every mapping with `StartingPosition` `TRIM_HORIZON`,
+  `MaximumRetryAttempts` -1 (unlimited), `BisectBatchOnFunctionError`
+  false, `FunctionResponseTypes` `ReportBatchItemFailures`, and the batch
+  size you would set as `ESM_BATCH_SIZE` (default 100). Exactly-once
+  delivery and no loss depend on these values: `LATEST` skips the rows
+  written before the mapping existed, and a retry limit drops records that
+  keep failing. A dropped and re-created table has a new physical name, so
+  it needs new mappings.
+- **Lambda API with long-running stream consumers.**
+  1. Deploy `cmd/chserver-lambda` and `cmd/reconciler-lambda` with
+     `MVWORKER_FUNCTION_ARN` empty. The reconciler then manages tables
+     only and picks up DDL on its schedule, since the `__catalog` stream
+     is not wired.
+  2. Run `mvworker` per region and the replicator once, as containers.
+
+  The SAM template always wires the Lambda consumers, so this needs your
+  own template.
+
+Within the ECS template, `WorkerMode` (separate service or in-process)
+and `RunReplicator` (`auto`, `true`, `false`) choose where the worker and
+the replicator run.
+
+### Cost model
+
+Writes dominate. Costs below are in DynamoDB on-demand
 units (a write is 1 WRU per started KB of the item, 2 WRU in a
 transaction); [DESIGN.md §4 "Cost model"](DESIGN.md#cost-model) has every
-call.
+call. The per-option READMEs add the API Gateway, Lambda, Fargate, load
+balancer and NAT charges.
 
 | Per source row | Write units |
 |---|---|
@@ -783,8 +1239,11 @@ their key more expensive. Markers (about 150 bytes) are kept 7 days
 billed by the bytes read: this suits key-oriented rollup reads, not ad-hoc
 analytics over large raw tables.
 
-**Limits** (DynamoDB's). An `INSERT` row that breaks one is rejected with
-`BAD_ARGUMENTS` before anything of the statement is written:
+### Limits
+
+These are DynamoDB's limits and apply to every option. An `INSERT` row
+that breaks one is rejected with `BAD_ARGUMENTS` before anything of the
+statement is written:
 
 - Items are limited to 400 KB, attribute names included. A rollup row
   grows with every merge, so only the bytes a merge adds are checked up
@@ -802,10 +1261,18 @@ analytics over large raw tables.
   expression); `CREATE` and `ALTER` reject wider ones with
   `NOT_IMPLEMENTED`. `min`/`max`/`uniq*` columns do not count.
 
-**Operations.** Watch the mvworker's `pending_age_ms` and `SHARD WEDGED` /
-`DEAD LETTER` log lines. Stream records are trimmed after 24 h, so a shard
-stuck that long loses data. Inspect `{prefix}__dead_letters` for records
-that were set aside.
+### Operations
+
+- **Lag and failures:** watch the stream worker's lag (the mvworker's
+  `pending_age_ms`, or `IteratorAge` of the Lambda worker and replicator)
+  and the `SHARD WEDGED`, `DEAD LETTER` and `DATA LOSS` log lines.
+  Inspect `{prefix}__dead_letters` for records that were set aside.
+- **Stream retention:** stream records are trimmed after 24 h, so a shard
+  stuck that long, or a worker down that long, loses view updates.
+- **Replication:** watch DynamoDB `ThrottledRequests` and the global
+  tables' `ReplicationLatency`.
+
+The per-option READMEs list the logs and metrics to alert on.
 
 ---
 
@@ -825,6 +1292,11 @@ go test ./deploy/aws-lambda/   # template vs. the binaries' contract (env vars, 
 make aws-local-api      # the API Lambda under sam local (:3000) against the dhdev DynamoDB Local
 make aws-local-e2e      # tests/e2e against it; the suite detects Lambda mode and skips sessions
 go test -tags samlocal -count=1 ./cmd/chserver-lambda/   # API Gateway specifics (base64 bodies, compression) against sam local
+
+make ecs-validate       # ECS template lint (sam validate --lint)
+go test ./deploy/aws-ecs/   # template vs. the binaries' contract (env vars, ports, /ping, secrets, IAM scope, conditions)
+make ecs-local          # the ECS task definitions as local containers (ecsemu-*) against the dhdev
+                        # DynamoDB Local: tests/e2e, mvworker applying a view, replicator start, SIGTERM
 ```
 
 The API Lambda's unit tests (`cmd/chserver-lambda`, `go test ./...`) drive
@@ -887,7 +1359,10 @@ internal/
   replicator/    cross-region copier (LWW / version-aware) and conflict hook
   cherr/         ClickHouse error codes, names and HTTP statuses
   config/, awsx/ environment configuration and AWS SDK clients
-deploy/          Dockerfile, local/docker-compose.yml (local stack), aws/ (SAM serverless deployment)
+deploy/          Dockerfile (one image, all long-running binaries)
+  local/         docker-compose.yml: the local multi-region stack
+  aws-lambda/    serverless AWS deployment (SAM): API Gateway + Lambda
+  aws-ecs/       container AWS deployment (CloudFormation): ECS Fargate + internal ALB
 tests/           e2e, compat and multiregion suites (build tags)
 DESIGN.md        architecture and contracts
 ```
@@ -902,7 +1377,7 @@ Known gaps, roughly in priority order:
   global tables in two regions, and publish latency and cost numbers.
 - **Cost.** Every source row is a DynamoDB write, and every view adds
   marker writes in every region (see **Cost model** under
-  [Deploying on AWS](#deploying-on-aws)).
+  [Deployment](#deployment)).
   Rows of one rollup key are serialized and keys run in parallel. Real
   numbers from AWS are still to be published.
 - **Oversized keys.** There is no hashed-key fallback for partition or sort

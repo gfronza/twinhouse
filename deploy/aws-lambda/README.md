@@ -125,9 +125,28 @@ make aws-deploy ENV=us SAM_CONFIG=samconfig.local.toml
 `ChUsers` is `NoEcho`, which only masks it in CloudFormation's output and
 change sets: the resolved value is in the API function's environment,
 readable by every principal allowed `lambda:GetFunctionConfiguration`.
-To restrict that, create a KMS key whose policy grants `kms:Decrypt` only
-to the function's role and the operators, and set `KmsKeyArn` to it (the
-function's environment is then encrypted with that key).
+To restrict that, encrypt the environment with a customer managed KMS key
+(`KmsKeyArn`). The function's role does not exist until the stack is
+deployed, and a key policy cannot name a principal that does not exist, so
+do it in this order:
+
+1. Create the key with a policy that keeps the account's root statement
+   (which lets IAM policies grant use of the key) and gives the operators
+   `kms:Decrypt`. The template's `DecryptEnvironment` statement grants
+   `kms:Decrypt` to the API function's role through IAM, so this already
+   works on the first deploy; principals with only
+   `lambda:GetFunctionConfiguration` cannot decrypt.
+2. Add `"KmsKeyArn=arn:aws:kms:<region>:<account>:key/<id>"` to the
+   environment's parameter list in `samconfig.local.toml` (a key per
+   region, so each environment names its own) and deploy.
+3. To limit `kms:Decrypt` to the role in the key policy itself, read the
+   role's ARN once the stack exists (the `Role` of the API function in
+   `aws lambda get-function-configuration`), add a statement naming it,
+   and drop the IAM delegation if nothing else needs it.
+
+The principal that deploys the stack also needs to use the key
+(`kms:Encrypt`, `kms:CreateGrant`) when it sets the function's
+environment.
 
 What the first reconciler invocation does in the home region:
 `EnsureSystemTables` creates `__catalog` (a global table with replicas in
@@ -383,8 +402,32 @@ commit, `make aws-build`, `make aws-deploy ENV=...`. CloudFormation rolls a
 failed deployment back by itself (`disable_rollback = false`). Event-source
 mappings are left in place by both.
 
-To **remove a region**: `sam delete --config-env eu` deletes the functions,
-the API and the roles. CloudFormation owns no table resources, so stack
+To **remove a region** (here `eu`):
+
+1. Take the region out of `ReplicaRegions` in every remaining environment
+   of `samconfig.toml` (and `samconfig.local.toml`), and redeploy those
+   stacks, home region first. Otherwise the home region's reconciler, which
+   runs every minute, adds the region's replicas back to every table and
+   gives new tables a replica there, and the replicator keeps copying to it.
+2. Delete the region's stack, from this directory:
+
+   ```sh
+   cd deploy/aws-lambda && sam delete --config-env eu
+   ```
+
+   A full teardown then runs `sam delete --config-env us` for the home
+   region last.
+3. Remove the region's replicas and tables deliberately (see below).
+
+`sam delete` deletes the functions, the API and the roles. With
+`ManageApiGatewayAccount=true` (the default) that includes the region's
+API Gateway CloudWatch Logs role, which the region-wide account setting
+keeps pointing at: other REST APIs of the region that log through API
+Gateway then lose their logs, and their stage deployments with logging can
+fail. If other APIs use it, first have another owner set
+`cloudwatchRoleArn` (`aws apigateway update-account`) and redeploy this
+stack with `ManageApiGatewayAccount=false`, or set `cloudwatchRoleArn`
+again after the deletion. CloudFormation owns no table resources, so stack
 deletion never touches DynamoDB: it leaves the tables (and the global-table
 replicas) and the reconciler-created event-source mappings; remove the
 mappings with `aws lambda delete-event-source-mapping --uuid ...` if the
@@ -405,9 +448,14 @@ Lambda only checks they exist) and starts `sam local start-api` on port
 project (network `dhdev_default`, `GLOBAL_MODE=emulated`, event-source
 mapping management disabled). It uses the built template
 (`.aws-sam/build`), the parameter overrides from `samconfig.toml`, the
-environment file `local-env.json` (`SAM_LOCAL_ENV` to use another, e.g.
-with a different `TABLE_PREFIX`) and dummy credentials, so no AWS account
-is involved. (`sam local` only
+environment file `local-env.json` (`SAM_LOCAL_ENV` to use another) and
+dummy credentials, so no AWS account is involved. The reconciler round
+does not read that file: it takes `TABLE_PREFIX` from make (default
+`chddb_`). An env file with another `TABLE_PREFIX` therefore needs the same
+value on the make command line, `make aws-local-api SAM_LOCAL_ENV=other.json
+TABLE_PREFIX=other_`; otherwise the reconciler creates the `chddb_` system
+tables, the API looks for the other prefix's, and every request answers
+`UNAVAILABLE` (system tables not ready). (`sam local` only
 overrides environment variables the template declares, which is why
 `DYNAMODB_ENDPOINT` exists in the template as the `DynamoDBEndpoint`
 parameter, absent on AWS, and is set in both places locally.)

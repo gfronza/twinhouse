@@ -24,6 +24,7 @@ This file is the contract for all contributors. Code-level contracts live in:
 | Reconciler hooks (stream consumers, discovery) | `internal/server/reconcile.go` |
 | Lambda event-source mappings | `internal/esm/manager.go`, `consumers.go` |
 | Serverless deployment (SAM) | `deploy/aws-lambda/template.yaml`, `deploy/aws-lambda/README.md` |
+| Container deployment (ECS Fargate) | `deploy/aws-ecs/template.yaml`, `deploy/aws-ecs/README.md` |
 
 When a change alters behaviour described here, update this file in the
 same change. User-facing documentation is in `README.md`.
@@ -71,7 +72,9 @@ mappings instead of polling (§5 "Stream worker as a Lambda", §6
 "Replicator as a Lambda"), and `cmd/reconciler-lambda` runs the reconciler
 on the `__catalog` stream and a one-minute schedule, creating tables and
 the event-source mappings at runtime (§2). No DynamoDB table is declared
-in the stack.
+in the stack. The **container deployment** (`deploy/aws-ecs`, one
+CloudFormation stack per region on ECS Fargate) runs the long-running
+processes of the diagram unchanged (§6 "Container stack").
 
 ### Why rollups are regional
 
@@ -425,6 +428,22 @@ in the serverless deployment behind API Gateway, see "Lambda API mode"):
   `lambda:*EventSourceMapping` actions (create/update/delete conditioned on
   `lambda:FunctionArn` naming the three target functions; `List` cannot be
   scoped). `go test ./deploy/aws-lambda/` asserts the scoping.
+  The container deployment (`deploy/aws-ecs/template.yaml`, one task role
+  per ECS service) grants the long-running binaries: chserver the item
+  and table actions (`DeleteTable` included) and TTL in its region,
+  `dynamodb:ListTables`, with `GLOBAL_MODE=aws` the replica actions and
+  the replica-region table and item actions (conditioned on
+  `aws:RequestedRegion` naming the deployment's regions) and the
+  service-linked role, and the stream actions only with
+  `RUN_STREAM_WORKER`; mvworker the item, table (no `DeleteTable`), TTL
+  and stream actions in its region, and in the home region the replica
+  actions on `{prefix}__catalog` only (its startup `EnsureSystemTables`
+  may add that table's replicas); the replicator the item actions,
+  `DescribeTable`, `CreateTable` and the stream actions in every region
+  of the deployment (it tails and writes all of them; leases in each
+  source region's `__checkpoints`). No ECS role has Lambda or
+  `ListStreams` permissions. `go test ./deploy/aws-ecs/` asserts the
+  scoping.
 
 ---
 
@@ -1227,7 +1246,7 @@ worker. Tables are created at runtime, so their ESMs are too: the
 
 ---
 
-## 6. Multi-region: local emulation and AWS (`cmd/replicator`, `deploy/local`, `deploy/aws-lambda`)
+## 6. Multi-region: local emulation and AWS (`cmd/replicator`, `deploy/local`, `deploy/aws-lambda`, `deploy/aws-ecs`)
 
 The local stack (`deploy/local/docker-compose.yml`, `make up`):
 
@@ -1343,6 +1362,33 @@ differential compatibility tests.
   against the local stack's DynamoDB Local (`make aws-local-api`,
   `GLOBAL_MODE=emulated`, event-source mapping management off because
   `MVWORKER_FUNCTION_ARN` is rejected together with `DYNAMODB_ENDPOINT`).
+* **Container stack** (`deploy/aws-ecs`, plain CloudFormation,
+  `GLOBAL_MODE=aws`): one stack per region on ECS Fargate in an existing
+  VPC running the long-running binaries of the local stack: chserver
+  (reconciler included) behind an internal Application Load Balancer on
+  port 8123 (target group health check `/ping`, optional HTTPS on 8443),
+  mvworker as its own service or in-process (`RUN_STREAM_WORKER`), and the
+  poller-mode replicator once per deployment (`RunReplicator=auto`: the
+  home region) with `REGIONS` listing every region with an empty endpoint.
+  `CH_USERS` is injected from Secrets Manager. As for the serverless stack
+  the template declares no tables and the home region is deployed first.
+  chserver builds its store without `AsyncDDL`, so on the first start the
+  home region's chserver does not listen until the `__catalog` replicas it
+  adds are `ACTIVE`, and a replica region's chserver does not listen until
+  its replica exists (`HealthCheckGracePeriod` 600 s). The stream
+  consumers need NAT: DynamoDB Streams is not served by the DynamoDB
+  gateway endpoint. Stack Rules check `ReplicaRegions` (this region, the
+  home region and another one) and that client access is set. No
+  event-source mappings are involved (`MVWORKER_FUNCTION_ARN` unset).
+* **Hybrids** (no template): the roles are independent processes sharing
+  the storage contract, so they can be mixed. A long-running chserver with
+  `MVWORKER_FUNCTION_ARN` (and `REPLICATOR_FUNCTION_ARN`) set manages the
+  event-source mappings of Lambda stream consumers from its in-process
+  reconciler (§2 "Stream consumers", §5); it does not wire the `__catalog`
+  stream, since it reloads the catalog every `CATALOG_REFRESH`. Conversely
+  `cmd/reconciler-lambda` with `MVWORKER_FUNCTION_ARN` empty manages
+  tables only (schedule-driven), for the API Lambda with long-running
+  stream consumers. README "Hybrid deployments" lists them.
 
 ---
 
@@ -1378,6 +1424,16 @@ differential compatibility tests.
   variable set is read by some binary, IAM scoped to `TablePrefix`,
   private endpoint, schedule, `samconfig.toml` environments, Makefile
   targets) and runs `sam validate --lint` when the SAM CLI is installed.
+* Container deployment: `go test ./deploy/aws-ecs/` parses `template.yaml`
+  with the standard library and checks it against the binaries (every
+  environment variable set is read by some binary, chserver's port and
+  the listener/target-group ports, the `/ping` health check, `CH_USERS`
+  only through ECS `Secrets`, IAM scoped to `TablePrefix` per service, the
+  conditions of the optional services, outputs, `samconfig.toml`
+  placeholders, Makefile targets) and runs `sam validate --lint`;
+  `go test -tags ecslocal ./deploy/aws-ecs/` (`make ecs-local`) renders the
+  task definitions and runs them as local containers against DynamoDB
+  Local, with `tests/e2e` against the emulated chserver.
   `go test -tags samlocal ./cmd/chserver-lambda/` exercises the API
   through `sam local start-api` (API Gateway emulation: base64 handling,
   compression, error headers). Nothing runs against real AWS.
