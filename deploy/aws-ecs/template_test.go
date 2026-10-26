@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -189,7 +190,7 @@ func TestContainers(t *testing.T) {
 		if !strings.Contains(main, "syscall.SIGTERM") {
 			t.Errorf("cmd/%s does not handle SIGTERM", svc)
 		}
-		if c.StopTimeout == "" || c.StopTimeout < "20" || len(c.StopTimeout) > 3 {
+		if n, err := strconv.Atoi(c.StopTimeout); err != nil || n < 20 || n > 120 {
 			t.Errorf("%s: StopTimeout %q, want 20..120 seconds", d.taskDef, c.StopTimeout)
 		}
 		if svc == "chserver" && !strings.Contains(main, "shutdownTimeout = 15 * time.Second") {
