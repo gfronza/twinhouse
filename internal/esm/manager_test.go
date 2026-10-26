@@ -373,8 +373,9 @@ func TestEnsureConcurrentCreate(t *testing.T) {
 	f.mappings = nil
 	f.mu.Unlock()
 	f.failNext("Create", &types.ResourceConflictException{Message: aws.String("already exists")})
-	if err := m.Ensure(ctx, streamA, mvworker, Options{}); err == nil {
-		t.Error("phantom conflict accepted")
+	var conflict *types.ResourceConflictException
+	if err := m.Ensure(ctx, streamA, mvworker, Options{}); !errors.As(err, &conflict) {
+		t.Errorf("phantom conflict: %v, want the ResourceConflictException", err)
 	}
 	// Other create errors propagate.
 	f.failNext("Create", &types.InvalidParameterValueException{Message: aws.String("bad")})

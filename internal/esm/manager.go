@@ -158,8 +158,9 @@ func (m *Manager) Ensure(ctx context.Context, streamARN, functionARN string, o O
 		}
 		// Another reconciler created it meanwhile: converge on what exists.
 		m.log.Debug("event-source mapping created concurrently", "stream", streamARN, "function", functionARN)
-		if existing, err = m.list(ctx, streamARN, functionARN); err != nil {
-			return err
+		var lerr error
+		if existing, lerr = m.list(ctx, streamARN, functionARN); lerr != nil {
+			return lerr
 		}
 		if len(existing) == 0 {
 			return fmt.Errorf("esm: create mapping %s -> %s: %w", streamARN, functionARN, err)
