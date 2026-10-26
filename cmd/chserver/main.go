@@ -19,6 +19,7 @@ import (
 
 	"dynamodb-eventstream/internal/awsx"
 	"dynamodb-eventstream/internal/config"
+	"dynamodb-eventstream/internal/esm"
 	"dynamodb-eventstream/internal/exec"
 	"dynamodb-eventstream/internal/mvworker"
 	"dynamodb-eventstream/internal/server"
@@ -110,9 +111,17 @@ func run() error {
 	bg, cancelBG := context.WithCancel(ctx)
 	defer cancelBG()
 
-	rec := server.NewReconciler(server.ReconcilerConfig{
-		Catalog: cat, Store: store, Interval: cfg.CatalogRefresh, Logger: log,
-	})
+	rcfg := server.ReconcilerConfig{Catalog: cat, Store: store, Interval: cfg.CatalogRefresh, Logger: log}
+	if cfg.ManagesEventSourceMappings() {
+		// Serverless deployment: the reconciler wires every source table's
+		// stream to the stream-worker Lambda (DESIGN.md §5).
+		cons, err := streamConsumers(ctx, cfg, log)
+		if err != nil {
+			return err
+		}
+		rcfg.Consumers = cons
+	}
+	rec := server.NewReconciler(rcfg)
 	wg.Go(func() { rec.Run(bg) })
 
 	if runWorker {
@@ -178,6 +187,27 @@ func run() error {
 		return fmt.Errorf("shutdown: %w", err)
 	}
 	return nil
+}
+
+// streamConsumers builds the Lambda event-source-mapping manager of the
+// reconciler (MVWORKER_FUNCTION_ARN, REPLICATOR_FUNCTION_ARN, ESM_BATCH_SIZE).
+func streamConsumers(ctx context.Context, cfg config.Config, log *slog.Logger) (server.StreamConsumers, error) {
+	lc, err := esm.NewClient(ctx, cfg.Region)
+	if err != nil {
+		return nil, fmt.Errorf("lambda client: %w", err)
+	}
+	mgr, err := esm.NewManager(esm.ManagerConfig{API: lc, Logger: log})
+	if err != nil {
+		return nil, err
+	}
+	cons, err := esm.NewConsumers(esm.ConsumersConfig{
+		Manager: mgr, MVWorkerARN: cfg.MVWorkerFunctionARN, ReplicatorARN: cfg.ReplicatorFunctionARN,
+		GlobalMode: cfg.GlobalMode, Options: esm.Options{BatchSize: cfg.ESMBatchSize}, Logger: log,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cons, nil
 }
 
 // startupErr treats a shutdown signal received during startup as a clean exit.
