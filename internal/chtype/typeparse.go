@@ -111,6 +111,9 @@ func errTooDeep() error {
 // the number of bytes consumed.
 func readQuotedStringLit(s string, q byte) (string, int, error) {
 	var b strings.Builder
+	if n := strings.IndexByte(s[1:], q); n > 0 {
+		b.Grow(n)
+	}
 	i := 1
 	for i < len(s) {
 		c := s[i]
@@ -121,7 +124,7 @@ func readQuotedStringLit(s string, q byte) (string, int, error) {
 				i += 2
 				continue
 			}
-			return b.String(), i + 1, nil
+			return exactString(&b), i + 1, nil
 		case c == '\\':
 			n, err := unescapeSeq(s[i:], &b)
 			if err != nil {
@@ -134,6 +137,16 @@ func readQuotedStringLit(s string, q byte) (string, int, error) {
 		}
 	}
 	return "", 0, errf(codeCannotParseQuotedString, "Cannot parse quoted string: expected closing quote")
+}
+
+// exactString returns b's contents in an allocation of their own size:
+// escapes or a grown buffer leave spare capacity, which memory accounting
+// does not count and the result would keep alive.
+func exactString(b *strings.Builder) string {
+	if b.Cap() > b.Len() {
+		return strings.Clone(b.String())
+	}
+	return b.String()
 }
 
 func isSpace(c byte) bool {

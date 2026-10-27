@@ -12,6 +12,7 @@ import (
 	"github.com/gfronza/twinhouse/internal/catalog"
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
 
@@ -300,6 +301,10 @@ func absentMask(l *layout, want []bool) []bool {
 	return m
 }
 
+// loadSetClosure is the size of decodeAggState's LoadSet closure: its code
+// pointer, the store, layout and column pointers and two key slice headers.
+const loadSetClosure = 4*8 + 2*24
+
 func (s *storeImpl) decodeAggState(l *layout, c *colSpec, item map[string]types.AttributeValue, pk, sk []byte) (*chtype.AggPartial, error) {
 	p := &chtype.AggPartial{Func: c.agg.Func, ArgTypes: c.agg.Args}
 	num := func(suffix string, kind chtype.Kind) (any, error) {
@@ -361,6 +366,7 @@ func (s *storeImpl) decodeAggState(l *layout, c *colSpec, item map[string]types.
 		} else {
 			pkc, skc := append([]byte(nil), pk...), append([]byte(nil), sk...)
 			p.LoadSet = func(ctx context.Context) ([]any, error) { return s.loadMembers(ctx, l, pkc, skc, c) }
+			p.LoadSetBytes = int32(memtrack.Alloc(loadSetClosure) + memtrack.Bytes(int64(cap(pkc))) + memtrack.Bytes(int64(cap(skc))))
 		}
 	case catalog.AggGroupArray:
 		p.List = []any{}

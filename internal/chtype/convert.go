@@ -431,7 +431,9 @@ func valueToString(t Type, v any) (any, error) {
 	case FixedString:
 		return strings.TrimRight(toStr(v), "\x00"), nil
 	case Array, Tuple, Map:
-		return formatQuoted(t, v), nil
+		// Rendered piece by piece into a grown buffer: copy the bytes out
+		// of its slack, as the value may be kept.
+		return strings.Clone(formatQuoted(t, v)), nil
 	case AggregateFunction:
 		return nil, errf(cherr.NotImplemented, "Conversion of %s to String is not supported", t.String())
 	case Invalid:

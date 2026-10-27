@@ -241,15 +241,18 @@ func buildConcat(c *compiler, name string, args []*expr) (*expr, error) {
 		types[i] = base(a)
 	}
 	return strict(args, chtype.TString, func(v []any) (any, error) {
-		var b strings.Builder
+		// The parts are rendered first so Join can size the result
+		// exactly: a row holding it holds only its bytes.
+		var buf [8]string
+		parts := buf[:0]
 		for i, x := range v {
-			if s, ok := x.(string); ok && isStringKind(types[i].Kind) {
-				b.WriteString(s)
-				continue
+			s, ok := x.(string)
+			if !ok || !isStringKind(types[i].Kind) {
+				s = valueToString(c.q, x, types[i])
 			}
-			b.WriteString(valueToString(c.q, x, types[i]))
+			parts = append(parts, s)
 		}
-		return b.String(), nil
+		return strings.Join(parts, ""), nil
 	}), nil
 }
 

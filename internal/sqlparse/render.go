@@ -461,6 +461,9 @@ func quoteFuncName(s string) string {
 
 func (w *sqlWriter) selectStmt(s *SelectStmt) {
 	w.selectCore(s, len(s.Union) == 0)
+	if len(s.Union) > 0 && s.OwnSettings > 0 {
+		w.settings(s.Settings[:s.OwnSettings])
+	}
 	for i, b := range s.Union {
 		w.WriteString(" UNION " + s.UnionOps[i] + " ")
 		if len(b.Union) > 0 || len(b.Settings) > 0 || b.Format != "" {
@@ -471,8 +474,8 @@ func (w *sqlWriter) selectStmt(s *SelectStmt) {
 			w.selectCore(b, false)
 		}
 	}
-	if len(s.Union) > 0 && len(s.Settings) > 0 {
-		w.settings(s.Settings)
+	if len(s.Union) > 0 && len(s.Settings) > s.OwnSettings {
+		w.settings(s.Settings[s.OwnSettings:])
 	}
 	if s.Format != "" {
 		w.WriteString(" FORMAT " + quoteIdent(s.Format))

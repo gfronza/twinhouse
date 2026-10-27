@@ -50,7 +50,16 @@ type SelectStmt struct {
 	Limit    Expr // nil if absent
 	Offset   Expr // nil if absent
 	Settings []Setting
-	Format   string // FORMAT clause, "" if absent (only on the outermost statement)
+	// OwnSettings is, in a UNION, how many leading Settings the first
+	// branch wrote itself. The rest are the statement's (after FORMAT or
+	// after a parenthesized last branch), then the last branch's own,
+	// moved here by the parser. Without a UNION, Settings holds the
+	// statement's clause, then the SELECT's own.
+	OwnSettings int
+	// Nested marks a UNION branch written inside parentheses, alone or in
+	// a nested UNION. On the head of a UNION it marks the first branch.
+	Nested bool
+	Format string // FORMAT clause, "" if absent (only on the outermost statement)
 	// Union holds subsequent branches; Union[i] is combined with the result
 	// so far using UnionOps[i] ("ALL" or "DISTINCT").
 	Union    []*SelectStmt

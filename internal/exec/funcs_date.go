@@ -833,7 +833,9 @@ func formatDateTime(t time.Time, f string) string {
 			b.WriteByte('%')
 		}
 	}
-	return b.String()
+	// Copy the bytes out of the grown buffer's slack, as the value may be
+	// kept.
+	return strings.Clone(b.String())
 }
 
 var dateDiffUnits = map[string]string{

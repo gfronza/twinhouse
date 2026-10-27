@@ -98,15 +98,18 @@ func (m *sessionManager) acquire(user, id string, timeout time.Duration, check b
 	return s, sessionState{Database: s.database, Settings: maps.Clone(s.settings)}, nil
 }
 
-// release unlocks s, applying the changes the request made (nil leaves the
-// value unchanged), and restarts its inactivity timer.
-func (m *sessionManager) release(s *session, database *string, settings map[string]string) {
+// release unlocks s, applying the changes the request made, and restarts
+// its inactivity timer.
+func (m *sessionManager) release(s *session, d sessionDelta) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if database != nil {
-		s.database = *database
+	if d.database != nil {
+		s.database = *d.database
 	}
-	maps.Copy(s.settings, settings)
+	maps.Copy(s.settings, d.settings)
+	for _, name := range d.reset {
+		delete(s.settings, name)
+	}
 	s.busy = false
 	s.expires = m.now().Add(s.timeout)
 	if s.timeout == 0 {

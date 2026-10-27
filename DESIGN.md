@@ -638,6 +638,53 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   `serverTimezone()` stays `TZ_NAME`; invalid zone → `BAD_ARGUMENTS` 36);
   in a `SETTINGS` clause a different zone is `NOT_IMPLEMENTED` (the server
   formats results in the request's zone).
+* **Query memory (`max_memory_usage`)** (`internal/memtrack`): each query
+  accounts the memory its materialized state holds. So far that is the rows
+  a SELECT collects (its result and subquery results, held until the query
+  ends) and a materialized view's output for one source row. When the next
+  charge would pass `max_memory_usage`, the query fails with
+  `MEMORY_LIMIT_EXCEEDED` (241, HTTP 500) and ClickHouse 25.8's text, e.g.
+  `Query memory limit exceeded: would use 21.37 MiB (attempt to allocate
+  chunk of 4.17 MiB bytes), maximum: 19.07 MiB`. ClickHouse appends the
+  processor that allocated (`: While executing AggregatingTransform`);
+  twinhouse has no processors and appends nothing. `0` means unlimited.
+  The value is read like ClickHouse reads it: text (URL, session, quoted
+  in `SETTINGS`/`SET`) is decimal digits with an optional `K`, `M`, `G`,
+  `T` (×1000ⁿ) or `Ki`, `Mi`, `Gi`, `Ti` (×1024ⁿ) suffix, and anything else
+  fails with 27, 72 or 32; a numeric literal converts to UInt64 (`1.5` is
+  1, `1e9` is 1000000000, `-1` fails with 70). An unquoted `DEFAULT`
+  drops the setting (in `SET`, from the session), so the server default
+  applies; as in ClickHouse, it wins over a value for the same setting in
+  the same clause or `SET`, wherever it is written. Precedence: `SETTINGS` clause, then URL or session, then the
+  server default (`exec.Config.MaxMemoryUsage` for statements,
+  `ViewMemoryUsage` for the stream worker's `ApplyViews`; views applied
+  inline share the INSERT's limit). Both defaults are 0 (unlimited) for
+  now. As in ClickHouse, which clause sets the limit depends on where it
+  is. In a SELECT, the statement's clause (written after `FORMAT`, or
+  after a parenthesized last branch) applies, then the last branch's own,
+  which wins. A clause inside parentheses, or of an earlier branch, is
+  validated and ignored. In `INSERT ... SELECT`, the INSERT's own, then
+  the first SELECT branch outside parentheses whose clause sets it.
+  `CREATE TABLE ... AS SELECT` follows the SELECT rule.
+  Known deviations:
+  (a) **Lower only.** When the server default is above 0, a client (URL,
+  session or `SET`, `SETTINGS` clause) may lower the limit but not raise it
+  above the default or set it to 0 (unlimited): that fails with
+  `SETTING_CONSTRAINT_VIOLATION` (452) `Setting max_memory_usage shouldn't
+  be greater than <default>`, ClickHouse's wording for a `max` constraint
+  (which, unlike this rule, allows 0). With a default of 0 any value is
+  accepted, as in ClickHouse.
+  (b) **No server-wide limit.** Concurrent queries each get their own
+  limit, so concurrent heavy queries can still exhaust the process.
+  (c) **Estimates, not allocator counts.** Memory is estimated where state
+  is materialized, from the Go size of each value; per-row temporaries and
+  encoder state are not counted. So 241 can fire at a different point, and
+  for a different amount, than in ClickHouse. A short part of a long string
+  (`substring`, `left`, `splitByChar(...)[i]` and the like) keeps the whole
+  string alive but is charged only its own bytes.
+  (d) `max_memory_usage_for_user`, `max_memory_usage_for_all_queries` and
+  `max_bytes_before_external_sort/group_by` are read like
+  `max_memory_usage` (a bad value fails the same way) and then ignored.
 * **Comparison semantics** (verified against ClickHouse 25.8): enums
   compare with enums and numbers by their numeric value, as do ORDER BY,
   `min`/`max`/`argMin`/`argMax` (also their states and

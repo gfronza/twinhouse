@@ -101,6 +101,9 @@ func (q *query) runCreateTable(s *sqlparse.CreateTableStmt) (*Result, error) {
 		}
 	}
 	if s.AsSelect != nil {
+		if err := q.applySelectSettings(s.AsSelect); err != nil {
+			return nil, err
+		}
 		rel, err := q.planSelect(s.AsSelect, &planEnv{})
 		if err != nil {
 			return nil, err

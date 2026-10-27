@@ -21,6 +21,7 @@ import (
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
 
@@ -571,6 +572,9 @@ func readPartial(p *chtype.AggPartial, ms *memberSet) *chtype.AggPartial {
 	c.SetSize = uint64(len(members))
 	c.SetLoaded = c.SetSize == 0
 	c.LoadSet = func(context.Context) ([]any, error) { return append([]any(nil), members...), nil }
+	// The closure (code pointer and slice header) and the members' array;
+	// the members themselves are the stored ones.
+	c.LoadSetBytes = int32(memtrack.Alloc(32) + memtrack.Slice(cap(members)) - 24)
 	return c
 }
 

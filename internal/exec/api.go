@@ -11,6 +11,7 @@ import (
 
 	"github.com/gfronza/twinhouse/internal/catalog"
 	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/sqlparse"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
 
@@ -52,6 +53,14 @@ type Config struct {
 	Timezone       string // e.g. "UTC"
 	// MaxResultRows guards memory (0 = unlimited).
 	MaxResultRows int
+	// MaxMemoryUsage is the default max_memory_usage of a statement, in
+	// bytes (0 = unlimited, as in ClickHouse). When it is set, a client may
+	// lower the limit but not raise it or set 0.
+	MaxMemoryUsage int64
+	// ViewMemoryUsage is the limit of ApplyViews and ApplyViewList (the
+	// stream worker; 0 = MaxMemoryUsage). Views applied inline during an
+	// INSERT share the INSERT's limit.
+	ViewMemoryUsage int64
 	// PhysicalName maps a ClickHouse table to its DynamoDB table name (e.g.
 	// dynamo.Store.PhysicalName). nil uses "db.table".
 	PhysicalName func(db, table string) string
@@ -129,6 +138,23 @@ func (e *Engine) ApplyViews(ctx context.Context, t *catalog.Table, rows []storag
 // rejected.
 func (e *Engine) ApplyViewList(ctx context.Context, t *catalog.Table, views []*catalog.View, rows []storage.Row, rowIDs []string) error {
 	return e.applyViewList(ctx, t, views, rows, rowIDs)
+}
+
+// SettingText is what a session keeps for `SET name = v` when that differs
+// from v as written: a size setting literal (max_memory_usage and the like)
+// is kept as its UInt64 value (1e9 as "1000000000"), as ClickHouse keeps
+// it, and DEFAULT drops the setting (reset). ok is false for other
+// settings and invalid values.
+func SettingText(name string, v sqlparse.Expr) (text string, reset, ok bool) {
+	st := sqlparse.Setting{Name: name, Value: v}
+	if resetsSetting(st) {
+		return "", true, true
+	}
+	if !sizeSettings[name] {
+		return "", false, false
+	}
+	text, err := clauseValue(st)
+	return text, false, err == nil
 }
 
 // RowIDIterator is optionally implemented by a storage.RowIterator.

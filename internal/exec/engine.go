@@ -30,6 +30,7 @@ import (
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
@@ -42,6 +43,8 @@ type engineImpl struct {
 	viewStmts map[string]*sqlparse.SelectStmt
 	// fresh reloads the catalog snapshot on lookup misses.
 	fresh *freshCatalog
+	// testHookFinished, when set, sees every query once it has finished.
+	testHookFinished func(*query)
 }
 
 func newEngine(cfg Config) (*Engine, error) {
@@ -90,6 +93,13 @@ type query struct {
 	readRows  atomic.Uint64
 	readBytes atomic.Uint64
 
+	// mem counts the memory the query's materialized state holds against
+	// max_memory_usage; memDefault is the server's limit (0 = unlimited).
+	mem        *memtrack.Tracker
+	memDefault int64
+	// lifetime holds the accounts released when the query finishes.
+	lifetime *[]*memtrack.Account
+
 	// plan is the state of the current plan (shared by copies).
 	plan *planState
 
@@ -128,7 +138,7 @@ func (q *query) subquery(sel *sqlparse.SelectStmt, env *planEnv, max int) (*subq
 	if max > 0 {
 		read = max + subqueryProbeRows
 	}
-	rows, err := rel.collectFirst(q, max, read)
+	rows, err := rel.collectFirst(q, newRowCharge(q.lifetimeAccount(), rel.cols), max, read)
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +173,45 @@ func (e *Engine) newQuery(ctx context.Context, req *Request) *query {
 		user = "default"
 	}
 	now := time.Now()
-	return &query{
+	q := &query{
 		e: e, ctx: ctx, db: db, settings: settings, params: req.Params,
 		cat:   &queryCatalog{Catalog: e.cfg.Catalog, f: e.impl.fresh, ctx: ctx, since: now},
 		bound: map[string]*expr{}, now: now.UTC(), loc: loc, tzName: tzName, user: user, id: req.QueryID, req: req,
-		plan: &planState{},
+		plan: &planState{}, memDefault: e.cfg.MaxMemoryUsage, lifetime: new([]*memtrack.Account),
+	}
+	q.mem = memtrack.New(q.maxMemoryUsage())
+	return q
+}
+
+// newViewQuery is the query of an ApplyViews call, limited by
+// ViewMemoryUsage when that is set.
+func (e *Engine) newViewQuery(ctx context.Context, db string) *query {
+	q := e.newQuery(ctx, &Request{Database: db})
+	if v := e.cfg.ViewMemoryUsage; v > 0 {
+		q.memDefault = v
+		q.mem.SetLimit(v)
+	}
+	return q
+}
+
+// lifetimeAccount returns an account released when the query finishes (nil
+// when the query is unlimited).
+func (q *query) lifetimeAccount() *memtrack.Account {
+	a := q.mem.NewAccount()
+	if a != nil {
+		*q.lifetime = append(*q.lifetime, a)
+	}
+	return a
+}
+
+// finish releases what the query held until its end.
+func (q *query) finish() {
+	for _, a := range *q.lifetime {
+		a.Close()
+	}
+	*q.lifetime = nil
+	if h := q.e.impl.testHookFinished; h != nil {
+		h(q)
 	}
 }
 
@@ -178,6 +222,7 @@ func (e *Engine) execute(ctx context.Context, req *Request) (res *Result, err er
 		return nil, err
 	}
 	q := e.newQuery(ctx, req)
+	defer q.finish()
 	for k, v := range req.Settings {
 		if err := q.checkSetting(k, v, false); err != nil {
 			return nil, err
@@ -230,15 +275,19 @@ func (q *query) run(stmt sqlparse.Statement) (*Result, error) {
 		return &Result{Database: s.Database}, nil
 	case *sqlparse.SetStmt:
 		for _, st := range s.Settings {
-			v, err := settingValue(st.Value)
+			if resetsSetting(st) {
+				continue
+			}
+			v, err := clauseValue(st)
 			if err != nil {
 				return nil, err
 			}
 			if err := q.checkSetting(st.Name, v, true); err != nil {
 				return nil, err
 			}
-			q.settings[st.Name] = v
+			q.setSetting(st.Name, v)
 		}
+		q.applyResets(s.Settings, true)
 		return &Result{}, nil
 	case *sqlparse.OptimizeStmt:
 		if _, err := q.lookupTable(s.Database, s.Name); err != nil {
@@ -278,22 +327,72 @@ func (q *query) checkReadonly(stmt sqlparse.Statement) error {
 
 // applySettings merges a statement's SETTINGS clause into the query settings.
 func (q *query) applySettings(ss []sqlparse.Setting) error {
+	return q.applyClause(ss, true)
+}
+
+// applyClause validates a SETTINGS clause and merges it into the query
+// settings. Its max_memory_usage is only validated unless memory is set
+// (see applySelectSettings).
+func (q *query) applyClause(ss []sqlparse.Setting, memory bool) error {
 	for _, st := range ss {
-		v, err := settingValue(st.Value)
+		if resetsSetting(st) {
+			continue
+		}
+		v, err := q.clauseSetting(st)
 		if err != nil {
 			return err
 		}
-		if err := q.checkSetting(st.Name, v, true); err != nil {
-			return err
+		if memory || st.Name != maxMemoryUsageSetting {
+			q.setSetting(st.Name, v)
 		}
-		if st.Name == "session_timezone" && v != "" && v != q.timezoneName() {
-			// The server formats results in the request's time zone,
-			// which a SETTINGS clause cannot change.
-			return cherr.New(cherr.NotImplemented, "session_timezone in a SETTINGS clause is not supported: pass it as a request (URL) setting")
-		}
-		q.settings[st.Name] = v
 	}
+	q.applyResets(ss, memory)
 	return nil
+}
+
+// applyResets applies a clause's DEFAULT resets. As in ClickHouse, they
+// come after the clause's values, so DEFAULT wins over a value for the
+// same setting wherever it is written.
+func (q *query) applyResets(ss []sqlparse.Setting, memory bool) {
+	for _, st := range ss {
+		if resetsSetting(st) && (memory || st.Name != maxMemoryUsageSetting) {
+			q.resetSetting(st.Name)
+		}
+	}
+}
+
+// clauseSetting validates one SETTINGS clause entry and returns its value.
+func (q *query) clauseSetting(st sqlparse.Setting) (string, error) {
+	v, err := clauseValue(st)
+	if err != nil {
+		return "", err
+	}
+	if err := q.checkSetting(st.Name, v, true); err != nil {
+		return "", err
+	}
+	if st.Name == "session_timezone" && v != "" && v != q.timezoneName() {
+		// The server formats results in the request's time zone,
+		// which a SETTINGS clause cannot change.
+		return "", cherr.New(cherr.NotImplemented, "session_timezone in a SETTINGS clause is not supported: pass it as a request (URL) setting")
+	}
+	return v, nil
+}
+
+// setSetting stores a validated SETTINGS clause or SET value.
+func (q *query) setSetting(name, v string) {
+	q.settings[name] = v
+	if name == maxMemoryUsageSetting {
+		q.mem.SetLimit(q.maxMemoryUsage())
+	}
+}
+
+// resetSetting drops a setting set to DEFAULT, so the server default
+// applies.
+func (q *query) resetSetting(name string) {
+	delete(q.settings, name)
+	if name == maxMemoryUsageSetting {
+		q.mem.SetLimit(q.maxMemoryUsage())
+	}
 }
 
 // settingValue renders a setting value expression as text.
@@ -439,9 +538,6 @@ func paramParseError(err error, text string, p *sqlparse.Param, t chtype.Type) e
 	return &cherr.Error{Code: cherr.BadQueryParameter, Cause: err, Msg: fmt.Sprintf("Value %s cannot be parsed as %s for query parameter '%s'", text, p.Type, p.Name)}
 }
 
-// attemptToReadAfterEOF is ClickHouse's ATTEMPT_TO_READ_AFTER_EOF.
-const attemptToReadAfterEOF = 32
-
 // numberParamFailure mirrors ClickHouse's readIntText/readFloatText on a
 // query parameter of numeric type t that did not parse: either the parser
 // throws (code, message) or it stops after n bytes (code 0).
@@ -449,7 +545,7 @@ func numberParamFailure(t chtype.Type, s string) (code int, msg string, n int) {
 	isDigit := func(i int) bool { return i < len(s) && s[i] >= '0' && s[i] <= '9' }
 	if t.IsInteger() {
 		if s == "" || (s == "-" && t.IsSigned()) {
-			return attemptToReadAfterEOF, "Attempt to read after eof", 0
+			return cherr.AttemptToReadAfterEOF, "Attempt to read after eof", 0
 		}
 		i := 0
 		if t.IsSigned() && s[0] == '-' {

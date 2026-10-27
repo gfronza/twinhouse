@@ -1623,6 +1623,10 @@ func valueToString(q *query, v any, t chtype.Type) string {
 		if tm, ok := v.(time.Time); ok {
 			return formatDateTimeText(tm.In(q.location(t)), t)
 		}
+	case chtype.Array, chtype.Tuple, chtype.Map:
+		// Rendered piece by piece into a grown buffer: copy the bytes
+		// out of its slack, as the value may be kept.
+		return strings.Clone(chtype.FormatText(t, v))
 	}
 	return chtype.FormatText(t, v)
 }

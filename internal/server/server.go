@@ -833,6 +833,22 @@ func (c *call) usesSession() bool {
 type sessionDelta struct {
 	database *string
 	settings map[string]string
+	// reset are the settings SET to DEFAULT, dropped after settings are
+	// applied: as in ClickHouse, DEFAULT wins within one SET.
+	reset []string
+}
+
+// set records one SET assignment.
+func (d *sessionDelta) set(kv sqlparse.Setting) {
+	text, reset, ok := exec.SettingText(kv.Name, kv.Value)
+	switch {
+	case reset:
+		d.reset = append(d.reset, kv.Name)
+	case ok:
+		d.settings[kv.Name] = text
+	default:
+		d.settings[kv.Name] = settingValueText(kv.Value)
+	}
 }
 
 func (c *call) updateSession(res *exec.Result) {
@@ -857,7 +873,7 @@ func (c *call) updateSession(res *exec.Result) {
 		} else if set, ok := st.(*sqlparse.SetStmt); ok {
 			d.settings = make(map[string]string, len(set.Settings))
 			for _, kv := range set.Settings {
-				d.settings[kv.Name] = settingValueText(kv.Value)
+				d.set(kv)
 			}
 		}
 	}
@@ -871,7 +887,7 @@ func (c *call) parseQuery() (sqlparse.Statement, error) {
 }
 
 func (c *call) releaseSession() {
-	c.s.sessions.release(c.sess, c.sessDelta.database, c.sessDelta.settings)
+	c.s.sessions.release(c.sess, c.sessDelta)
 	c.sess = nil
 }
 

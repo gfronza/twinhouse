@@ -23,18 +23,40 @@ type testEnv struct {
 	cat   catalog.Catalog
 }
 
+// testMaxMemoryUsage is the engine tests' default memory limit: too high
+// to fail a test, but set, so every test runs the memory accounting and
+// checks that it leaks nothing.
+const testMaxMemoryUsage = 1 << 40
+
 func newTestEnv(t testing.TB) *testEnv {
+	t.Helper()
+	return newTestEnvConfig(t, func(c *Config) { c.MaxMemoryUsage = testMaxMemoryUsage })
+}
+
+// newTestEnvConfig is newTestEnv with the engine config changed by mod.
+func newTestEnvConfig(t testing.TB, mod func(*Config)) *testEnv {
 	t.Helper()
 	ms := memstore.New()
 	spy := &spyStore{Store: ms}
 	cat := catalog.NewMemory()
-	e, err := New(Config{Store: spy, Catalog: cat, InlineViews: true, ConsistentReads: true, Timezone: "UTC",
-		ServerVersion: "25.8.1.1", ServerRevision: 54477, DisplayName: "test"})
+	cfg := Config{Store: spy, Catalog: cat, InlineViews: true, ConsistentReads: true, Timezone: "UTC",
+		ServerVersion: "25.8.1.1", ServerRevision: 54477, DisplayName: "test"}
+	mod(&cfg)
+	e, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.impl.fresh.interval = 0 // the memory catalog's Refresh is free
+	e.impl.testHookFinished = func(q *query) { checkNoTrackedMemory(t, q) }
 	return &testEnv{t: t, e: e, store: ms, spy: spy, cat: cat}
+}
+
+// checkNoTrackedMemory is the leak invariant: a finished query holds no
+// tracked memory.
+func checkNoTrackedMemory(t testing.TB, q *query) {
+	if u := q.mem.Used(); u != 0 {
+		t.Errorf("query %q finished holding %d tracked bytes", q.req.Query, u)
+	}
 }
 
 // exec runs one statement and fails the test on error.

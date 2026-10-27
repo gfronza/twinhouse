@@ -1,6 +1,7 @@
 package sqlparse
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
@@ -116,6 +117,79 @@ func TestSelectLimitForms(t *testing.T) {
 		assertAST(t, tt.sql+" limit by", s.LimitBy, tt.limitBy)
 	}
 	expectErr(t, "SELECT 1 LIMIT 1 LIMIT 2", cherr.SyntaxError, "position 18")
+}
+
+// The first branch's own SETTINGS stay apart from the hoisted ones.
+func TestSelectUnionKeepsTheFirstBranchSettings(t *testing.T) {
+	const sql = "SELECT 1 SETTINGS a = 1 UNION ALL SELECT 2 SETTINGS b = 2"
+	s := mustSelect(t, sql)
+	if len(s.Settings) != 2 || s.OwnSettings != 1 || s.Settings[0].Name != "a" {
+		t.Fatalf("settings %v, own %d", s.Settings, s.OwnSettings)
+	}
+	if got := SelectString(s); got != sql {
+		t.Errorf("rendered %q", got)
+	}
+}
+
+// The statement's SETTINGS (after FORMAT) go ahead of the last branch's
+// own, which ClickHouse applies after them.
+func TestSelectStatementSettingsGoBeforeTheSelectsOwn(t *testing.T) {
+	for _, c := range []struct {
+		sql  string
+		want []string
+		own  int
+	}{
+		{"SELECT 1 SETTINGS a = 1 FORMAT TSV SETTINGS b = 2", []string{"b", "a"}, 0},
+		{"SELECT 1 SETTINGS a = 1 UNION ALL SELECT 2 SETTINGS b = 2 FORMAT TSV SETTINGS c = 3", []string{"a", "c", "b"}, 1},
+		{"SELECT 1 UNION ALL (SELECT 2 SETTINGS b = 2) SETTINGS c = 3 FORMAT TSV SETTINGS d = 4", []string{"c", "d"}, 0},
+	} {
+		s := mustSelect(t, c.sql)
+		var got []string
+		for _, st := range s.Settings {
+			got = append(got, st.Name)
+		}
+		if !slices.Equal(got, c.want) || s.OwnSettings != c.own {
+			t.Errorf("%s: settings %v, own %d; want %v, %d", c.sql, got, s.OwnSettings, c.want, c.own)
+		}
+	}
+}
+
+// Branches written in parentheses are marked, those of a parenthesized
+// head too.
+func TestSelectUnionMarksNestedBranches(t *testing.T) {
+	for _, c := range []struct {
+		sql  string
+		want []bool // the head, then each branch
+	}{
+		{"SELECT 1 UNION ALL SELECT 2", []bool{false, false}},
+		{"SELECT 1 UNION ALL (SELECT 2) UNION ALL SELECT 3", []bool{false, true, false}},
+		{"(SELECT 1) UNION ALL SELECT 2", []bool{true, false}},
+		{"(SELECT 1 UNION ALL SELECT 2) UNION ALL SELECT 3", []bool{true, true, false}},
+		{"(SELECT 1 UNION ALL SELECT 2)", []bool{false, false}},
+	} {
+		s := mustSelect(t, c.sql)
+		got := []bool{s.Nested}
+		for _, b := range s.Union {
+			got = append(got, b.Nested)
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: nested %v, want %v", c.sql, got, c.want)
+		}
+	}
+}
+
+// The clause of a parenthesized UNION inside a parenthesized head stays
+// with the head's own, and that of a lone parenthesized UNION is the
+// statement's last.
+func TestSelectParenthesizedHeadKeepsItsSettings(t *testing.T) {
+	s := mustSelect(t, "(SELECT 1 UNION ALL SELECT 2 SETTINGS a = 1) UNION ALL SELECT 3 SETTINGS b = 2")
+	if len(s.Settings) != 2 || s.OwnSettings != 1 || s.Settings[0].Name != "a" {
+		t.Errorf("settings %v, own %d", s.Settings, s.OwnSettings)
+	}
+	s = mustSelect(t, "(SELECT 1 UNION ALL SELECT 2 SETTINGS a = 1)")
+	if len(s.Settings) != 1 || s.OwnSettings != 0 {
+		t.Errorf("settings %v, own %d", s.Settings, s.OwnSettings)
+	}
 }
 
 func TestSelectUnion(t *testing.T) {

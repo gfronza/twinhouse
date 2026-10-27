@@ -155,7 +155,8 @@ func (q *query) convertTo(v any, from, to chtype.Type) (any, bool, error) {
 }
 
 func (q *query) runInsert(s *sqlparse.InsertStmt) (*Result, error) {
-	if err := q.applySettings(s.Settings); err != nil {
+	// The INSERT's SETTINGS and its SELECT's apply to the whole INSERT.
+	if err := q.applyInsertSettings(s); err != nil {
 		return nil, err
 	}
 	db := q.defaultDB(s.Database)

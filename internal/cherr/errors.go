@@ -25,6 +25,7 @@ const (
 	CannotParseEscapeSequence        = 25
 	CannotParseQuotedString          = 26
 	CannotParseInputAssertionFailed  = 27
+	AttemptToReadAfterEOF            = 32
 	CannotReadAllData                = 33
 	BadArguments                     = 36
 	CannotParseDate                  = 38
@@ -72,6 +73,7 @@ const (
 	NotAnAggregate                   = 215
 	UnexpectedASTStructure           = 223
 	QueryIsTooLarge                  = 229
+	MemoryLimitExceeded              = 241
 	UnionAllResultStructuresMismatch = 258
 	CannotDecompress                 = 271
 	TooDeepRecursion                 = 306
@@ -89,6 +91,7 @@ const (
 	DecimalOverflow                  = 407
 	CannotCompileRegexp              = 427
 	BrotliReadFailed                 = 448
+	SettingConstraintViolation       = 452
 	UnknownQueryParameter            = 456
 	BadQueryParameter                = 457
 	CannotParseBool                  = 467

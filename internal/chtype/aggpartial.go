@@ -40,7 +40,11 @@ type AggPartial struct {
 	// SetLoaded is true when Set holds every member (always true for
 	// engine-produced states). When false, call LoadSet to obtain members.
 	SetLoaded bool
-	LoadSet   func(ctx context.Context) ([]any, error)
+	// LoadSetBytes is the heap LoadSet holds while the set is unloaded:
+	// the closure and the copies it captures. It fits in SetLoaded's
+	// padding.
+	LoadSetBytes int32
+	LoadSet      func(ctx context.Context) ([]any, error)
 
 	List []any
 }

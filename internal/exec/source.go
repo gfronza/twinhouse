@@ -295,7 +295,8 @@ func (q *query) withDB(db string) *query {
 		return q
 	}
 	return &query{e: q.e, ctx: q.ctx, cat: q.cat, db: db, settings: q.settings, params: q.params, bound: q.bound,
-		now: q.now, loc: q.loc, user: q.user, id: q.id, req: q.req, plan: q.plan}
+		now: q.now, loc: q.loc, user: q.user, id: q.id, req: q.req, plan: q.plan,
+		mem: q.mem, memDefault: q.memDefault, lifetime: q.lifetime}
 }
 
 func parseSelect(text string) (*sqlparse.SelectStmt, error) {

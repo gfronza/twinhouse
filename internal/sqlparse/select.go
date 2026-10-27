@@ -1,6 +1,7 @@
 package sqlparse
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/gfronza/twinhouse/internal/cherr"
@@ -47,17 +48,25 @@ func (p *parser) parseSelectStatement() Statement {
 	if p.atKw("INTO", "OUTFILE") {
 		notImplemented("INTO OUTFILE is not supported")
 	}
-	// SETTINGS may appear before and/or after FORMAT.
+	// SETTINGS may appear before and/or after FORMAT. They go ahead of
+	// the last branch's own clause, which overrides them in ClickHouse.
+	at := sel.OwnSettings
 	if p.acceptKw("SETTINGS") {
-		sel.Settings = append(sel.Settings, p.parseSettingList()...)
+		at = sel.insertSettings(at, p.parseSettingList())
 	}
 	if p.acceptKw("FORMAT") {
 		sel.Format = p.parseFormatName()
 		if p.acceptKw("SETTINGS") {
-			sel.Settings = append(sel.Settings, p.parseSettingList()...)
+			sel.insertSettings(at, p.parseSettingList())
 		}
 	}
 	return sel
+}
+
+// insertSettings inserts ss into s.Settings at i and returns where they end.
+func (s *SelectStmt) insertSettings(i int, ss []Setting) int {
+	s.Settings = slices.Insert(s.Settings, i, ss...)
+	return i + len(ss)
 }
 
 // parseSelectUnion parses select elements joined by UNION ALL|DISTINCT.
@@ -65,7 +74,9 @@ func (p *parser) parseSelectStatement() Statement {
 func (p *parser) parseSelectUnion() *SelectStmt {
 	p.enter()
 	defer p.leave()
-	head, _ := p.parseSelectElement()
+	head, headParen := p.parseSelectElement()
+	// inner is how many branches came from inside the head's parentheses.
+	inner := len(head.Union)
 	lastParen := false
 	for {
 		if p.atKw("UNION") {
@@ -84,6 +95,7 @@ func (p *parser) parseSelectUnion() *SelectStmt {
 				}
 			}
 			branch, paren := p.parseSelectElement()
+			branch.Nested = paren
 			head.Union = append(head.Union, branch)
 			head.UnionOps = append(head.UnionOps, op)
 			lastParen = paren
@@ -94,10 +106,19 @@ func (p *parser) parseSelectUnion() *SelectStmt {
 		}
 		break
 	}
-	if n := len(head.Union); n > 0 && !lastParen {
-		last := head.Union[n-1]
-		head.Settings = append(head.Settings, last.Settings...)
-		last.Settings = nil
+	if n := len(head.Union); n > inner {
+		head.OwnSettings = len(head.Settings)
+		if headParen {
+			head.Nested = true
+			for _, b := range head.Union[:inner] {
+				b.Nested = true
+			}
+		}
+		if !lastParen {
+			last := head.Union[n-1]
+			head.Settings = append(head.Settings, last.Settings...)
+			last.Settings = nil
+		}
 	}
 	return head
 }

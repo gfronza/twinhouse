@@ -39,15 +39,16 @@ type limitStats struct {
 	rowsBeforeLimit uint64
 }
 
-// collect runs the relation and returns all rows; max > 0 stops after max rows.
+// collect runs the relation and returns all rows; max > 0 stops after max
+// rows. The rows count against the query's memory until it finishes.
 func (r *relation) collect(q *query, max int) ([][]any, error) {
-	return r.collectFirst(q, max, max)
+	return r.collectFirst(q, newRowCharge(q.lifetimeAccount(), r.cols), max, max)
 }
 
 // collectFirst runs the relation and returns its first keep rows (keep 0:
-// all). It stops after reading read rows (read 0: at the end); rows past keep
-// are read and dropped, so their errors still surface.
-func (r *relation) collectFirst(q *query, keep, read int) ([][]any, error) {
+// all), charged to ch. It stops after reading read rows (read 0: at the
+// end); rows past keep are read and dropped, so their errors still surface.
+func (r *relation) collectFirst(q *query, ch rowCharge, keep, read int) ([][]any, error) {
 	it, err := r.open()
 	if err != nil {
 		return nil, err
@@ -66,7 +67,15 @@ func (r *relation) collectFirst(q *query, keep, read int) ([][]any, error) {
 			return nil, err
 		}
 		if keep == 0 || len(rows) < keep {
-			rows = append(rows, row)
+			if len(rows) == cap(rows) {
+				rows, err = ch.grow(rows, row)
+			} else if rows = append(rows, row); ch.acct != nil {
+				// The row's header is in the array, charged already.
+				err = ch.acct.Grow(ch.sz.size(row) - sliceHeader)
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return rows, nil
@@ -134,12 +143,84 @@ func (e *planEnv) withAliases() map[string]sqlparse.Expr {
 	return out
 }
 
+// applySelectSettings applies the SETTINGS clauses of s and of its UNION
+// branches, in order, to the whole statement. ClickHouse applies most of
+// them per branch, which twinhouse cannot. The memory limit is the
+// query's, though: as in ClickHouse, only the statement's clause and the
+// last plain (unparenthesized) branch's set it. The others are validated.
+func (q *query) applySelectSettings(s *sqlparse.SelectStmt) error {
+	if len(s.Union) == 0 {
+		return q.applySettings(s.Settings)
+	}
+	err := branchClauses(s, true, func(ss []sqlparse.Setting, _ bool) error {
+		return q.applyClause(ss, false)
+	})
+	if err != nil {
+		return err
+	}
+	return q.applySettings(s.Settings[s.OwnSettings:])
+}
+
+// applyInsertSettings applies the SETTINGS clauses of an INSERT and of its
+// SELECT, in order. As in ClickHouse, the INSERT's max_memory_usage wins,
+// then that of the first plain branch that sets it.
+func (q *query) applyInsertSettings(s *sqlparse.InsertStmt) error {
+	if err := q.applySettings(s.Settings); err != nil || s.Select == nil {
+		return err
+	}
+	memory := !setsMemory(s.Settings)
+	return selectClauses(s.Select, true, func(ss []sqlparse.Setting, plain bool) error {
+		apply := memory && plain
+		if apply && setsMemory(ss) {
+			memory = false
+		}
+		return q.applyClause(ss, apply)
+	})
+}
+
+// selectClauses calls f with every SETTINGS clause of s, in order, and
+// whether it is a clause of a plain branch of the statement (plain is
+// false inside parentheses).
+func selectClauses(s *sqlparse.SelectStmt, plain bool, f func(ss []sqlparse.Setting, plain bool) error) error {
+	if len(s.Union) == 0 {
+		return f(s.Settings, plain)
+	}
+	if err := branchClauses(s, plain, f); err != nil {
+		return err
+	}
+	return f(s.Settings[s.OwnSettings:], plain)
+}
+
+// branchClauses is selectClauses for a UNION without its last clause,
+// s.Settings[s.OwnSettings:]: the parser moves the last plain branch's own
+// clause there, after the statement's.
+func branchClauses(s *sqlparse.SelectStmt, plain bool, f func(ss []sqlparse.Setting, plain bool) error) error {
+	if err := f(s.Settings[:s.OwnSettings], plain && !s.Nested); err != nil {
+		return err
+	}
+	for _, b := range s.Union {
+		if err := selectClauses(b, plain && !b.Nested, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setsMemory reports whether a SETTINGS clause sets max_memory_usage
+// (DEFAULT included).
+func setsMemory(ss []sqlparse.Setting) bool {
+	for _, st := range ss {
+		if st.Name == maxMemoryUsageSetting {
+			return true
+		}
+	}
+	return false
+}
+
 // runSelect executes a top-level SELECT.
 func (q *query) runSelect(s *sqlparse.SelectStmt) (*Result, error) {
-	for _, b := range append([]*sqlparse.SelectStmt{s}, s.Union...) {
-		if err := q.applySettings(b.Settings); err != nil {
-			return nil, err
-		}
+	if err := q.applySelectSettings(s); err != nil {
+		return nil, err
 	}
 	rel, err := q.planSelect(s, &planEnv{})
 	if err != nil {
@@ -1034,6 +1115,9 @@ func (t *trimIter) next() ([]any, error) {
 		return nil, err
 	}
 	if len(row) > t.width {
+		// Free the hidden ORDER BY and LIMIT BY values: a holder keeps
+		// the backing array and charges only the visible ones.
+		clear(row[t.width:])
 		row = row[:t.width]
 	}
 	return row, nil

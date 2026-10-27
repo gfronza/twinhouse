@@ -26,7 +26,8 @@ type viewPlan struct {
 
 func (e *Engine) applyViews(ctx context.Context, t *catalog.Table, rows []storage.Row, rowIDs []string) (err error) {
 	defer recoverInternal(&err)
-	q := e.newQuery(ctx, &Request{Database: t.Database})
+	q := e.newViewQuery(ctx, t.Database)
+	defer q.finish()
 	return e.applyViewsQuery(q, t, rows, rowIDs)
 }
 
@@ -43,7 +44,8 @@ func (e *Engine) applyViewList(ctx context.Context, t *catalog.Table, views []*c
 	if len(rows) == 0 || len(views) == 0 {
 		return nil
 	}
-	q := e.newQuery(ctx, &Request{Database: t.Database})
+	q := e.newViewQuery(ctx, t.Database)
+	defer q.finish()
 	return q.applyViewList(views, t, rows, rowIDs)
 }
 
@@ -110,9 +112,12 @@ func (q *query) applyView(v *catalog.View, src *catalog.Table, rows []storage.Ro
 	}
 	name := v.FullName()
 	var batch []storage.MergeRow
+	// ch holds one source row's output until it is converted into batch.
+	ch := newRowCharge(q.mem.NewAccount(), vp.rel.cols)
+	defer ch.acct.Close()
 	for i, r := range rows {
 		vp.mv.rows = []storage.Row{r}
-		out, err := vp.rel.collect(q, 0)
+		out, err := vp.rel.collectFirst(q, ch, 0, 0)
 		if err != nil {
 			return cherr.Wrap(cherr.As(err).Code, err, "materialized view %s", name)
 		}
@@ -130,6 +135,8 @@ func (q *query) applyView(v *catalog.View, src *catalog.Table, rows []storage.Ro
 			}
 			batch = append(batch, storage.MergeRow{Row: row, Source: storage.SourceRef{View: name, RowID: rowIDs[i]}, Index: idx})
 		}
+		ch.acct.Close()
+		ch.sz.forget()
 		if len(batch) >= mergeBatch {
 			if err := q.e.cfg.Store.Merge(q.ctx, target, batch); err != nil {
 				return err

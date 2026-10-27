@@ -53,13 +53,13 @@ func New(f string, argTypes []chtype.Type) *chtype.AggPartial {
 	return &chtype.AggPartial{Func: f, ArgTypes: argTypes, SetLoaded: true}
 }
 
-// Clone returns a deep-enough copy of p (slices copied, values shared).
+// Clone returns a deep-enough copy of p (Set and List copied, values
+// shared). ArgTypes is shared too: no state changes it.
 func Clone(p *chtype.AggPartial) *chtype.AggPartial {
 	if p == nil {
 		return nil
 	}
 	c := *p
-	c.ArgTypes = append([]chtype.Type(nil), p.ArgTypes...)
 	c.Set = append([]any(nil), p.Set...)
 	c.List = append([]any(nil), p.List...)
 	return &c
