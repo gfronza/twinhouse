@@ -13,6 +13,7 @@ import (
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
 	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
@@ -712,6 +713,8 @@ func (q *query) populate(v *catalog.View, src *catalog.Table) (uint64, error) {
 	var rows []storage.Row
 	var ids []string
 	var total uint64
+	bc := q.newBatchCharge(src)
+	defer bc.release()
 	flush := func() error {
 		if len(rows) == 0 {
 			return nil
@@ -721,6 +724,7 @@ func (q *query) populate(v *catalog.View, src *catalog.Table) (uint64, error) {
 		}
 		total += uint64(len(rows))
 		rows, ids = rows[:0], ids[:0]
+		bc.release()
 		return nil
 	}
 	for n := 0; ; n++ {
@@ -743,7 +747,11 @@ func (q *query) populate(v *catalog.View, src *catalog.Table) (uint64, error) {
 			id = fmt.Sprintf("populate:%s:%d", run, n)
 		}
 		ids = append(ids, id)
-		if len(rows) >= insertBatch {
+		full, err := bc.add(r, memtrack.String(id))
+		if err != nil {
+			return 0, err
+		}
+		if full || len(rows) >= insertBatch {
 			if err := flush(); err != nil {
 				return 0, err
 			}
@@ -1013,6 +1021,8 @@ func (q *query) runDelete(db, name string, where sqlparse.Expr) (*Result, error)
 	fit := &filterIter{in: it, cond: cond}
 	defer fit.close()
 	var batch []storage.Row
+	bc := q.newBatchCharge(t)
+	defer bc.release()
 	for {
 		row, err := fit.next()
 		if err != nil {
@@ -1043,11 +1053,16 @@ func (q *query) runDelete(db, name string, where sqlparse.Expr) (*Result, error)
 			}
 		}
 		batch = append(batch, r)
-		if len(batch) >= insertBatch {
+		full, err := bc.add(r, 0)
+		if err != nil {
+			return nil, err
+		}
+		if full || len(batch) >= insertBatch {
 			if err := q.e.cfg.Store.DeleteRows(q.ctx, t, batch); err != nil {
 				return nil, err
 			}
 			batch = nil
+			bc.release()
 		}
 	}
 	if len(batch) > 0 {

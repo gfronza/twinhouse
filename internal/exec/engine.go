@@ -43,8 +43,9 @@ type engineImpl struct {
 	viewStmts map[string]*sqlparse.SelectStmt
 	// fresh reloads the catalog snapshot on lookup misses.
 	fresh *freshCatalog
-	// testHookFinished, when set, sees every query once it has finished.
-	testHookFinished func(*query)
+	// testHookStarted and testHookFinished, when set, see every query once
+	// it is created and once it has finished.
+	testHookStarted, testHookFinished func(*query)
 }
 
 func newEngine(cfg Config) (*Engine, error) {
@@ -103,10 +104,11 @@ type query struct {
 	// plan is the state of the current plan (shared by copies).
 	plan *planState
 
-	// subqueries caches results of uncorrelated subqueries (IN / scalar),
-	// which are evaluated at plan time and may be needed twice (filter and
-	// key pushdown).
+	// subqueries caches results of uncorrelated scalar subqueries, and
+	// inSets the sets of IN subqueries. They are evaluated at plan time and
+	// may be needed twice (filter and key pushdown).
 	subqueries map[*sqlparse.SelectStmt]*subqueryResult
+	inSets     map[inSetKey]*valueSet
 }
 
 type subqueryResult struct {
@@ -130,6 +132,8 @@ func (q *query) subquery(sel *sqlparse.SelectStmt, env *planEnv, max int) (*subq
 	if r, ok := q.subqueries[sel]; ok {
 		return r, nil
 	}
+	// The plan is dropped once its rows are collected, which are charged.
+	defer q.plan.consts.release(q.plan.consts.mark())
 	rel, err := q.planSelect(sel, env)
 	if err != nil {
 		return nil, err
@@ -180,6 +184,9 @@ func (e *Engine) newQuery(ctx context.Context, req *Request) *query {
 		plan: &planState{}, memDefault: e.cfg.MaxMemoryUsage, lifetime: new([]*memtrack.Account),
 	}
 	q.mem = memtrack.New(q.maxMemoryUsage())
+	if h := e.impl.testHookStarted; h != nil {
+		h(q)
+	}
 	return q
 }
 

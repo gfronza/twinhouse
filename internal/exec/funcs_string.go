@@ -17,8 +17,8 @@ import (
 func init() {
 	regCI(stringMap(asciiLower, true), "lower", "lcase")
 	regCI(stringMap(asciiUpper, true), "upper", "ucase")
-	reg(stringMap(strings.ToLower, false), "lowerUTF8")
-	reg(stringMap(strings.ToUpper, false), "upperUTF8")
+	reg(unicodeMap(strings.ToLower), "lowerUTF8")
+	reg(unicodeMap(strings.ToUpper), "upperUTF8")
 	reg(stringMap(reverseBytes, true), "reverse")
 	reg(buildToFixedString, "toFixedString")
 	regCI(buildLength, "length")
@@ -96,18 +96,53 @@ func requireString(name string, args []*expr, positions ...int) error {
 // keep FixedString arguments FixedString, like ClickHouse.
 func stringMap(f func(string) string, keepsLength bool) builder {
 	return func(c *compiler, name string, args []*expr) (*expr, error) {
-		if err := wantArgs(name, args, 1, 1); err != nil {
+		rt, err := stringMapType(name, args, keepsLength)
+		if err != nil {
 			return nil, err
-		}
-		if err := requireString(name, args, 0); err != nil {
-			return nil, err
-		}
-		rt := chtype.TString
-		if t := base(args[0]); keepsLength && t.Kind == chtype.FixedString {
-			rt = t
 		}
 		return strict(args, rt, func(v []any) (any, error) { return f(v[0].(string)), nil }), nil
 	}
+}
+
+// unicodeMap builds lowerUTF8 and upperUTF8 from a strings.Map mapping.
+func unicodeMap(f func(string) string) builder {
+	return func(c *compiler, name string, args []*expr) (*expr, error) {
+		rt, err := stringMapType(name, args, false)
+		if err != nil {
+			return nil, err
+		}
+		return strict(args, rt, func(v []any) (any, error) {
+			s := v[0].(string)
+			return caseMapped(f(s), s), nil
+		}), nil
+	}
+}
+
+// caseMapped returns r, s mapped by strings.Map, as a boxed result.
+// strings.Map builds r in a buffer of len(s)+4 B, grown by append if r
+// is longer, and some runes map to fewer bytes (KELVIN SIGN to 'k') or
+// more ('ȿ' to 'Ȿ'). A result that shrank is copied under the piece
+// rule, and one that outgrew the buffer is copied out of its spare room.
+func caseMapped(r, s string) any {
+	if len(r) > len(s)+utf8.UTFMax {
+		return chtype.CopyValue(r)
+	}
+	return chtype.DetachValue(r, s)
+}
+
+// stringMapType checks a String -> String function's argument and
+// returns its result type.
+func stringMapType(name string, args []*expr, keepsLength bool) (chtype.Type, error) {
+	if err := wantArgs(name, args, 1, 1); err != nil {
+		return chtype.Type{}, err
+	}
+	if err := requireString(name, args, 0); err != nil {
+		return chtype.Type{}, err
+	}
+	if t := base(args[0]); keepsLength && t.Kind == chtype.FixedString {
+		return t, nil
+	}
+	return chtype.TString, nil
 }
 
 func buildToFixedString(c *compiler, name string, args []*expr) (*expr, error) {
@@ -286,7 +321,7 @@ func substringBuilder(utf bool) builder {
 			if utf {
 				return strings.Join(units[start:end], ""), nil
 			}
-			return s[start:end], nil
+			return chtype.DetachValue(s[start:end], s), nil
 		}), nil
 	}
 }
@@ -616,7 +651,8 @@ func countMatches(re *regexp.Regexp, s string) (matches, matched uint64) {
 	return matches, matched
 }
 
-func replaceRegexpOne(name string, re *regexp.Regexp, s, r string) (string, error) {
+// replaceRegexpOne replaces the first match of re in s.
+func replaceRegexpOne(name string, re *regexp.Regexp, s, r string) (any, error) {
 	loc := re.FindStringSubmatchIndex(s)
 	if loc == nil {
 		return s, nil
@@ -627,6 +663,11 @@ func replaceRegexpOne(name string, re *regexp.Regexp, s, r string) (string, erro
 		return "", err
 	}
 	out := re.ExpandString(nil, chReplacement(r), s, loc)
+	if len(out) == 0 && (loc[0] == 0 || loc[1] == len(s)) {
+		// Only one side of s is left, and the concatenation returns it
+		// as a piece of s.
+		return chtype.DetachValue(s[:loc[0]]+s[loc[1]:], s), nil
+	}
 	return s[:loc[0]] + string(out) + s[loc[1]:], nil
 }
 
@@ -667,13 +708,24 @@ func splitStrings(args []*expr) *expr {
 		} else {
 			parts = strings.Split(s, sep)
 		}
+		detach := sep != "" && len(s) >= splitDetachMin
 		out := make([]any, len(parts))
 		for i, p := range parts {
-			out[i] = p
+			if detach {
+				out[i] = chtype.DetachValue(p, s)
+			} else {
+				out[i] = p
+			}
 		}
 		return out, nil
 	})
 }
+
+// splitDetachMin is the smallest source whose split parts are detached.
+// The parts of a smaller one cover it together, and one taken out of the
+// array holds at most this much more than its charge; copying each part
+// cost splitByChar 13% (19% with a separate copy of its bytes).
+const splitDetachMin = 4 << 10
 
 // trimBuilder implements trimBoth/trimLeft/trimRight(s[, chars]); the
 // default trims spaces.
@@ -696,7 +748,7 @@ func trimBuilder(left, right bool) builder {
 			if right {
 				s = strings.TrimRight(s, cut)
 			}
-			return s, nil
+			return chtype.DetachValue(s, v[0].(string)), nil
 		}), nil
 	}
 }

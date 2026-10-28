@@ -260,11 +260,15 @@ func exactConvert(v any, from, to chtype.Type) (any, bool) {
 	}
 	if s, ok := v.(string); ok && (fu.Kind == chtype.String || fu.Kind == chtype.FixedString) && tu.Kind == chtype.FixedString {
 		// FixedString equality ignores trailing zero bytes (zero padding).
-		s = strings.TrimRight(s, "\x00")
-		if len(s) > tu.N {
+		trim := strings.TrimRight(s, "\x00")
+		switch {
+		case len(trim) > tu.N:
 			return nil, false
+		case len(trim) == tu.N:
+			// Unpadded, the trim is a piece of s.
+			return chtype.DetachValue(trim, s), true
 		}
-		return s + strings.Repeat("\x00", tu.N-len(s)), true
+		return trim + strings.Repeat("\x00", tu.N-len(trim)), true
 	}
 	if s, ok := v.(string); ok && isStringKind(fu.Kind) && !isStringKind(tu.Kind) {
 		// Strings compare with other types by parsing them into that type

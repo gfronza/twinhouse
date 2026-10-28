@@ -214,7 +214,7 @@ func TestMemoryLimitZeroIsUnlimited(t *testing.T) {
 func TestMemoryLimitCountsSubqueryResults(t *testing.T) {
 	te := newTestEnv(t)
 	wantMemoryLimit(t, te, "SELECT count() FROM numbers(10) WHERE number IN (SELECT number FROM numbers(100000)) SETTINGS max_memory_usage = 1000000", nil)
-	te.expectRows("SELECT count() FROM numbers(10) WHERE number IN (SELECT number FROM numbers(100000)) SETTINGS max_memory_usage = 10000000", "10")
+	te.expectRows("SELECT count() FROM numbers(10) WHERE number IN (SELECT number FROM numbers(100000)) SETTINGS max_memory_usage = 20000000", "10")
 }
 
 // A view in another database is planned on a copy of the query (withDB),
@@ -273,8 +273,8 @@ func TestViewMemoryUsageLimitsApplyViews(t *testing.T) {
 				cfg.MaxMemoryUsage, cfg.ViewMemoryUsage, cfg.InlineViews = c.maxMem, c.viewMem, false
 			})
 			te.exec("CREATE TABLE src (n UInt64) ENGINE = MergeTree ORDER BY n")
-			te.exec("CREATE TABLE dst (x UInt64) ENGINE = MergeTree ORDER BY x")
-			te.exec("CREATE MATERIALIZED VIEW mv TO dst AS SELECT arrayJoin(range(n)) AS x FROM src")
+			te.exec("CREATE TABLE dst (xs Array(UInt64)) ENGINE = MergeTree ORDER BY tuple()")
+			te.exec("CREATE MATERIALIZED VIEW mv TO dst AS SELECT range(n) AS xs FROM src")
 			src, err := te.cat.Table("default", "src")
 			if err != nil {
 				t.Fatal(err)
@@ -282,12 +282,12 @@ func TestViewMemoryUsageLimitsApplyViews(t *testing.T) {
 			ctx := context.Background()
 			err = te.e.ApplyViews(ctx, src, []storage.Row{{uint64(100_000)}}, []string{"r1"})
 			if ce := cherr.As(err); ce == nil || ce.Code != cherr.MemoryLimitExceeded {
-				t.Fatalf("ApplyViews of 100000 output rows: %v", err)
+				t.Fatalf("ApplyViews of a 100000-element output row: %v", err)
 			}
 			if err := te.e.ApplyViews(ctx, src, []storage.Row{{uint64(1000)}, {uint64(1000)}}, []string{"r2", "r3"}); err != nil {
 				t.Fatalf("ApplyViews of small rows: %v", err)
 			}
-			te.expectRows("SELECT count() FROM dst", "2000")
+			te.expectRows("SELECT count(), sum(length(xs)) FROM dst", "2\t2000")
 		})
 	}
 }

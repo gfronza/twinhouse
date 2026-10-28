@@ -127,9 +127,16 @@ func TestTopNMatchesStableSort(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, keep := range []uint64{0, 1, uint64(r.Intn(n + 1)), uint64(n), uint64(n + 1 + r.Intn(5)), keepAll} {
-				got, total, err := sortRows(q, &sliceIter{rows: slices.Clone(numbered)}, 1, items, keep)
+				it, kept, total, err := sortRows(q, &sliceIter{rows: slices.Clone(numbered)}, 1, items, keep, rowCharge{})
 				if err != nil {
 					t.Fatal(err)
+				}
+				var got [][]any
+				for row, err := it.next(); err == nil; row, err = it.next() {
+					got = append(got, row)
+				}
+				if kept != len(got) {
+					t.Fatalf("kept %d, read %d", kept, len(got))
 				}
 				wantKept := want[:min(keep, uint64(n))]
 				if total != uint64(n) || !slices.Equal(rowIDs(got), rowIDs(wantKept)) {

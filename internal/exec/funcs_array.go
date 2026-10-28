@@ -142,15 +142,26 @@ func buildArrayStringConcat(c *compiler, name string, args []*expr) (*expr, erro
 			sep = v[1].(string)
 		}
 		var parts []string
+		var last any
 		for _, e := range v[0].([]any) {
 			if e != nil {
 				parts = append(parts, valueToString(c.q, e, et))
+				last = e
 			}
 		}
-		if len(parts) > 1 {
-			if err := checkResultSize(name, satMul(uint64(len(parts)-1), uint64(len(sep)))); err != nil {
-				return nil, err
+		switch len(parts) {
+		case 0:
+			return "", nil
+		case 1:
+			// Join returns a lone part as it is: a FixedString's trim is a
+			// piece of its padded value.
+			if s, ok := last.(string); ok {
+				return chtype.DetachValue(parts[0], s), nil
 			}
+			return parts[0], nil
+		}
+		if err := checkResultSize(name, satMul(uint64(len(parts)-1), uint64(len(sep)))); err != nil {
+			return nil, err
 		}
 		return strings.Join(parts, sep), nil
 	}), nil
@@ -388,27 +399,33 @@ func sideBuilder(leftSide, utf bool) builder {
 		}
 		return strict(args, chtype.TString, func(v []any) (any, error) {
 			s := v[0].(string)
+			if !utf {
+				n := sideLength(asInt(v[1]), len(s))
+				if leftSide {
+					return chtype.DetachValue(s[:n], s), nil
+				}
+				return chtype.DetachValue(s[len(s)-n:], s), nil
+			}
 			var units []string
-			if utf {
-				for _, r := range s {
-					units = append(units, string(r))
-				}
-			} else {
-				for i := 0; i < len(s); i++ {
-					units = append(units, s[i:i+1])
-				}
+			for _, r := range s {
+				units = append(units, string(r))
 			}
-			n, l := int(asInt(v[1])), len(units)
-			if n < 0 {
-				n = max(0, l+n)
-			}
-			n = min(n, l)
+			n, l := sideLength(asInt(v[1]), len(units)), len(units)
 			if leftSide {
 				return strings.Join(units[:n], ""), nil
 			}
 			return strings.Join(units[l-n:], ""), nil
 		}), nil
 	}
+}
+
+// sideLength is how many of l units left(s, n) or right(s, n) keep: a
+// negative n drops that many from the other side.
+func sideLength(n int64, l int) int {
+	if n < 0 {
+		return int(max(0, int64(l)+n))
+	}
+	return int(min(n, int64(l)))
 }
 
 func buildRepeat(c *compiler, name string, args []*expr) (*expr, error) {

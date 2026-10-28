@@ -14,6 +14,7 @@ import (
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
 	"github.com/gfronza/twinhouse/internal/format"
 	"github.com/gfronza/twinhouse/internal/limits"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
@@ -270,6 +271,7 @@ type planState struct {
 	depth int
 	// nodesLeft is how many more nodes the expanded query may have.
 	nodesLeft int
+	consts    constCharge
 }
 
 // maxQueryExpandedNodes bounds the whole expanded query: the nodes of all
@@ -335,10 +337,10 @@ func (q *query) planSelect(s *sqlparse.SelectStmt, env *planEnv) (*relation, err
 		}
 		rels[i] = r
 	}
-	return unionRelations(rels, s.UnionOps)
+	return unionRelations(q, rels, s.UnionOps)
 }
 
-func unionRelations(rels []*relation, ops []string) (*relation, error) {
+func unionRelations(q *query, rels []*relation, ops []string) (*relation, error) {
 	n := len(rels[0].cols)
 	cols := make([]format.Column, n)
 	for i := 0; i < n; i++ {
@@ -375,7 +377,7 @@ func unionRelations(rels []*relation, ops []string) (*relation, error) {
 	open := func() (rowIter, error) {
 		var it rowIter = &unionIter{rels: rels, convs: convs, idx: -1}
 		if distinct {
-			it = &distinctIter{in: it, width: n, seen: map[string]struct{}{}}
+			it = newDistinctIter(q, it, n)
 		}
 		return it, nil
 	}
@@ -730,6 +732,7 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 	orders := s.OrderBy
 	distinct := s.Distinct
 	hasLimitBy := s.LimitBy != nil
+	sortCols := newHeldColumns(selX, orderX, limitByX)
 	open := func() (rowIter, error) {
 		it, err := src.open(req)
 		if err != nil {
@@ -755,7 +758,7 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 		extra := append(append([]*expr{}, orderX...), limitByX...)
 		it = &projectIter{in: it, exprs: selX, extra: extra}
 		if distinct {
-			it = &distinctIter{in: it, width: width, seen: map[string]struct{}{}}
+			it = newDistinctIter(q, it, width)
 		}
 		var dropped uint64
 		if len(orderX) > 0 {
@@ -763,16 +766,18 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 			if hasLimit && !hasLimitBy {
 				keep = satAdd(offset, limit)
 			}
-			sorted, total, err := sortRows(q, it, width, orders, keep)
+			ch := sortCols.charge(q.mem.NewAccount())
+			sorted, kept, total, err := sortRows(q, it, width, orders, keep, ch)
 			it.close()
 			if err != nil {
 				return nil, err
 			}
-			it = &sliceIter{rows: sorted}
-			dropped = total - uint64(len(sorted))
+			it = sorted
+			dropped = total - uint64(kept)
 		}
 		if hasLimitBy {
-			it = &limitByIter{in: it, keyFrom: width + len(orderX), keyTo: width + len(orderX) + len(limitByX), limit: lbLimit, offset: lbOffset, counts: map[string]uint64{}}
+			it = &limitByIter{in: it, keyFrom: width + len(orderX), keyTo: width + len(orderX) + len(limitByX), limit: lbLimit, offset: lbOffset,
+				counts: map[string]uint64{}, acct: q.mem.NewAccount()}
 		}
 		if hasLimit || offset > 0 {
 			it = &limitIter{in: it, limit: limit, hasLimit: hasLimit, offset: offset, stats: stats,
@@ -1001,6 +1006,11 @@ type distinctIter struct {
 	in    rowIter
 	width int
 	seen  map[string]struct{}
+	acct  *memtrack.Account
+}
+
+func newDistinctIter(q *query, in rowIter, width int) *distinctIter {
+	return &distinctIter{in: in, width: width, seen: map[string]struct{}{}, acct: q.mem.NewAccount()}
 }
 
 func (d *distinctIter) next() ([]any, error) {
@@ -1017,18 +1027,25 @@ func (d *distinctIter) next() ([]any, error) {
 		if _, ok := d.seen[k]; ok {
 			continue
 		}
+		if err := d.acct.Grow(keyEntry(setEntry, len(k))); err != nil {
+			return nil, err
+		}
 		d.seen[k] = struct{}{}
 		return row, nil
 	}
 }
 
-func (d *distinctIter) close() { d.in.close() }
+func (d *distinctIter) close() {
+	d.in.close()
+	d.acct.Close()
+}
 
 type limitByIter struct {
 	in             rowIter
 	keyFrom, keyTo int
 	limit, offset  uint64
 	counts         map[string]uint64
+	acct           *memtrack.Account
 }
 
 func (l *limitByIter) next() ([]any, error) {
@@ -1042,7 +1059,12 @@ func (l *limitByIter) next() ([]any, error) {
 			b = aggstate.AppendKey(b, v)
 		}
 		k := string(b)
-		n := l.counts[k]
+		n, ok := l.counts[k]
+		if !ok {
+			if err := l.acct.Grow(keyEntry(indexEntry, len(k))); err != nil {
+				return nil, err
+			}
+		}
 		l.counts[k] = n + 1
 		if n >= l.offset && n < l.offset+l.limit {
 			return row, nil
@@ -1050,7 +1072,10 @@ func (l *limitByIter) next() ([]any, error) {
 	}
 }
 
-func (l *limitByIter) close() { l.in.close() }
+func (l *limitByIter) close() {
+	l.in.close()
+	l.acct.Close()
+}
 
 type limitIter struct {
 	in       rowIter
@@ -1069,7 +1094,19 @@ type limitIter struct {
 	preCounted uint64
 }
 
+// skipper is an iterator that can pass over rows without returning them.
+type skipper interface {
+	// skip passes over up to n rows and returns how many it passed.
+	skip(n uint64) uint64
+}
+
 func (l *limitIter) next() ([]any, error) {
+	if l.seen < l.offset {
+		if sk, ok := l.in.(skipper); ok {
+			l.seen += sk.skip(l.offset - l.seen)
+			l.stats.rowsBeforeLimit = l.seen
+		}
+	}
 	for {
 		if l.done || (l.hasLimit && l.seen >= l.offset+l.limit) {
 			if !l.done && l.drain {
@@ -1131,20 +1168,30 @@ func (t *trimIter) close() { t.in.close() }
 type group struct {
 	keys []any
 	accs []*acc
+	// mem is what the group itself is charged (see aggCharge).
+	mem int64
 }
 
 // runAggregation consumes it and returns an iterator over the
 // post-aggregation rows (GROUP BY keys followed by aggregate results).
-func runAggregation(q *query, it rowIter, ac *aggContext) (*aggOutIter, error) {
+func runAggregation(q *query, it rowIter, ac *aggContext) (_ *aggOutIter, err error) {
+	ch := newAggCharge(q.mem.NewAccount(), ac)
+	defer func() {
+		if err != nil {
+			ch.acct.Close()
+		}
+	}()
 	groups := map[string]*group{}
 	var order []*group
-	newGroup := func(keys []any) *group {
+	newGroup := func(keys []any) (*group, error) {
 		g := &group{keys: keys, accs: make([]*acc, len(ac.calls))}
 		for i, c := range ac.calls {
 			g.accs[i] = c.newAcc()
+			g.accs[i].mem = ch.acct
 		}
+		from := cap(order)
 		order = append(order, g)
-		return g
+		return g, ch.newGroup(g, from, cap(order))
 	}
 	var kb []byte
 	for n := 0; ; n++ {
@@ -1170,8 +1217,13 @@ func runAggregation(q *query, it rowIter, ac *aggContext) (*aggOutIter, error) {
 		}
 		g, ok := groups[string(kb)]
 		if !ok {
-			g = newGroup(keys)
+			if g, err = newGroup(keys); err != nil {
+				return nil, err
+			}
 			groups[string(kb)] = g
+			if err := ch.indexed(len(kb)); err != nil {
+				return nil, err
+			}
 		}
 		for i, c := range ac.calls {
 			if err := c.feed(g.accs[i], row); err != nil {
@@ -1179,13 +1231,16 @@ func runAggregation(q *query, it rowIter, ac *aggContext) (*aggOutIter, error) {
 			}
 		}
 	}
+	ch.built()
 	if len(order) == 0 && len(ac.keys) == 0 {
-		newGroup(nil)
+		if _, err := newGroup(nil); err != nil {
+			return nil, err
+		}
 	}
 	if err := loadMembers(ac, order); err != nil {
 		return nil, err
 	}
-	return &aggOutIter{ac: ac, order: order}, nil
+	return &aggOutIter{ac: ac, order: order, acct: ch.acct}, nil
 }
 
 // loadMembers loads the stored set members that the groups' results need.
@@ -1210,9 +1265,18 @@ type aggOutIter struct {
 	ac    *aggContext
 	order []*group
 	pos   int
+	// acct holds the groups not yet emitted, and the one emitted last:
+	// out, released at the next call, as a reader that streams (ARRAY
+	// JOIN, a join probe) may hold its row until then.
+	acct *memtrack.Account
+	out  int64
 }
 
 func (a *aggOutIter) next() ([]any, error) {
+	if a.acct != nil {
+		a.acct.Shrink(a.out)
+		a.out = 0
+	}
 	if a.pos >= len(a.order) {
 		return nil, io.EOF
 	}
@@ -1228,37 +1292,74 @@ func (a *aggOutIter) next() ([]any, error) {
 		}
 		row[len(a.ac.keys)+j] = v
 	}
+	if a.acct != nil {
+		a.out = g.bytes()
+	}
 	return row, nil
 }
 
-func (a *aggOutIter) close() { a.order = nil }
+func (a *aggOutIter) close() {
+	a.order = nil
+	a.acct.Close()
+}
 
 // keepAll makes sortRows keep every row.
 const keepAll = math.MaxUint64
 
 // sortRows reads it and sorts by the ORDER BY values stored after the first
 // width columns of each row, like sort.SliceStable. It returns only the
-// first keep rows of that order; total counts every input row.
-func sortRows(q *query, it rowIter, width int, items []sqlparse.OrderItem, keep uint64) (rows [][]any, total uint64, err error) {
-	o := rowOrder{width: width, items: items}
-	if keep == keepAll {
-		total, err = eachRow(q, it, func(row []any) { rows = append(rows, row) })
+// first keep rows of that order, kept of them, through an iterator that
+// releases each row's charge after it returns it; total counts every input
+// row. On error sortRows closes ch.acct.
+func sortRows(q *query, it rowIter, width int, items []sqlparse.OrderItem, keep uint64, ch rowCharge) (_ rowIter, kept int, total uint64, err error) {
+	defer func() {
 		if err != nil {
-			return nil, 0, err
+			ch.acct.Close()
+		}
+	}()
+	o := newRowOrder(width, items)
+	switch {
+	case keep == keepAll && ch.acct == nil:
+		var rows [][]any
+		if total, err = eachRow(q, it, func(row []any) error {
+			rows = append(rows, row)
+			return nil
+		}); err != nil {
+			return nil, 0, 0, err
 		}
 		o.sortStable(rows)
-		return rows, total, nil
+		return &sliceIter{rows: rows}, len(rows), total, nil
+	case keep == keepAll:
+		return fullSort(q, it, o, newSortCharge(ch))
 	}
-	t := &topN{order: o, keep: keep}
+	t := newTopN(o, keep, ch)
 	if total, err = eachRow(q, it, t.add); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	return t.sorted(), total, nil
+	rows := t.sorted()
+	if ch.acct == nil {
+		return &sliceIter{rows: rows}, len(rows), total, nil
+	}
+	return &topNIter{rows: rows, t: t}, len(rows), total, nil
+}
+
+// fullSort is sortRows of every row, charged to ch.
+func fullSort(q *query, it rowIter, o rowOrder, ch *sortCharge) (_ rowIter, kept int, total uint64, err error) {
+	var rows []sortedRow
+	total, err = eachRow(q, it, func(row []any) (err error) {
+		rows, err = ch.hold(rows, row)
+		return err
+	})
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	o.sortHeld(rows)
+	return &sortedIter{rows: rows, acct: ch.acct}, len(rows), total, nil
 }
 
 // eachRow calls fn for every row of it, checking for cancellation every
 // 1024 rows, and returns the number of rows.
-func eachRow(q *query, it rowIter, fn func(row []any)) (uint64, error) {
+func eachRow(q *query, it rowIter, fn func(row []any) error) (uint64, error) {
 	var n uint64
 	for {
 		row, err := it.next()
@@ -1268,7 +1369,9 @@ func eachRow(q *query, it rowIter, fn func(row []any)) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		fn(row)
+		if err := fn(row); err != nil {
+			return 0, err
+		}
 		n++
 		if n&1023 == 0 {
 			if err := q.ctx.Err(); err != nil {
@@ -1282,29 +1385,59 @@ func eachRow(q *query, it rowIter, fn func(row []any)) (uint64, error) {
 // width columns.
 type rowOrder struct {
 	width int
-	items []sqlparse.OrderItem
+	keys  []orderKey
 }
 
-// sortStable sorts rows like sort.SliceStable. The comparison is written
-// out in the closure because a call to compare per comparison costs about
-// 3% on large sorts.
-func (o rowOrder) sortStable(rows [][]any) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		for k, it := range o.items {
-			nullsFirst := it.NullsFirst != nil && *it.NullsFirst
-			if c := compareOrder(a[o.width+k], b[o.width+k], it.Desc, nullsFirst); c != 0 {
-				return c < 0
-			}
+// orderKey is how one ORDER BY item compares: compareOrder's arguments.
+type orderKey struct {
+	hint int
+	desc bool
+}
+
+func newRowOrder(width int, items []sqlparse.OrderItem) rowOrder {
+	keys := make([]orderKey, len(items))
+	for i, it := range items {
+		hint := 1
+		if it.Desc {
+			hint = -1
 		}
-		return false
-	})
+		if it.NullsFirst != nil && *it.NullsFirst {
+			hint = -hint
+		}
+		keys[i] = orderKey{hint: hint, desc: it.Desc}
+	}
+	return rowOrder{width: width, keys: keys}
+}
+
+// sortStable sorts rows like sort.SliceStable.
+func (o rowOrder) sortStable(rows [][]any) {
+	sort.SliceStable(rows, func(i, j int) bool { return o.less(rows[i], rows[j]) })
+}
+
+// sortHeld is sortStable for a limited full sort's rows.
+func (o rowOrder) sortHeld(rows []sortedRow) {
+	sort.SliceStable(rows, func(i, j int) bool { return o.less(rows[i].row, rows[j].row) })
+}
+
+// less reports whether a sorts before b. sortStable and sortHeld share it.
+// It does not inline (chtype.CompareHint alone is over half the budget);
+// the extra call per comparison measured within noise on BenchmarkOrderBy.
+func (o rowOrder) less(a, b []any) bool {
+	a, b = a[o.width:], b[o.width:]
+	for k, key := range o.keys {
+		if c := chtype.CompareHint(a[k], b[k], key.hint); c != 0 {
+			return c < 0 != key.desc
+		}
+	}
+	return false
 }
 
 func (o rowOrder) compare(a, b []any) int {
-	for k, it := range o.items {
-		nullsFirst := it.NullsFirst != nil && *it.NullsFirst
-		if c := compareOrder(a[o.width+k], b[o.width+k], it.Desc, nullsFirst); c != 0 {
+	for k, key := range o.keys {
+		if c := chtype.CompareHint(a[o.width+k], b[o.width+k], key.hint); c != 0 {
+			if key.desc {
+				return -c
+			}
 			return c
 		}
 	}
@@ -1325,56 +1458,126 @@ type topN struct {
 	// replacement seqs is nil when the heap is rows in descending order.
 	seqs []uint64
 	n    uint64 // rows added so far
+	// ch is charged the rows held (see topN.charge); shared counts the
+	// held rows that hold each array, tuple or map, strs each string they
+	// share.
+	ch           rowCharge
+	shared, strs map[uintptr]sharedValue
+	// fixed is set when the rows hold fixed-size values only.
+	fixed bool
 }
 
-func (t *topN) add(row []any) {
+func newTopN(o rowOrder, keep uint64, ch rowCharge) *topN {
+	return &topN{order: o, keep: keep, ch: ch, fixed: ch.sz != nil && ch.sz.fixedOnly()}
+}
+
+func (t *topN) add(row []any) error {
 	switch {
 	case t.keep == 0:
 		// holds nothing; the row is only counted
 	case !t.heap && uint64(len(t.rows)) < t.keep:
-		t.rows = append(t.rows, row)
+		if err := t.hold(row); err != nil {
+			return err
+		}
 	default:
 		if !t.heap {
-			t.buildHeap()
+			if err := t.buildHeap(); err != nil {
+				return err
+			}
 		}
 		if t.order.compare(row, t.rows[0]) < 0 {
 			if t.seqs == nil {
-				t.rankRows()
+				if err := t.rankRows(); err != nil {
+					return err
+				}
 			}
-			t.rows[0], t.seqs[0] = row, t.n
-			t.down(0)
+			if err := t.replaceTop(row); err != nil {
+				return err
+			}
 		}
 	}
 	t.n++
+	return nil
+}
+
+// hold appends row to the collected rows and charges it. A row that fits
+// is appended inline: appendCharged's generic body does not inline, and
+// the call cost 3.6–4.6% on BenchmarkOrderByLargeLimit/PresortedOffset.
+func (t *topN) hold(row []any) (err error) {
+	if len(t.rows) < cap(t.rows) {
+		t.rows = append(t.rows, row)
+	} else if t.rows, err = appendCharged(t.ch.acct, t.rows, row, sliceHeader); err != nil {
+		return err
+	}
+	if t.ch.sz == nil {
+		return nil
+	}
+	if t.fixed {
+		return t.ch.acct.Grow(t.ch.sz.slots(row) - sliceHeader)
+	}
+	return t.charge(row)
+}
+
+// replaceTop puts row in place of the heap's top, which it evicts. Rows
+// of fixed-size values only are charged the same: a sort's rows come from
+// one projection, so they have one width.
+func (t *topN) replaceTop(row []any) error {
+	if !t.fixed {
+		if err := t.charge(row); err != nil {
+			return err
+		}
+		t.drop(t.rows[0])
+	}
+	t.rows[0], t.seqs[0] = row, t.n
+	t.down(0)
+	return nil
 }
 
 // buildHeap turns the collected rows, in arrival order, into the heap.
 // Already sorted rows (as with OFFSET paging over the sort key) only need
 // reversing; the order is then their rank, so seqs can wait.
-func (t *topN) buildHeap() {
+func (t *topN) buildHeap() error {
 	t.heap = true
 	if slices.IsSortedFunc(t.rows, t.order.compare) {
 		slices.Reverse(t.rows)
-		return
+		return nil
 	}
-	t.seqs = make([]uint64, len(t.rows))
+	if err := t.makeSeqs(); err != nil {
+		return err
+	}
 	for i := range t.seqs {
 		t.seqs[i] = uint64(i)
 	}
 	for i := len(t.rows)/2 - 1; i >= 0; i-- {
 		t.down(i)
 	}
+	return nil
 }
 
 // rankRows sets each seq of the reversed sorted rows to the row's rank.
 // Ranks keep the arrival order of equal rows and stay below the arrival
 // number of any later row.
-func (t *topN) rankRows() {
-	t.seqs = make([]uint64, len(t.rows))
+func (t *topN) rankRows() error {
+	if err := t.makeSeqs(); err != nil {
+		return err
+	}
 	for i := range t.seqs {
 		t.seqs[i] = uint64(len(t.rows) - 1 - i)
 	}
+	return nil
 }
+
+// makeSeqs allocates and charges seqs, one per held row.
+func (t *topN) makeSeqs() error {
+	if err := t.ch.acct.Grow(seqsBytes(len(t.rows))); err != nil {
+		return err
+	}
+	t.seqs = make([]uint64, len(t.rows))
+	return nil
+}
+
+// seqsBytes is what seqs of n rows take.
+func seqsBytes(n int) int64 { return memtrack.Bytes(8 * int64(n)) }
 
 // cmp orders rows[i] and rows[j] by their ORDER BY values, then by seq.
 func (t *topN) cmp(i, j int) int {
@@ -1420,6 +1623,7 @@ func (t *topN) sorted() [][]any {
 		// Back to seq order first, which is arrival order among equal rows,
 		// so a stable sort of presorted input stays cheap.
 		sort.Sort(t)
+		t.ch.acct.Shrink(seqsBytes(len(t.seqs)))
 		t.seqs = nil
 		if strictlyDescending(t.rows, t.order) {
 			slices.Reverse(t.rows)

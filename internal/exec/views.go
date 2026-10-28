@@ -3,8 +3,10 @@ package exec
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
+	"unsafe"
 
 	"github.com/gfronza/twinhouse/internal/catalog"
 	"github.com/gfronza/twinhouse/internal/cherr"
@@ -106,48 +108,112 @@ func (q *query) applyView(v *catalog.View, src *catalog.Table, rows []storage.Ro
 	if err != nil {
 		return err
 	}
+	// The plan is dropped when the rows are applied.
+	defer q.plan.consts.release(q.plan.consts.mark())
 	vp, err := q.planView(v, sel, src, target)
 	if err != nil {
 		return cherr.Wrap(cherr.As(err).Code, err, "materialized view %s", v.FullName())
 	}
 	name := v.FullName()
-	var batch []storage.MergeRow
-	// ch holds one source row's output until it is converted into batch.
-	ch := newRowCharge(q.mem.NewAccount(), vp.rel.cols)
-	defer ch.acct.Close()
+	vb := &viewBatch{q: q, target: target, ch: newRowCharge(q.mem.NewAccount(), tableColumns(target))}
+	defer vb.ch.acct.Close()
 	for i, r := range rows {
-		vp.mv.rows = []storage.Row{r}
-		out, err := vp.rel.collectFirst(q, ch, 0, 0)
-		if err != nil {
-			return cherr.Wrap(cherr.As(err).Code, err, "materialized view %s", name)
-		}
-		for idx, o := range out {
-			row, present := make([]any, len(target.Columns)), make([]bool, len(target.Columns))
-			for oi, ti := range vp.mapping {
-				val, ok, err := q.convertTo(o[oi], vp.rel.cols[oi].Type, target.Columns[ti].Type)
-				if err != nil {
-					return cherr.Wrap(cherr.As(err).Code, err, "materialized view %s: column %s", name, target.Columns[ti].Name)
-				}
-				row[ti], present[ti] = val, ok
-			}
-			if err := vp.builder.complete(row, present); err != nil {
-				return err
-			}
-			batch = append(batch, storage.MergeRow{Row: row, Source: storage.SourceRef{View: name, RowID: rowIDs[i]}, Index: idx})
-		}
-		ch.acct.Close()
-		ch.sz.forget()
-		if len(batch) >= mergeBatch {
-			if err := q.e.cfg.Store.Merge(q.ctx, target, batch); err != nil {
-				return err
-			}
-			batch = nil
+		if err := q.applyViewRow(vp, vb, r, storage.SourceRef{View: name, RowID: rowIDs[i]}); err != nil {
+			return err
 		}
 	}
-	if len(batch) > 0 {
-		return q.e.cfg.Store.Merge(q.ctx, target, batch)
+	return vb.flush()
+}
+
+// applyViewRow runs a view over one source row and queues its output rows,
+// numbered from 0. The output is not collected first: a source row can
+// fan out to more rows than fit in memory.
+func (q *query) applyViewRow(vp *viewPlan, vb *viewBatch, r storage.Row, src storage.SourceRef) error {
+	vp.mv.rows = []storage.Row{r}
+	it, err := vp.rel.open()
+	if err != nil {
+		return cherr.Wrap(cherr.As(err).Code, err, "materialized view %s", src.View)
+	}
+	defer it.close()
+	for idx := 0; ; idx++ {
+		if err := q.ctx.Err(); err != nil {
+			return cherr.Wrap(cherr.Timeout, err, "materialized view %s: query cancelled", src.View)
+		}
+		o, err := it.next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return cherr.Wrap(cherr.As(err).Code, err, "materialized view %s", src.View)
+		}
+		row, err := q.viewOutputRow(vp, vb.target, o, src.View)
+		if err != nil {
+			return err
+		}
+		if err := vb.add(storage.MergeRow{Row: row, Source: src, Index: idx}); err != nil {
+			return cherr.Wrap(cherr.As(err).Code, err, "materialized view %s", src.View)
+		}
+	}
+}
+
+// viewOutputRow converts a view output row into a complete target row.
+func (q *query) viewOutputRow(vp *viewPlan, target *catalog.Table, o []any, name string) (storage.Row, error) {
+	row, present := make([]any, len(target.Columns)), make([]bool, len(target.Columns))
+	for oi, ti := range vp.mapping {
+		val, ok, err := q.convertTo(o[oi], vp.rel.cols[oi].Type, target.Columns[ti].Type)
+		if err != nil {
+			return nil, cherr.Wrap(cherr.As(err).Code, err, "materialized view %s: column %s", name, target.Columns[ti].Name)
+		}
+		row[ti], present[ti] = val, ok
+	}
+	if err := vp.builder.complete(row, present); err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+// viewBatch is a view's output rows waiting for Store.Merge, which takes
+// them mergeBatch at a time, even inside one source row's output: Merge
+// applies each (source row, key, index) once, so the split cannot double
+// count. The queued rows are charged to ch until they are merged.
+type viewBatch struct {
+	q      *query
+	target *catalog.Table
+	rows   []storage.MergeRow
+	ch     rowCharge
+}
+
+// mergeRowSlot is a MergeRow's slot in the batch.
+const mergeRowSlot = int64(unsafe.Sizeof(storage.MergeRow{}))
+
+// add queues mr and merges the batch once it is full.
+func (b *viewBatch) add(mr storage.MergeRow) error {
+	var err error
+	if b.rows, err = appendCharged(b.ch.acct, b.rows, mr, mergeRowSlot); err != nil {
+		return err
+	}
+	if b.ch.acct != nil {
+		// The row's header is in its slot.
+		if err := b.ch.acct.Grow(b.ch.sz.size(mr.Row) - sliceHeader); err != nil {
+			return err
+		}
+	}
+	if len(b.rows) >= mergeBatch {
+		return b.flush()
 	}
 	return nil
+}
+
+// flush merges the queued rows and releases them.
+func (b *viewBatch) flush() error {
+	if len(b.rows) == 0 {
+		return nil
+	}
+	err := b.q.e.cfg.Store.Merge(b.q.ctx, b.target, b.rows)
+	b.rows = nil
+	b.ch.acct.Close()
+	b.ch.sz.forget()
+	return err
 }
 
 // viewSelect parses (and caches) a view's SELECT.

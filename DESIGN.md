@@ -504,8 +504,11 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   client can fix and resend the data. A block holds up to
   `min_insert_block_size_rows` rows (default 1048449) or about
   `min_insert_block_size_bytes` (default 256 MiB) of values (0 disables a
-  bound; both 0 → `max_insert_block_size` rows); an INSERT larger than one
-  block can leave earlier blocks written. A block is then written in storage
+  bound; both 0 → `max_insert_block_size` rows). When the client does not
+  set `min_insert_block_size_bytes`, a block of a memory-limited query also
+  ends at min(256 MiB, a quarter of `max_memory_usage`) of estimated memory
+  (Query memory, deviation (f)). An INSERT larger than one block can leave
+  earlier blocks written. A block is then written in storage
   batches of 1000 rows, each followed by inline view application; a storage
   failure mid-block can leave part of the block written (DynamoDB has no
   cross-batch transactions). When inline view application fails after the
@@ -639,10 +642,24 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   in a `SETTINGS` clause a different zone is `NOT_IMPLEMENTED` (the server
   formats results in the request's zone).
 * **Query memory (`max_memory_usage`)** (`internal/memtrack`): each query
-  accounts the memory its materialized state holds. So far that is the rows
-  a SELECT collects (its result and subquery results, held until the query
-  ends) and a materialized view's output for one source row. When the next
-  charge would pass `max_memory_usage`, the query fails with
+  accounts the memory its materialized state holds: the rows a SELECT
+  collects (its result and subquery results) and the sets of IN
+  subqueries, whose rows stream into the set, until the query ends;
+  sort buffers (a full sort's rows until they are read out, a top-N sort's
+  kept rows); GROUP BY's groups and aggregate states (set members,
+  `groupArray` lists, kept values; each group's until its row is out);
+  DISTINCT, UNION DISTINCT and LIMIT BY key sets; a JOIN's right side while
+  the join runs; an INSERT's block until it is written; the source rows a
+  `POPULATE` applies its view to and the rows a `DELETE` deletes, until
+  their batch is applied (a batch also ends at a quarter of the limit, as
+  an INSERT block does); a materialized view's output rows until they are
+  merged; and the constants a plan holds (literals, folded expressions
+  such as `range(1000000)`, a value several of them share once, and the
+  sets of constant IN lists) while the plan is kept (a view's plan for
+  each block until the block is applied, else until the query ends), so a
+  query full of large constants fails as it is planned.
+  DynamoDB read-ahead pages and loaded set members are not counted yet.
+  When the next charge would pass `max_memory_usage`, the query fails with
   `MEMORY_LIMIT_EXCEEDED` (241, HTTP 500) and ClickHouse 25.8's text, e.g.
   `Query memory limit exceeded: would use 21.37 MiB (attempt to allocate
   chunk of 4.17 MiB bytes), maximum: 19.07 MiB`. ClickHouse appends the
@@ -655,17 +672,18 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   1, `1e9` is 1000000000, `-1` fails with 70). An unquoted `DEFAULT`
   drops the setting (in `SET`, from the session), so the server default
   applies; as in ClickHouse, it wins over a value for the same setting in
-  the same clause or `SET`, wherever it is written. Precedence: `SETTINGS` clause, then URL or session, then the
-  server default (`exec.Config.MaxMemoryUsage` for statements,
-  `ViewMemoryUsage` for the stream worker's `ApplyViews`; views applied
-  inline share the INSERT's limit). Both defaults are 0 (unlimited) for
-  now. As in ClickHouse, which clause sets the limit depends on where it
-  is. In a SELECT, the statement's clause (written after `FORMAT`, or
-  after a parenthesized last branch) applies, then the last branch's own,
-  which wins. A clause inside parentheses, or of an earlier branch, is
-  validated and ignored. In `INSERT ... SELECT`, the INSERT's own, then
-  the first SELECT branch outside parentheses whose clause sets it.
-  `CREATE TABLE ... AS SELECT` follows the SELECT rule.
+  the same clause or `SET`, wherever it is written. Precedence: `SETTINGS`
+  clause, then URL or session, then the server default
+  (`exec.Config.MaxMemoryUsage` for statements, `ViewMemoryUsage` for the
+  stream worker's `ApplyViews`; views applied inline share the INSERT's
+  limit). Both defaults are 0 (unlimited) for now. As in ClickHouse,
+  which clause sets the limit depends on where it is. In a SELECT, the
+  statement's clause (written after `FORMAT`, or after a parenthesized
+  last branch) applies, then the last branch's own, which wins. A clause
+  inside parentheses, or of an earlier branch, is validated and ignored.
+  In `INSERT ... SELECT`, the INSERT's own, then the first SELECT branch
+  outside parentheses whose clause sets it. `CREATE TABLE ... AS SELECT`
+  follows the SELECT rule.
   Known deviations:
   (a) **Lower only.** When the server default is above 0, a client (URL,
   session or `SET`, `SETTINGS` clause) may lower the limit but not raise it
@@ -679,12 +697,66 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   (c) **Estimates, not allocator counts.** Memory is estimated where state
   is materialized, from the Go size of each value; per-row temporaries and
   encoder state are not counted. So 241 can fire at a different point, and
-  for a different amount, than in ClickHouse. A short part of a long string
-  (`substring`, `left`, `splitByChar(...)[i]` and the like) keeps the whole
-  string alive but is charged only its own bytes.
-  (d) `max_memory_usage_for_user`, `max_memory_usage_for_all_queries` and
-  `max_bytes_before_external_sort/group_by` are read like
-  `max_memory_usage` (a bad value fails the same way) and then ignored.
+  for a different amount, than in ClickHouse. twinhouse's in-memory rows
+  and values also take several times ClickHouse's columnar memory (about
+  370 B per GROUP BY group of a UInt64 key with `count()`, about 75 B per
+  sorted row of two UInt64, 24–32 B per array element), and the estimates
+  add up to about 1.7× that, so a limit sized for ClickHouse holds a
+  fraction of the rows: at 32 MB, GROUP BY holds about 75k groups where
+  ClickHouse holds about 500k. A value rows share is charged once while
+  they come close together (a holder remembers the last four values of
+  each column); one shared by rows further apart, or by two columns of a
+  collected result (`SELECT s, s`), is charged in each. A top-N tells
+  strings apart by box, so one boxed anew over bytes another kept row
+  holds is charged again. A piece of a string (`substring`,
+  `left`/`right`, `trim*`, a `replaceRegexpOne` that drops a prefix or a
+  suffix, a FixedString without its zero padding, and a
+  `lowerUTF8`/`upperUTF8` result that came out shorter than its source, as
+  it is built in a buffer the source's size; one that grew past that
+  buffer is copied) stays a view of its source only when it leaves under
+  64 B of it unused and is at least 4/5 of it; otherwise it is copied out,
+  as in ClickHouse. So a kept view holds under 64 B more than its own
+  bytes (at most 1.25× them), and a piece cut d times in a row (nested
+  calls, subquery aliases) under 64·d B more. Each cut is checked only
+  against the string it was cut from, so this is not bounded by the limit:
+  N kept pieces cut d times hold up to N·64·d B more (100k 4 B pieces cut
+  101 times from 5300 B held about 480 MiB at 30.5 MiB).
+  `splitByChar`/`splitByString` parts of a source under 4 KiB stay views
+  of it (together they cover it), so a string taken out of such a split
+  may hold up to 4 KiB more. This is not bounded by the limit either: N
+  such strings kept (`groupArray(splitByChar(...)[2])`) hold up to N × 4
+  KiB at any limit (30000 held about 90 MiB at 4 MB). A constant is
+  charged with the plan and again, once, by each holder other than a sort
+  that keeps rows holding it. A row an aggregation or a sort has just
+  returned stays charged until the next one is read, so a holder reading
+  it counts it twice meanwhile (a scalar subquery over one large
+  `groupArray` needs about twice the array).
+  (d) **No spilling.** A sort or aggregation larger than the limit fails
+  with 241 where ClickHouse can spill to disk
+  (`max_bytes_before_external_*`, or the
+  `max_bytes_ratio_before_external_*` defaults; at small limits 25.8 often
+  fails with 241 too). `max_bytes_before_external_sort/group_by` are read
+  like `max_memory_usage` (a bad value fails the same way) and then
+  ignored, as are `max_memory_usage_for_user` and
+  `max_memory_usage_for_all_queries`.
+  `max_bytes_ratio_before_external_sort/group_by` are accepted and ignored
+  without checking the value (ClickHouse parses a Float64: `'abc'` fails
+  there with 27).
+  (d2) **Every ORDER BY sorts.** twinhouse sorts, and so holds, every row
+  of an ORDER BY without a LIMIT in the same SELECT, including sorts
+  ClickHouse skips: a subquery's ORDER BY its query does not need (under
+  `count()` or an aggregate, `query_plan_remove_redundant_sorting`), one an
+  outer LIMIT turns into a top-N, and a table read by its sorting key
+  (which ClickHouse streams with `optimize_read_in_order`; it sorts
+  `numbers()` as twinhouse does). Such a query can fail with 241 where
+  ClickHouse holds nearly nothing, e.g. `SELECT count() FROM (SELECT number
+  FROM numbers(10000000) ORDER BY number DESC)` at 32 MB.
+  (e) **`uniq` is exact.** Its state keeps every distinct value, so it can
+  hit 241 where ClickHouse's bounded sketch would not.
+  (f) **INSERT block bound.** Unless `min_insert_block_size_bytes` is set,
+  an INSERT block also ends at a quarter of the query's limit in estimated
+  bytes (at most 256 MiB), so blocks (the unit of INSERT atomicity) can be
+  smaller than ClickHouse's on small deployments.
 * **Comparison semantics** (verified against ClickHouse 25.8): enums
   compare with enums and numbers by their numeric value, as do ORDER BY,
   `min`/`max`/`argMin`/`argMax` (also their states and
@@ -1080,7 +1152,13 @@ source row** (a one-row block; aggregate states merge associatively so the
 result is identical) and calls `Store.Merge` with
 `SourceRef{View, RowID}`. Output columns are matched to target columns **by
 name** (ClickHouse behaviour); missing target columns get defaults; values
-are converted to target column types.
+are converted to target column types. The output streams into `Store.Merge`
+500 rows at a time, even inside one source row's output, so a source row
+that fans out to millions of rows runs in bounded memory; Merge applies each
+(`SourceRef`, target key, output index) once, so the split cannot double
+count. A record whose application fails part way (e.g. a 241, after which
+the stream worker dead-letters it) can leave part of its output applied, as
+a failed ClickHouse view leaves its earlier blocks.
 
 `Engine.ApplyViews(table, rows, rowIDs)` is called by:
 

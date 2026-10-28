@@ -250,10 +250,12 @@ const (
 // block (a client may fix the data and resend it). A block ends after
 // min_insert_block_size_rows rows (default 1048449) or about
 // min_insert_block_size_bytes (default 256 MiB) of values (0 disables a
-// bound; with both 0, max_insert_block_size rows); an INSERT larger than one
-// block can leave its earlier blocks written, as in ClickHouse. A
-// storage failure while a block is written can leave part of it written
-// (DynamoDB has no multi-batch transactions).
+// bound; with both 0, max_insert_block_size rows). When the client did not
+// set min_insert_block_size_bytes, a block of a memory-limited query also
+// ends at insertBlockEstimate bytes of its estimated memory. An INSERT
+// larger than one block can leave its earlier blocks written, as in
+// ClickHouse. A storage failure while a block is written can leave part of
+// it written (DynamoDB has no multi-batch transactions).
 type inserter struct {
 	q        *query
 	t        *catalog.Table
@@ -262,7 +264,12 @@ type inserter struct {
 	bytes    int64
 	maxRows  int64 // <= 0: unbounded
 	maxBytes int64 // <= 0: unbounded
-	total    uint64
+	// ch charges the queued rows; est is their estimate and maxEst its
+	// bound (<= 0: unbounded).
+	ch     rowCharge
+	est    int64
+	maxEst int64
+	total  uint64
 }
 
 func (q *query) newInserter(t *catalog.Table) (*inserter, error) {
@@ -273,6 +280,10 @@ func (q *query) newInserter(t *catalog.Table) (*inserter, error) {
 	in := &inserter{q: q, t: t, b: b,
 		maxRows:  q.settingInt("min_insert_block_size_rows", defaultInsertBlockRows),
 		maxBytes: q.settingInt("min_insert_block_size_bytes", defaultInsertBlockBytes),
+		ch:       newRowCharge(q.lifetimeAccount(), tableColumns(t)),
+	}
+	if q.settings["min_insert_block_size_bytes"] == "" {
+		in.maxEst = insertBlockEstimate(q.mem.Limit())
 	}
 	if in.maxRows <= 0 && in.maxBytes <= 0 {
 		// No squashing: blocks are what the input format produces.
@@ -287,20 +298,84 @@ func (in *inserter) add(row []any, present []bool) error {
 	if err := in.b.complete(row, present); err != nil {
 		return err
 	}
-	in.rows = append(in.rows, storage.Row(row))
+	var err error
+	if in.rows, err = appendCharged(in.ch.acct, in.rows, storage.Row(row), sliceHeader); err != nil {
+		return err
+	}
 	for _, v := range row {
 		in.bytes += valueBytes(v)
 	}
-	if (in.maxRows > 0 && int64(len(in.rows)) >= in.maxRows) || (in.maxBytes > 0 && in.bytes >= in.maxBytes) {
+	if in.ch.acct != nil {
+		if err := in.charge(row); err != nil {
+			return err
+		}
+	}
+	if (in.maxRows > 0 && int64(len(in.rows)) >= in.maxRows) || (in.maxBytes > 0 && in.bytes >= in.maxBytes) ||
+		(in.maxEst > 0 && in.est >= in.maxEst) {
 		return in.flush()
 	}
 	return nil
 }
 
-// flush writes the queued block.
+// charge charges a queued row; its header is in the block's row array.
+func (in *inserter) charge(row []any) error {
+	n := in.ch.sz.size(row)
+	in.est += n
+	return in.ch.acct.Grow(n - sliceHeader)
+}
+
+// batchCharge charges the rows a statement batches for the store (the
+// source rows a POPULATE applies its view to, the rows a DELETE deletes)
+// until the batch is flushed. Like an INSERT block, a batch also ends at
+// insertBlockEstimate bytes, so one batch of large rows cannot pass the
+// limit.
+type batchCharge struct {
+	ch       rowCharge
+	est, max int64
+}
+
+func (q *query) newBatchCharge(t *catalog.Table) *batchCharge {
+	return &batchCharge{ch: newRowCharge(q.mem.NewAccount(), tableColumns(t)), max: insertBlockEstimate(q.mem.Limit())}
+}
+
+// add charges a batched row and extra bytes kept with it, and reports
+// whether the batch should be flushed.
+func (b *batchCharge) add(row storage.Row, extra int64) (bool, error) {
+	if b.ch.acct == nil {
+		return false, nil
+	}
+	n := b.ch.sz.size(row) + extra
+	b.est += n
+	return b.max > 0 && b.est >= b.max, b.ch.acct.Grow(n)
+}
+
+// release uncharges the flushed (or dropped) batch.
+func (b *batchCharge) release() {
+	b.est = 0
+	b.ch.acct.Close()
+	b.ch.sz.forget()
+}
+
+// maxInsertBlockEstimate caps the estimated bytes of an INSERT block whose
+// byte bound the client did not set.
+const maxInsertBlockEstimate = 256 << 20
+
+// insertBlockEstimate is the estimated bytes at which an INSERT block of a
+// query limited to limit bytes ends (0: no bound). A quarter of the limit
+// leaves the rest for the views applied to the block and the store's
+// buffers.
+func insertBlockEstimate(limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	return min(maxInsertBlockEstimate, limit/4)
+}
+
+// flush writes the queued block and releases it.
 func (in *inserter) flush() error {
 	rows := in.rows
 	in.rows, in.bytes = nil, 0
+	defer in.release()
 	for len(rows) > 0 {
 		n := min(len(rows), insertBatch)
 		if err := in.write(rows[:n]); err != nil {
@@ -309,6 +384,13 @@ func (in *inserter) flush() error {
 		rows = rows[n:]
 	}
 	return nil
+}
+
+// release uncharges the written (or failed) block.
+func (in *inserter) release() {
+	in.est = 0
+	in.ch.acct.Close()
+	in.ch.sz.forget()
 }
 
 // write stores one storage batch of a complete block and applies the
@@ -461,15 +543,11 @@ func (q *query) insertValues(t *catalog.Table, cols []int, values [][]sqlparse.E
 				row[ci], present[ci] = v, true
 				continue
 			}
-			x, err := c.compile(vals[i])
+			v, vt, err := q.evalValue(c, vals[i])
 			if err != nil {
 				return 0, err
 			}
-			v, err := x.eval(nil)
-			if err != nil {
-				return 0, err
-			}
-			if row[ci], present[ci], err = q.convertTo(v, x.t, t.Columns[ci].Type); err != nil {
+			if row[ci], present[ci], err = q.convertTo(v, vt, t.Columns[ci].Type); err != nil {
 				code := cherr.CannotParseText
 				if ce, ok := err.(*cherr.Error); ok {
 					code = ce.Code
@@ -485,6 +563,18 @@ func (q *query) insertValues(t *catalog.Table, cols []int, values [][]sqlparse.E
 		return 0, err
 	}
 	return in.total, nil
+}
+
+// evalValue compiles and evaluates a VALUES expression. The block keeps
+// the value, so the constants compiled for it are not kept charged.
+func (q *query) evalValue(c *compiler, e sqlparse.Expr) (any, chtype.Type, error) {
+	defer q.plan.consts.release(q.plan.consts.mark())
+	x, err := c.compile(e)
+	if err != nil {
+		return nil, chtype.Type{}, err
+	}
+	v, err := x.eval(nil)
+	return v, x.t, err
 }
 
 // parseValuesLiteral parses a plain VALUES literal (number, string, or an

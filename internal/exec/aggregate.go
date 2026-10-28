@@ -7,6 +7,7 @@ import (
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 )
 
@@ -228,7 +229,12 @@ type aggCall struct {
 	final    chtype.Type   // finalized result type
 	// sumType is the canonical kind of sum accumulators.
 	sumType chtype.Type
-	ctx     context.Context
+	// sized is set when the values of its arguments differ in size, so
+	// replacing a kept value changes the memory its state holds; kept is
+	// what a new state is charged for the values it keeps otherwise.
+	sized bool
+	kept  int64
+	ctx   context.Context
 }
 
 // aggContext collects GROUP BY keys and aggregate calls of one SELECT.
@@ -350,6 +356,8 @@ func newAggCall(ctx context.Context, spec aggSpec, name string, args []*expr) (*
 	if spec.base == "sum" {
 		call.sumType = removeNullable(final)
 	}
+	call.sized = !fixedSize(call.argTypes)
+	call.kept = call.fixedKeptBytes()
 	return call, nil
 }
 
@@ -365,6 +373,10 @@ type acc struct {
 	// a single stored state can be finalized from SetSize without loading.
 	pending *chtype.AggPartial
 	merged  int
+	// mem is charged what the state grows by (nil: not tracked); bytes is
+	// how much that is so far.
+	mem   *memtrack.Account
+	bytes int64
 }
 
 func (a *aggCall) newAcc() *acc {
@@ -432,42 +444,55 @@ func (a *aggCall) add(st *acc, vs []any) error {
 		p.Count++
 	case "min", "max":
 		if !p.HasValue || aggstate.ReplacesTyped(vs[0], p.Value, a.argType(0), a.spec.base == "min") {
-			p.Value, p.HasValue = vs[0], true
+			return a.keep(st, vs[0], nil)
 		}
 	case "any":
 		if !p.HasValue {
-			p.Value, p.HasValue = vs[0], true
+			return a.keep(st, vs[0], nil)
 		}
 	case "anyLast":
-		p.Value, p.HasValue = vs[0], true
+		return a.keep(st, vs[0], nil)
 	case "argMin", "argMax":
 		if !p.HasValue || aggstate.ReplacesTyped(vs[1], p.Key, a.argType(1), a.spec.base == "argMin") {
-			p.Value, p.Key, p.HasValue = vs[0], vs[1], true
+			return a.keep(st, vs[0], vs[1])
 		}
 	case "uniq", "uniqExact", "groupUniqArray":
 		var m any = vs[0]
 		if len(vs) > 1 {
 			m = append([]any(nil), vs...)
 		}
-		st.addMember(m)
+		return st.addMember(m)
 	case "groupArray":
-		p.List = append(p.List, vs[0])
+		return st.appendList(vs[0])
 	default:
 		return cherr.New(cherr.NotImplemented, "aggregate function %s is not supported", a.spec.base)
 	}
 	return nil
 }
 
-func (st *acc) addMember(m any) {
+// addMember adds m to the set unless it is a member already.
+func (st *acc) addMember(m any) error {
 	if st.members == nil {
 		st.members = map[string]struct{}{}
+		if err := st.charge(newSet); err != nil {
+			return err
+		}
 	}
 	k := aggstate.Key(m)
 	if _, ok := st.members[k]; ok {
-		return
+		return nil
 	}
 	st.members[k] = struct{}{}
-	st.p.Set = append(st.p.Set, m)
+	if st.mem == nil {
+		st.p.Set = append(st.p.Set, m)
+		return nil
+	}
+	if err := st.charge(keyEntry(setEntry, len(k))); err != nil {
+		return err
+	}
+	var err error
+	st.p.Set, err = st.appendValue(st.p.Set, m)
+	return err
 }
 
 func toSumKind(v any, t chtype.Type) any {
@@ -489,12 +514,15 @@ func (a *aggCall) mergeState(st *acc, in *chtype.AggPartial) error {
 		return cherr.New(cherr.TypeMismatch, "cannot merge state of %s in %s", in.Func, a.name)
 	}
 	if !aggstate.IsSetFunc(a.spec.base) {
-		return aggstate.Merge(a.ctx, st.p, in)
+		return a.mergeValues(st, in)
 	}
 	st.merged++
 	if st.merged == 1 && !in.SetLoaded {
 		st.pending = in
-		return nil
+		if st.mem == nil {
+			return nil
+		}
+		return st.charge(memtrack.Value(in))
 	}
 	if err := st.flushPending(a.ctx); err != nil {
 		return err
@@ -503,25 +531,28 @@ func (a *aggCall) mergeState(st *acc, in *chtype.AggPartial) error {
 	if err != nil {
 		return err
 	}
-	for _, v := range m {
-		st.addMember(v)
-	}
-	return nil
+	return st.addMembers(m)
 }
 
 func (st *acc) flushPending(ctx context.Context) error {
-	if st.pending == nil {
+	p := st.pending
+	if p == nil {
 		return nil
 	}
-	m, err := aggstate.Members(ctx, st.pending)
+	held := int64(0)
+	if st.mem != nil {
+		// What mergeState charged, before loading changes it.
+		held = memtrack.Value(p)
+	}
+	m, err := aggstate.Members(ctx, p)
 	if err != nil {
 		return err
 	}
 	st.pending = nil
-	for _, v := range m {
-		st.addMember(v)
+	if err := st.addMembers(m); err != nil {
+		return err
 	}
-	return nil
+	return st.charge(-held)
 }
 
 // load loads the stored set members that result will need. It is the part

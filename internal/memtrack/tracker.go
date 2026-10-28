@@ -13,6 +13,16 @@ import "sync/atomic"
 type Tracker struct {
 	limit atomic.Int64
 	used  atomic.Int64
+	// sample and sampleStep are a test hook (SetSampleHook).
+	sample     func(used int64)
+	sampleStep int64
+}
+
+// SetSampleHook makes Reserve call f with the reserved bytes each time they
+// pass a multiple of step. It is for tests, which set it before the tracker
+// is used; f may be called from several goroutines at once.
+func (t *Tracker) SetSampleHook(step int64, f func(used int64)) {
+	t.sample, t.sampleStep = f, step
 }
 
 // New returns a tracker with the given limit in bytes (0 = unlimited, as in
@@ -56,6 +66,9 @@ func (t *Tracker) Reserve(n int64) error {
 	if l := t.limit.Load(); l > 0 && u > l {
 		t.used.Add(-n)
 		return LimitExceeded(u, n, l)
+	}
+	if t.sample != nil && u/t.sampleStep > (u-n)/t.sampleStep {
+		t.sample(u)
 	}
 	return nil
 }

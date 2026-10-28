@@ -60,6 +60,15 @@ func (a *Account) Shrink(n int64) {
 	a.pending = 0
 }
 
+// Charged returns the bytes charged and not yet uncharged, reserved or
+// pending.
+func (a *Account) Charged() int64 {
+	if a == nil {
+		return 0
+	}
+	return a.reserved + a.pending
+}
+
 // Close releases everything the account reserved. It may be called more
 // than once, and the account may be charged again afterwards.
 func (a *Account) Close() {

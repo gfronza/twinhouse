@@ -148,6 +148,43 @@ func TestPushdownCap(t *testing.T) {
 	}
 }
 
+// IN sets larger than the range cap are read in place, not copied into key
+// tuples; the ranges are what they were with the copy. A large set alone
+// gives a full scan, another constraint on its column narrows it, and a
+// tuple set whose key part has few values still narrows the partitions.
+func TestPushdownOfLargeInSets(t *testing.T) {
+	te := newTestEnv(t)
+	te.exec(`CREATE TABLE ev (tenant String, user_id UInt64, ts DateTime) ENGINE = MergeTree ORDER BY (tenant, user_id, ts)`)
+	const big = "(SELECT toString(number) FROM numbers(20000))"
+	const pairs = "(SELECT toString(number % 3), number FROM numbers(20000))"
+	p := func(vs ...any) storage.KeyRange { return storage.KeyRange{Partition: vs} }
+	for _, c := range []struct {
+		where string
+		want  []storage.KeyRange
+	}{
+		{"tenant IN " + big, nil},
+		{"tenant IN " + big + " AND tenant = '7'", []storage.KeyRange{p("7")}},
+		{"tenant = '7' AND tenant IN " + big, []storage.KeyRange{p("7")}},
+		{"tenant = 'x' AND tenant IN " + big, []storage.KeyRange{}},
+		{"(tenant, user_id) IN " + pairs, []storage.KeyRange{p("0"), p("1"), p("2")}},
+		{"tenant IN ('2', '1', 'x') AND (tenant, user_id) IN " + pairs, []storage.KeyRange{p("2"), p("1")}},
+		{"tenant = 'a' AND user_id IN range(20000)", []storage.KeyRange{p("a")}},
+		{"tenant = 'a' AND user_id IN range(20000) AND user_id = 5",
+			[]storage.KeyRange{{Partition: []any{"a"}, SortPrefix: []any{uint64(5)}}}},
+	} {
+		te.exec("SELECT count() FROM ev WHERE " + c.where)
+		if got := te.spy.lastScan().Ranges; !rangesEqual(got, c.want) {
+			t.Errorf("WHERE %s:\n got  %s\n want %s", c.where, fmtRanges(got), fmtRanges(c.want))
+		}
+	}
+	te.exec("SELECT count() FROM ev WHERE (tenant, user_id) IN (SELECT toString(number % 3), number FROM numbers(6000))")
+	got := te.spy.lastScan().Ranges
+	if len(got) != 6000 || !rangesEqual(got[:2], []storage.KeyRange{
+		{Partition: []any{"0"}, SortPrefix: []any{uint64(0)}}, {Partition: []any{"0"}, SortPrefix: []any{uint64(3)}}}) {
+		t.Errorf("6000 pairs: got %d ranges, starting %s", len(got), fmtRanges(got[:min(2, len(got))]))
+	}
+}
+
 func TestProjectionAndScanOptions(t *testing.T) {
 	te := newTestEnv(t)
 	te.exec(`CREATE TABLE ev (tenant String, user_id UInt64, v String, w String, al String ALIAS concat(w, '!')) ENGINE = MergeTree ORDER BY (tenant, user_id)`)

@@ -1594,6 +1594,14 @@ func buildToString(c *compiler, name string, args []*expr) (*expr, error) {
 		tz, _ := args[1].val.(string)
 		from = withTZ(from, tz)
 	}
+	if from.Kind == chtype.FixedString {
+		// The trim is a piece of the padded value, which a kept result
+		// would hold.
+		return strict(args[:1], chtype.TString, func(v []any) (any, error) {
+			s := v[0].(string)
+			return chtype.DetachValue(strings.TrimRight(s, "\x00"), s), nil
+		}), nil
+	}
 	return strict(args[:1], chtype.TString, func(v []any) (any, error) {
 		return valueToString(c.q, v[0], from), nil
 	}), nil

@@ -7,6 +7,8 @@ import (
 	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/format"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
@@ -27,6 +29,10 @@ type joinSpec struct {
 	// using maps a left slot to the right slot it is coalesced with.
 	using map[int]int
 	right *source
+	// rightCols sizes the build rows: the right columns the query reads
+	// have their types; the others are measured, as the store leaves them
+	// nil or may return them.
+	rightCols []format.Column
 	// antiFill lists the key column pairs of an ANTI join: the emitted
 	// (unmatched) left row carries its key values in the right key columns
 	// too, like ClickHouse, instead of the right side's defaults.
@@ -282,6 +288,7 @@ func (q *query) joinTwo(left, right *source, j *sqlparse.JoinClause, where sqlpa
 				rightUsed[i-L] = true
 			}
 		}
+		spec.rightCols = buildColumns(right.sc.cols, rightUsed)
 		return right.finalize(&compiler{q: q, env: env, sc: right.sc, used: rightUsed})
 	}
 	out.open = func(req *storage.ScanRequest) (rowIter, error) {
@@ -296,6 +303,18 @@ func (q *query) joinTwo(left, right *source, j *sqlparse.JoinClause, where sqlpa
 		return startJoin(q, spec, rit, func() (rowIter, error) { return left.open(req) })
 	}
 	return out, nil
+}
+
+// buildColumns returns the columns that size a join's build rows: a column
+// the query does not read has no type, so its values are measured.
+func buildColumns(cols []scopeCol, used map[int]bool) []format.Column {
+	out := make([]format.Column, len(cols))
+	for i, c := range cols {
+		if used[i] {
+			out[i].Type = c.t
+		}
+	}
+	return out
 }
 
 func baseName(c scopeCol) string {
@@ -342,6 +361,7 @@ func startHashJoin(q *query, spec *joinSpec, rit rowIter, openLeft func() (rowIt
 	}
 	lit, err := openLeft()
 	if err != nil {
+		b.ch.acct.Close()
 		return nil, err
 	}
 	return &joinIter{q: q, spec: spec, b: b, in: lit, scratch: make([]any, spec.leftW+spec.rightW)}, nil
@@ -353,6 +373,12 @@ type joinBuild struct {
 	lists   [][]int        // the build rows of each key, in input order
 	matched []bool
 	key     []byte // reused key buffer
+	// ch charges what the build holds until the join closes. fixedRow is
+	// ch's size of every row when it does not depend on the values (0:
+	// it does).
+	ch       rowCharge
+	fixedRow int64
+	slots    int // the chunks' slots charged so far
 }
 
 // lookup returns the build rows whose key is key.
@@ -371,20 +397,45 @@ const chunkRows = 1024
 type chunkedRows struct {
 	chunks [][][]any
 	n      int
+	// rowCap is the rows the chunks hold room for; slots counts their
+	// slice headers: row slots and chunk slots.
+	rowCap, slots int
+	last          *[][]any // the chunk rows are added to
 }
 
 func (c *chunkedRows) add(r []any) {
+	if c.n == c.rowCap {
+		c.grow()
+	}
+	*c.last = append(*c.last, r)
+	c.n++
+}
+
+// grow makes room for one more row: a new chunk once the last one is full,
+// or a larger first chunk, grown like append grows a slice so that small
+// builds stay small.
+func (c *chunkedRows) grow() {
 	last := len(c.chunks) - 1
 	if last < 0 || len(c.chunks[last]) == chunkRows {
 		var chunk [][]any
 		if last >= 0 {
 			chunk = make([][]any, 0, chunkRows)
 		}
+		before := cap(c.chunks)
 		c.chunks = append(c.chunks, chunk)
+		c.rowCap += cap(chunk)
+		c.slots += cap(chunk) + cap(c.chunks) - before
 		last++
 	}
-	c.chunks[last] = append(c.chunks[last], r)
-	c.n++
+	if chunk := c.chunks[last]; len(chunk) == cap(chunk) {
+		// An exact capacity keeps the first chunk within chunkRows.
+		grown := make([][]any, len(chunk), min(grownCap(cap(chunk)), chunkRows))
+		copy(grown, chunk)
+		c.chunks[last] = grown
+		c.rowCap += cap(grown) - cap(chunk)
+		c.slots += cap(grown) - cap(chunk)
+	}
+	c.last = &c.chunks[last]
 }
 
 func (c *chunkedRows) at(i int) []any { return c.chunks[i/chunkRows][i%chunkRows] }
@@ -408,9 +459,24 @@ func (spec *joinSpec) appendKey(dst []byte, row []any, keys []*expr, convs []fun
 	return dst, true, nil
 }
 
-// build reads the right side into rows and indexes it by key.
+// build reads the right side into rows and indexes it by key. What it holds
+// is charged to the query until the join closes.
 func (spec *joinSpec) build(q *query, it rowIter) (*joinBuild, error) {
-	b := &joinBuild{index: map[string]int{}}
+	b := &joinBuild{index: map[string]int{}, ch: newRowCharge(q.mem.NewAccount(), spec.rightCols)}
+	if b.ch.sz != nil {
+		if n, ok := b.ch.sz.fixedRow(); ok {
+			b.fixedRow = n
+		}
+	}
+	if err := b.fill(q, spec, it); err != nil {
+		b.ch.acct.Close()
+		return nil, err
+	}
+	return b, nil
+}
+
+// fill reads the right side into b.
+func (b *joinBuild) fill(q *query, spec *joinSpec, it rowIter) error {
 	scratch := make([]any, spec.leftW+spec.rightW)
 	for {
 		r, err := it.next()
@@ -418,25 +484,42 @@ func (spec *joinSpec) build(q *query, it rowIter) (*joinBuild, error) {
 			break
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err := b.add(spec, scratch, r); err != nil {
-			return nil, err
+			return err
 		}
 		if b.rows.n&1023 == 0 {
 			if err := q.ctx.Err(); err != nil {
-				return nil, cherr.Wrap(cherr.Timeout, err, "query cancelled")
+				return cherr.Wrap(cherr.Timeout, err, "query cancelled")
 			}
 		}
 	}
+	// matched takes a byte per row.
+	if err := b.ch.acct.Grow(memtrack.Bytes(int64(b.rows.n))); err != nil {
+		return err
+	}
 	b.matched = make([]bool, b.rows.n)
-	return b, nil
+	return nil
 }
+
+// What a key costs the index besides its map entry (keyEntry): its slot in
+// lists (at most doubled) and its one-element list; each further row of the
+// key, its list element (at most doubled).
+const (
+	joinKeyFixed = 2*sliceHeader + memtrack.TinyBlock
+	joinKeyRow   = 16
+)
 
 // add stores r and indexes it by its key, evaluated over scratch: a reused
 // combined row whose left part stays empty. Key-less joins need no index.
 func (b *joinBuild) add(spec *joinSpec, scratch, r []any) error {
 	b.rows.add(r)
+	if b.ch.acct != nil && (b.rows.slots != b.slots || b.fixedRow == 0 || cap(r) != spec.rightW) {
+		if err := b.chargeRow(r, spec.rightW); err != nil {
+			return err
+		}
+	}
 	if len(spec.rightKeys) == 0 {
 		return nil
 	}
@@ -448,11 +531,29 @@ func (b *joinBuild) add(spec *joinSpec, scratch, r []any) error {
 	}
 	if li, found := b.index[string(key)]; found {
 		b.lists[li] = append(b.lists[li], b.rows.n-1)
-		return nil
+		return b.ch.acct.Grow(joinKeyRow)
 	}
 	b.index[string(key)] = len(b.lists)
 	b.lists = append(b.lists, []int{b.rows.n - 1})
-	return nil
+	return b.ch.acct.Grow(keyEntry(indexEntry, len(key)) + joinKeyFixed)
+}
+
+// chargeRow charges row r and the slots the rows gained since the last
+// row. When every row of width columns costs the same, a new slot is
+// charged that cost up front (at most a chunk ahead), so such a row adds
+// nothing when it arrives.
+func (b *joinBuild) chargeRow(r []any, width int) error {
+	slots := b.rows.slots - b.slots
+	b.slots = b.rows.slots
+	if b.fixedRow == 0 {
+		// The row's size counts its own slot.
+		return b.ch.acct.Grow(sliceHeader*int64(slots-1) + b.ch.sz.size(r))
+	}
+	n := b.fixedRow * int64(slots)
+	if cap(r) != width {
+		n += b.ch.sz.size(r) - b.fixedRow
+	}
+	return b.ch.acct.Grow(n)
 }
 
 // setSlots copies src into dst and clears the slots src does not reach.
@@ -696,4 +797,8 @@ func (j *joinIter) tail() ([]any, error) {
 	return nil, io.EOF
 }
 
-func (j *joinIter) close() { j.in.close() }
+// close closes the left side and releases the build.
+func (j *joinIter) close() {
+	j.in.close()
+	j.b.ch.acct.Close()
+}

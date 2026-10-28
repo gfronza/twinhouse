@@ -92,22 +92,16 @@ func checkSettingProbe(t *testing.T, ctx context.Context, ref, our *target, sql 
 // none.
 var memoryLimitBody = regexp.MustCompile(`^Code: 241\. DB::Exception: Query memory limit exceeded: would use \d+\.\d\d (B|KiB|MiB|GiB) \(attempt to allocate chunk of \d+\.\d\d (B|KiB|MiB|GiB) bytes\), maximum: 19\.07 MiB(: While executing \w+)?\. \(MEMORY_LIMIT_EXCEEDED\)`)
 
-// TestMemoryLimitMessage pins the 241 text. Each server runs a query that
-// passes the limit in a structure it accounts: the reference aggregates
-// (it streams a plain SELECT), twinhouse collects the result.
+// TestMemoryLimitMessage pins the 241 text, from an aggregate state that
+// passes the limit.
 func TestMemoryLimitMessage(t *testing.T) {
 	ref, our := requireTargets(t)
 	ctx := context.Background()
-	for _, c := range []struct {
-		tg  *target
-		sql string
-	}{
-		{ref, "SELECT length(groupArray(number)) FROM numbers(10000000) SETTINGS max_memory_usage = 20000000"},
-		{our, "SELECT number FROM numbers(10000000) SETTINGS max_memory_usage = 20000000"},
-	} {
-		r := c.tg.do(ctx, c.sql, reqOpts{})
+	const sql = "SELECT length(groupArray(number)) FROM numbers(10000000) SETTINGS max_memory_usage = 20000000"
+	for _, tg := range []*target{ref, our} {
+		r := tg.do(ctx, sql, reqOpts{})
 		if r.code != 241 || r.status != 500 || !memoryLimitBody.Match(r.body) {
-			t.Errorf("%s: %s\n  -> %s", c.tg.name, c.sql, r.describe())
+			t.Errorf("%s: %s\n  -> %s", tg.name, sql, r.describe())
 		}
 	}
 }

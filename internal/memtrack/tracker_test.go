@@ -1,6 +1,7 @@
 package memtrack
 
 import (
+	"slices"
 	"sync"
 	"testing"
 
@@ -174,6 +175,43 @@ func TestReadableSize(t *testing.T) {
 		if got := ReadableSize(c.n); got != c.want {
 			t.Errorf("ReadableSize(%d) = %q, want %q", c.n, got, c.want)
 		}
+	}
+}
+
+func TestSampleHookFiresOnEachStepPassed(t *testing.T) {
+	tr := New(100)
+	var got []int64
+	tr.SetSampleHook(10, func(used int64) { got = append(got, used) })
+	for _, n := range []int64{4, 4, 4, 25, 2} {
+		if err := tr.Reserve(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tr.Release(30)
+	_ = tr.Reserve(200) // over the limit: not reserved, no sample
+	if err := tr.Reserve(5); err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{12, 37, 14}; !slices.Equal(got, want) {
+		t.Fatalf("samples %v, want %v", got, want)
+	}
+}
+
+func TestAccountChargedCountsPendingBytes(t *testing.T) {
+	a := New(1 << 30).NewAccount()
+	if err := a.Grow(Chunk + 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Grow(7); err != nil {
+		t.Fatal(err)
+	}
+	a.Shrink(3)
+	if got := a.Charged(); got != Chunk+14 {
+		t.Fatalf("Charged() = %d, want %d", got, Chunk+14)
+	}
+	a.Close()
+	if got := a.Charged(); got != 0 {
+		t.Fatalf("after Close: %d", got)
 	}
 }
 

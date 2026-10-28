@@ -17,6 +17,9 @@ type expr struct {
 	val   any
 	// volatile marks non-deterministic expressions (never constant-folded).
 	volatile bool
+	// slot is 1 + the input column whose value it returns as is (the same
+	// box), or 0.
+	slot int
 }
 
 func constant(t chtype.Type, v any) *expr { return &expr{t: t, konst: true, val: v} }
@@ -29,7 +32,7 @@ func (x *expr) eval(row []any) (any, error) {
 }
 
 func slotExpr(i int, t chtype.Type) *expr {
-	return &expr{t: t, fn: func(row []any) (any, error) { return row[i], nil }}
+	return &expr{t: t, fn: func(row []any) (any, error) { return row[i], nil }, slot: i + 1}
 }
 
 // fold turns x into a constant when every argument is constant and nothing
@@ -148,7 +151,20 @@ func (c *compiler) resolveFP(id *sqlparse.Ident) string {
 
 func (c *compiler) fingerprint(e sqlparse.Expr) string { return fingerprint(e, c.resolveFP) }
 
+// compile compiles e and charges the constants the result holds (see
+// constCharge).
 func (c *compiler) compile(e sqlparse.Expr) (*expr, error) {
+	consts := &c.q.plan.consts
+	mark := consts.mark()
+	x, err := c.compileNode(e)
+	if err != nil {
+		consts.release(mark)
+		return nil, err
+	}
+	return x, consts.settle(c.q, mark, x)
+}
+
+func (c *compiler) compileNode(e sqlparse.Expr) (*expr, error) {
 	if c.agg != nil {
 		if x, ok, err := c.postAgg(e); ok || err != nil {
 			return x, err
@@ -642,6 +658,7 @@ func (c *compiler) scalarSubquery(sel *sqlparse.SelectStmt) (*expr, error) {
 			}
 			return constant(nt, nil), nil
 		}
+		c.q.plan.consts.pin(c.q, rows[0][0])
 		return constant(nt, rows[0][0]), nil
 	}
 	fields := make([]chtype.Field, len(cols))
@@ -652,7 +669,12 @@ func (c *compiler) scalarSubquery(sel *sqlparse.SelectStmt) (*expr, error) {
 	if len(rows) == 0 {
 		return nil, cherr.New(cherr.IncorrectResultOfScalarSubquery, "Scalar subquery returned empty result of type %s which cannot be Nullable", t.String())
 	}
-	return constant(t, append([]any(nil), rows[0]...)), nil
+	var v any = append([]any(nil), rows[0]...) // one box, pinned and held
+	c.q.plan.consts.pin(c.q, v)
+	for _, f := range rows[0] {
+		c.q.plan.consts.pin(c.q, f)
+	}
+	return constant(t, v), nil
 }
 
 // ClickHouse error codes not in cherr.

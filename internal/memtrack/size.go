@@ -1,6 +1,7 @@
 package memtrack
 
 import (
+	"math"
 	"time"
 	"unsafe"
 
@@ -87,6 +88,9 @@ func allocPointers(n int64) int64 {
 // backing array, not the elements' own allocations.
 func Slice(c int) int64 { return 24 + allocPointers(16*int64(c)) }
 
+// Pointers is the heap bytes of an array of n pointers.
+func Pointers(n int) int64 { return allocPointers(8 * int64(n)) }
+
 // Value is the heap bytes reachable from v beyond its own 16-byte slot.
 func Value(v any) int64 {
 	switch x := v.(type) {
@@ -162,7 +166,44 @@ func aggPartial(p *chtype.AggPartial) int64 {
 	return n
 }
 
-// MapEntry is the bytes one entry takes in a Go map whose key and value
-// slot is slot bytes: the slot and its control byte at the lowest load a
-// table has after it grows (7/16).
-func MapEntry(slot int64) int64 { return (slot+1)*16/7 + 1 }
+// Go maps (swiss tables) keep their entries in groups of eight slots after
+// an 8-byte control word. A table holds at most 1024 slots; when 7/8 of
+// them are full it doubles, or splits in two at the maximum, so at least
+// 7/16 of a map's slots are in use.
+const (
+	groupSlots    = 8
+	maxTableSlots = 1024
+	// mapHeader is a map's own struct.
+	mapHeader = 48
+)
+
+// mapSlot is the size of a map slot holding a key and value of those
+// sizes. A zero-size value at the end of the slot is padded.
+func mapSlot(key, value int64) int64 {
+	n := key + value
+	if value == 0 {
+		n++
+	}
+	return (n + 7) &^ 7
+}
+
+// MapEntry is the bytes one entry takes in a Go map whose keys and values
+// take key and value bytes in the slot: its share of a table's groups
+// array at the lowest load (7/16), at the table size whose array rounds up
+// most to its size class. The tables' own structs and directory add about
+// a byte.
+func MapEntry(key, value int64) int64 {
+	slot := mapSlot(key, value)
+	worst := 0.0
+	for slots := int64(2 * groupSlots); slots <= maxTableSlots; slots *= 2 {
+		groups := allocPointers(slots / groupSlots * (8 + groupSlots*slot))
+		worst = max(worst, float64(groups)/float64(slots))
+	}
+	return int64(math.Ceil(worst*16/7)) + 1
+}
+
+// NewMap is the bytes of a new map with key and value of those sizes: its
+// struct and its first group.
+func NewMap(key, value int64) int64 {
+	return Alloc(mapHeader) + allocPointers(8+groupSlots*mapSlot(key, value))
+}

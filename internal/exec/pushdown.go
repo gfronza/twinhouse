@@ -1,8 +1,10 @@
 package exec
 
 import (
+	"github.com/gfronza/twinhouse/internal/cherr"
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec/aggstate"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 	"github.com/gfronza/twinhouse/internal/sqlparse"
 	"github.com/gfronza/twinhouse/internal/storage"
 )
@@ -12,10 +14,44 @@ import (
 const maxKeyRanges = 10000
 
 // keyConstraint restricts a set of key columns (positions in the full key
-// pk ++ sk) to a set of value tuples.
+// pk ++ sk) to a set of value tuples: tuples, or the values of an IN set,
+// read in place so that a large set is not copied.
 type keyConstraint struct {
 	cols   []int
 	tuples [][]any
+	in     *valueSet
+	// pick is, for a set of tuples, the tuple element of each column.
+	pick []int
+}
+
+// size is the number of tuples.
+func (k *keyConstraint) size() int {
+	if k.in != nil {
+		return len(k.in.vals)
+	}
+	return len(k.tuples)
+}
+
+// at is the value of tuple i for column j.
+func (k *keyConstraint) at(i, j int) any {
+	switch {
+	case k.in == nil:
+		return k.tuples[i][j]
+	case k.pick == nil:
+		return k.in.vals[i]
+	}
+	return k.in.vals[i].([]any)[k.pick[j]]
+}
+
+// consistent reports whether tuple i agrees with assignment a on assigned
+// positions.
+func (k *keyConstraint) consistent(i int, a []any) bool {
+	for j, col := range k.cols {
+		if col < len(a) && aggstate.Key(k.at(i, j)) != aggstate.Key(a[col]) {
+			return false
+		}
+	}
+	return true
 }
 
 type keyBounds struct {
@@ -26,6 +62,8 @@ type keyBounds struct {
 // for a full scan and an empty slice when no row can match. Predicates are
 // always re-evaluated on the returned rows, so ranges may be a superset.
 func (q *query) pushdown(c *compiler, src *source, where sqlparse.Expr) ([]storage.KeyRange, error) {
+	// The constants compiled here are dropped once the ranges are built.
+	defer q.plan.consts.release(q.plan.consts.mark())
 	t := src.table
 	keyNames := append(append([]string{}, t.PartitionKey...), t.SortKey...)
 	if len(keyNames) == 0 {
@@ -146,6 +184,8 @@ func (q *query) pushdown(c *compiler, src *source, where sqlparse.Expr) ([]stora
 	}
 
 	// Walk the key in order, extending assignments while constraints exist.
+	acct := q.mem.NewAccount()
+	defer acct.Close()
 	assign := [][]any{{}}
 	depth := 0
 	for p := range keyNames {
@@ -161,7 +201,10 @@ func (q *query) pushdown(c *compiler, src *source, where sqlparse.Expr) ([]stora
 		if len(cover) == 0 {
 			break
 		}
-		next, overflow := extendAssignments(assign, p, cover)
+		next, overflow, err := extendAssignments(acct, assign, p, cover)
+		if err != nil {
+			return nil, err
+		}
 		if overflow {
 			if p < len(t.PartitionKey) {
 				return nil, nil
@@ -204,38 +247,27 @@ func (q *query) pushdown(c *compiler, src *source, where sqlparse.Expr) ([]stora
 }
 
 // extendAssignments extends each partial key assignment (values for key
-// positions < p) with the values for position p allowed by every constraint.
-func extendAssignments(assign [][]any, p int, cover []keyConstraint) ([][]any, bool) {
+// positions < p) with the values for position p allowed by every
+// constraint, in the order of the first constraint's tuples. The other
+// constraints' allowed values are charged to acct while they are held.
+func extendAssignments(acct *memtrack.Account, assign [][]any, p int, cover []keyConstraint) ([][]any, bool, error) {
 	var out [][]any
 	seen := map[string]bool{}
+	first := &cover[0]
+	idx := indexOf(first.cols, p)
 	for _, a := range assign {
-		var cands []any
-		for ci, k := range cover {
-			var vals []any
-			idx := indexOf(k.cols, p)
-			for _, tup := range k.tuples {
-				if !consistent(k.cols, tup, a) {
-					continue
-				}
-				vals = append(vals, tup[idx])
-			}
-			if ci == 0 {
-				cands = vals
+		allowed, held, err := allowedValues(acct, a, p, cover[1:])
+		if err != nil {
+			return nil, false, err
+		}
+		for i := range first.size() {
+			if !first.consistent(i, a) {
 				continue
 			}
-			allowed := map[string]bool{}
-			for _, v := range vals {
-				allowed[aggstate.Key(v)] = true
+			v := first.at(i, idx)
+			if !allowed.has(v) {
+				continue
 			}
-			var kept []any
-			for _, v := range cands {
-				if allowed[aggstate.Key(v)] {
-					kept = append(kept, v)
-				}
-			}
-			cands = kept
-		}
-		for _, v := range cands {
 			na := append(append(make([]any, 0, len(a)+1), a...), v)
 			k := aggstate.Key(na)
 			if seen[k] {
@@ -244,11 +276,64 @@ func extendAssignments(assign [][]any, p int, cover []keyConstraint) ([][]any, b
 			seen[k] = true
 			out = append(out, na)
 			if len(out) > maxKeyRanges {
-				return nil, true
+				acct.Shrink(held)
+				return nil, true, nil
 			}
 		}
+		acct.Shrink(held)
 	}
-	return out, false
+	return out, false, nil
+}
+
+// keySets are the values each constraint allows at a key position, by key.
+type keySets []map[string]struct{}
+
+func (s keySets) has(v any) bool {
+	if len(s) == 0 {
+		return true
+	}
+	k := aggstate.Key(v)
+	for _, m := range s {
+		if _, ok := m[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// allowedValues returns the values each constraint allows at position p
+// under assignment a, and what they were charged. An IN set of single
+// values allows its own keys, so they are not copied.
+func allowedValues(acct *memtrack.Account, a []any, p int, cover []keyConstraint) (keySets, int64, error) {
+	sets := make(keySets, len(cover))
+	held := int64(0)
+	for ci := range cover {
+		k := &cover[ci]
+		if k.in != nil && k.pick == nil {
+			sets[ci] = k.in.keys
+			continue
+		}
+		m := map[string]struct{}{}
+		idx := indexOf(k.cols, p)
+		for i := range k.size() {
+			if !k.consistent(i, a) {
+				continue
+			}
+			key := aggstate.Key(k.at(i, idx))
+			if _, ok := m[key]; ok {
+				continue
+			}
+			m[key] = struct{}{}
+			n := keyEntry(setEntry, len(key))
+			held += n
+			if err := acct.Grow(n); err != nil {
+				acct.Shrink(held)
+				return nil, 0, err
+			}
+		}
+		sets[ci] = m
+	}
+	return sets, held, nil
 }
 
 func indexOf(xs []int, v int) int {
@@ -258,16 +343,6 @@ func indexOf(xs []int, v int) int {
 		}
 	}
 	return -1
-}
-
-// consistent reports whether tup agrees with assignment a on assigned positions.
-func consistent(cols []int, tup []any, a []any) bool {
-	for i, col := range cols {
-		if col < len(a) && aggstate.Key(tup[i]) != aggstate.Key(a[col]) {
-			return false
-		}
-	}
-	return true
 }
 
 // inConstraint turns `key IN set` or `(k1, k2, ...) IN set` into a constraint.
@@ -307,31 +382,23 @@ func (q *query) inConstraint(c *compiler, n *sqlparse.BinaryExpr, keyOf func(sql
 	}
 	cc := c.child()
 	cc.used = nil
-	vals, err := cc.inValues(leftType, n.Right)
+	set, err := cc.inSet(leftType, n.Right)
+	if cherr.Is(err, cherr.MemoryLimitExceeded) {
+		return keyConstraint{}, false, err
+	}
 	if err != nil {
 		// Non-constant right sides are evaluated by the filter (or fail there).
 		return keyConstraint{}, false, nil
 	}
-	var con keyConstraint
-	var keep []int
+	con := keyConstraint{in: set}
 	for i, p := range positions {
 		if p >= 0 {
 			con.cols = append(con.cols, p)
-			keep = append(keep, i)
+			con.pick = append(con.pick, i)
 		}
 	}
-	tuple := leftType.Kind == chtype.Tuple
-	for _, v := range vals {
-		if !tuple {
-			con.tuples = append(con.tuples, []any{v})
-			continue
-		}
-		tv := v.([]any)
-		row := make([]any, len(keep))
-		for j, i := range keep {
-			row[j] = tv[i]
-		}
-		con.tuples = append(con.tuples, row)
+	if leftType.Kind != chtype.Tuple {
+		con.pick = nil
 	}
 	return con, true, nil
 }

@@ -40,9 +40,16 @@ type sizedColumn struct {
 	n     int
 }
 
-func newRowSizer(cols []format.Column) *rowSizer {
+func newRowSizer(cols []format.Column) *rowSizer { return newRowSizerOf(cols, nil) }
+
+// newRowSizerOf is newRowSizer, leaving out the columns skip marks: their
+// values are charged elsewhere.
+func newRowSizerOf(cols []format.Column, skip []bool) *rowSizer {
 	s := &rowSizer{width: len(cols)}
 	for i, c := range cols {
+		if skip != nil && skip[i] {
+			continue
+		}
 		if n, ok := memtrack.FixedValue(c.Type); ok {
 			s.fixed += n
 		} else if c.Type.IsString() {
@@ -120,6 +127,15 @@ func (c *sizedColumn) remember(box uintptr) {
 	b[0], b[1], b[2], b[3] = box, b[0], b[1], b[2]
 }
 
+// forget drops box from the boxes c remembers.
+func (c *sizedColumn) forget(box uintptr) {
+	for j := range c.boxes {
+		if c.boxes[j] == box {
+			c.boxes[j] = 0
+		}
+	}
+}
+
 // forget drops what s remembers of earlier rows, once the holder has
 // released them (their memory may be reused).
 func (s *rowSizer) forget() {
@@ -147,21 +163,14 @@ func newRowCharge(acct *memtrack.Account, cols []format.Column) rowCharge {
 	return rowCharge{acct: acct, sz: newRowSizer(cols)}
 }
 
-// grow appends row to a full rows and charges it. The header array append
-// allocates is charged first, while the old one is still live, and the old
-// one is released after the copy. A row that fits is appended inline
+// grow appends row to a full rows and charges it, with the header array
+// append allocates (appendCharged). A row that fits is appended inline
 // (collectFirst), so that charging it makes a single call (size).
 func (ch rowCharge) grow(rows [][]any, row []any) ([][]any, error) {
-	if ch.acct == nil {
-		return append(rows, row), nil
-	}
-	old, next := cap(rows), grownCap(cap(rows))
-	if err := ch.acct.Grow(sliceHeader * int64(next)); err != nil {
+	rows, err := appendCharged(ch.acct, rows, row, sliceHeader)
+	if err != nil || ch.acct == nil {
 		return rows, err
 	}
-	rows = append(rows, row)
-	// Release the old array, less any size-class rounding of the new.
-	ch.acct.Shrink(sliceHeader * int64(old+next-cap(rows)))
 	return rows, ch.acct.Grow(ch.sz.size(row) - sliceHeader)
 }
 

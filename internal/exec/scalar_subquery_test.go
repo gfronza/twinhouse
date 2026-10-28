@@ -87,10 +87,11 @@ func TestSubqueryCachesOnlyCompleteResults(t *testing.T) {
 	}
 	var vals []any
 	if n := scans(func() {
-		var err error
-		if vals, err = c.inValues(chtype.TString, all); err != nil {
+		set, err := c.inSet(chtype.TString, all)
+		if err != nil {
 			t.Fatal(err)
 		}
+		vals = set.vals
 	}); n != 1 {
 		t.Errorf("IN after a truncated scalar: %d scans, want 1", n)
 	}
@@ -107,8 +108,8 @@ func TestSubqueryCachesOnlyCompleteResults(t *testing.T) {
 			}
 		}
 		in := func() {
-			if vals, err := c.inValues(chtype.TString, one); err != nil || len(vals) != 1 {
-				t.Fatalf("IN: %v, %v", vals, err)
+			if set, err := c.inSet(chtype.TString, one); err != nil || len(set.vals) != 1 {
+				t.Fatalf("IN: %v, %v", set, err)
 			}
 		}
 		first, second := in, scalar

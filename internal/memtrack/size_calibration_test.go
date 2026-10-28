@@ -68,15 +68,16 @@ func rows(n, width int) func() (any, int64) {
 }
 
 // mapOf builds a map of n string keys the way GROUP BY and DISTINCT do (no
-// size hint) and estimates MapEntry(slot) plus each key's bytes.
-func mapOf[V any](n int, slot int64, val V) func() (any, int64) {
+// size hint) and estimates it as they do: NewMap, then MapEntry plus each
+// key's bytes. value is the size of V in a slot.
+func mapOf[V any](n int, value int64, val V) func() (any, int64) {
 	return func() (any, int64) {
 		m := map[string]V{}
-		est := int64(0)
+		est := NewMap(StringHeader, value)
 		for i := 0; i < n; i++ {
 			k := "key-" + strconv.Itoa(1_000_000+i)
 			m[k] = val
-			est += MapEntry(slot) + Alloc(int64(len(k)))
+			est += MapEntry(StringHeader, value) + Bytes(int64(len(k)))
 		}
 		return m, est
 	}
@@ -186,14 +187,58 @@ func TestEstimatesCoverLiveHeap(t *testing.T) {
 		{"row width 1", rows(n, 1)},
 		{"row width 4", rows(n, 4)},
 		{"row width 16", rows(n, 16)},
-		{"map[string]struct{}", mapOf(n, 16, struct{}{})},
-		{"map[string]*T", mapOf(n, 24, shared)},
-		{"map[string][]int", mapOf(n, 40, []int(nil))},
 	} {
 		measured, est := measure(c.build)
 		t.Logf("%-20s measured %10d estimate %10d ratio %.2f", c.name, measured, est, float64(est)/float64(max(measured, 1)))
 		if est < measured-heapNoise || float64(est) > 1.6*float64(measured) {
 			t.Errorf("%s: estimate %d for a live heap of %d (want between 1x and 1.6x)", c.name, est, measured)
+		}
+	}
+}
+
+// mapSizes are map sizes from 1000 to 2M entries: at and just after each
+// point where a table doubles or splits (7/8 of 2^k slots), and in between.
+func mapSizes() []int {
+	var ns []int
+	for slots := 1024; slots <= 4<<20; slots *= 2 {
+		full := slots / 8 * 7
+		for _, n := range []int{full, full + 1, full + full/3} {
+			if n >= 1000 && n <= 2_000_000 {
+				ns = append(ns, n)
+			}
+		}
+	}
+	return ns
+}
+
+// TestMapEntryCoversLiveHeap checks MapEntry over map sizes across the
+// points where a map grows, for the maps the engine keeps (sets, the
+// GROUP BY and join indexes, a map of slices): the estimate is never below
+// the live heap. It reaches about twice it just before a table grows.
+func TestMapEntryCoversLiveHeap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates about 300 MB")
+	}
+	shared := &state{}
+	// The first measurement of a run reads low (the runtime still frees
+	// its startup garbage).
+	measure(mapOf(10_000, 0, struct{}{}))
+	for _, c := range []struct {
+		name  string
+		build func(n int) func() (any, int64)
+	}{
+		{"map[string]struct{}", func(n int) func() (any, int64) { return mapOf(n, 0, struct{}{}) }},
+		{"map[string]int", func(n int) func() (any, int64) { return mapOf(n, 8, 1) }},
+		{"map[string]*T", func(n int) func() (any, int64) { return mapOf(n, 8, shared) }},
+		{"map[string][]int", func(n int) func() (any, int64) { return mapOf(n, 24, []int(nil)) }},
+	} {
+		for _, n := range mapSizes() {
+			measured, est := measure(c.build(n))
+			ratio := float64(est) / float64(max(measured, 1))
+			t.Logf("%-19s n=%8d measured %10d estimate %10d ratio %.2f", c.name, n, measured, est, ratio)
+			if est < measured-heapNoise || ratio > 2.1 {
+				t.Errorf("%s, %d entries: estimate %d for a live heap of %d (want between 1x and 2.1x)", c.name, n, est, measured)
+			}
 		}
 	}
 }

@@ -190,3 +190,6 @@ SELECT * FROM t SETTINGS;
 
 -- error: 47
 SELECT t.zzz FROM t;
+
+-- error: 241
+SELECT groupArray(number) FROM numbers(10000000) SETTINGS max_memory_usage = 20000000;

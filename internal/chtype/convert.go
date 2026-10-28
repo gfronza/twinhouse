@@ -429,7 +429,8 @@ func valueToString(t Type, v any) (any, error) {
 	case String:
 		return toStr(v), nil
 	case FixedString:
-		return strings.TrimRight(toStr(v), "\x00"), nil
+		s := toStr(v)
+		return DetachValue(strings.TrimRight(s, "\x00"), s), nil
 	case Array, Tuple, Map:
 		// Rendered piece by piece into a grown buffer: copy the bytes out
 		// of its slack, as the value may be kept.
