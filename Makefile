@@ -258,7 +258,11 @@ chbench-up:
 chbench-down:
 	$(CHBENCH_COMPOSE) down -v --remove-orphans
 
+# A run starts on a fresh DynamoDB Local: it slows writes to tables created
+# after a previous run's stream records (docs/clickhouse-comparison.md).
+# -skip-load reuses the data, so it keeps the running containers.
 chbench:
+	$(if $(findstring -skip-load,$(CHBENCH_ARGS)),,$(CHBENCH_COMPOSE) up -d --force-recreate --wait dynamodb-single chserver-single)
 	$(GO) run ./cmd/chbench -twinhouse http://localhost:$(CHBENCH_TH_PORT) \
 		-clickhouse http://localhost:$(CHBENCH_CH_PORT) $(CHBENCH_ARGS)
 
