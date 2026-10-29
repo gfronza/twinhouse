@@ -6,15 +6,19 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/gfronza/twinhouse/internal/chtype"
+	"github.com/gfronza/twinhouse/internal/memtrack"
 )
 
 // prettyEncoder implements Pretty and PrettyCompact (best effort: the layout
 // matches ClickHouse for common results; ClickHouse's colour and digit-group
 // highlighting are not reproduced). It buffers at most
 // output_format_pretty_max_rows rows: like ClickHouse it shows the first and
-// last halves of larger results.
+// last halves of larger results, and with 0 only the row count. The rows it
+// keeps are charged through Options.Charge after each block and released
+// by Finish.
 type prettyEncoder struct {
 	w          *bufio.Writer
 	cols       []Column
@@ -34,6 +38,11 @@ type prettyEncoder struct {
 	tail  []prettyRow // ring buffer of the last rows once head is full
 	tailN int         // next write position in tail
 	total int
+
+	// charge is Options.Charge; held is what it was charged, and kept
+	// the estimated bytes of the rows kept now.
+	charge     func(int64) error
+	held, kept int64
 }
 
 type prettyRow struct {
@@ -57,8 +66,9 @@ func newPrettyEncoder(name string, w io.Writer, cols []Column, opts Options) *pr
 		vMaxRows:   int(settingInt(s, "output_format_pretty_fallback_to_vertical_max_rows_per_chunk", 10)),
 		vMinCols:   int(settingInt(s, "output_format_pretty_fallback_to_vertical_min_columns", 5)),
 		vMinWidth:  int(settingInt(s, "output_format_pretty_fallback_to_vertical_min_table_width", 250)),
+		charge:     opts.Charge,
 	}
-	if e.maxRows <= 0 {
+	if e.maxRows < 0 {
 		e.maxRows = 1 << 62
 	}
 	return e
@@ -89,22 +99,68 @@ func (e *prettyEncoder) WriteRows(rows [][]any) error {
 	tailCap := e.maxRows / 2
 	for _, r := range rows {
 		e.total++
-		pr := prettyRow{num: e.total, cells: make([][]string, len(r))}
-		for i, v := range r {
-			pr.cells[i] = e.cell(i, v)
-		}
 		switch {
 		case len(e.head) < headCap:
-			e.head = append(e.head, pr)
+			e.head = append(e.head, e.row(r))
 		case tailCap == 0:
 		case len(e.tail) < tailCap:
-			e.tail = append(e.tail, pr)
+			e.tail = append(e.tail, e.row(r))
 		default:
-			e.tail[e.tailN] = pr
+			if e.charge != nil {
+				e.kept -= e.tail[e.tailN].bytes()
+			}
+			e.tail[e.tailN] = e.row(r)
 			e.tailN = (e.tailN + 1) % tailCap
 		}
 	}
+	return e.chargeKept()
+}
+
+// row renders r as the e.total-th row, which is kept.
+func (e *prettyEncoder) row(r []any) prettyRow {
+	pr := prettyRow{num: e.total, cells: make([][]string, len(r))}
+	for i, v := range r {
+		pr.cells[i] = e.cell(i, v)
+	}
+	if e.charge != nil {
+		e.kept += pr.bytes()
+	}
+	return pr
+}
+
+// bytes estimates the memory a kept row holds: its slot, its cells and
+// each cell's lines and text.
+func (pr prettyRow) bytes() int64 {
+	n := int64(unsafe.Sizeof(pr)) + memtrack.Pointers(3*len(pr.cells))
+	for _, lines := range pr.cells {
+		text := 0
+		for _, l := range lines {
+			text += len(l)
+		}
+		n += memtrack.Pointers(2*len(lines)) + memtrack.Bytes(int64(text))
+	}
+	return n
+}
+
+// chargeKept charges or releases what the kept rows changed by since the
+// last block.
+func (e *prettyEncoder) chargeKept() error {
+	if e.charge == nil || e.kept == e.held {
+		return nil
+	}
+	if err := e.charge(e.kept - e.held); err != nil {
+		return err
+	}
+	e.held = e.kept
 	return nil
+}
+
+// release returns what the kept rows were charged.
+func (e *prettyEncoder) release() {
+	if e.charge != nil && e.held != 0 {
+		_ = e.charge(-e.held)
+		e.held = 0
+	}
 }
 
 func alignRight(t chtype.Type) bool {
@@ -121,6 +177,11 @@ func alignRight(t chtype.Type) bool {
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
 func (e *prettyEncoder) Finish(Stats) error {
+	defer e.release()
+	if e.maxRows == 0 {
+		e.showed(0)
+		return e.w.Flush()
+	}
 	if e.total == 0 {
 		return e.w.Flush()
 	}
@@ -258,9 +319,14 @@ func (e *prettyEncoder) Finish(Stats) error {
 		rule("└", "┴", "┘", "─", false)
 	}
 	if e.total >= e.maxRows {
-		e.w.WriteString("Showed " + strconv.Itoa(len(rows)) + " out of " + strconv.Itoa(e.total) + " rows.\n")
+		e.showed(len(rows))
 	}
 	return e.w.Flush()
+}
+
+// showed writes the line that says n of the rows are shown.
+func (e *prettyEncoder) showed(n int) {
+	e.w.WriteString("Showed " + strconv.Itoa(n) + " out of " + strconv.Itoa(e.total) + " rows.\n")
 }
 
 // useVertical mirrors ClickHouse's fallback to the Vertical layout for short

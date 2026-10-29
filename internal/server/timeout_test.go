@@ -85,3 +85,22 @@ func TestMaxExecutionTimeParse(t *testing.T) {
 		}
 	}
 }
+
+// With timeout_overflow_mode = 'break' a streamed SELECT that reaches
+// max_execution_time ends normally after the rows sent so far, as in
+// ClickHouse; with throw the rows sent are followed by 159 (a selective
+// filter's blocks end with their source blocks, so rows go out before the
+// deadline; ClickHouse 25.8 also sends 200, rows, then 159).
+func TestTimeoutBreakEndsTheResult(t *testing.T) {
+	guardServerTest(t)
+	base := newEngineServer(t, 0, func(c *Config) { c.ResponseBufferSize = 1 })
+	const sql = "SELECT number FROM system.numbers WHERE number % 100000 = 0 SETTINGS max_execution_time = 0.3, timeout_overflow_mode = "
+	r := query(t, base, sql+"'break'", nil)
+	if r.Status != 200 || r.Cut || !strings.HasPrefix(r.Body, "0\n") || strings.Contains(r.Body, "Code:") {
+		t.Errorf("break: %d cut %v %q", r.Status, r.Cut, r.Body[max(0, len(r.Body)-200):])
+	}
+	r = query(t, base, sql+"'throw'", nil)
+	if r.Status != 200 || !r.Cut || !strings.HasPrefix(r.Body, "0\n") || !strings.Contains(r.Body, "\n__exception__\r\nCode: 159. DB::Exception: Timeout exceeded") {
+		t.Errorf("throw: %d cut %v %q", r.Status, r.Cut, r.Body[max(0, len(r.Body)-200):])
+	}
+}

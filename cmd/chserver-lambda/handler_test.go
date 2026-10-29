@@ -67,7 +67,7 @@ func newStack(t *testing.T, cat catalog.Catalog, app *App) *stack {
 	}
 	srv, err := server.New(server.Config{
 		Executor: eng, Catalog: cat, ServerVersion: "25.8.1.1", DisplayName: "lambda-test",
-		Logger: quietLogger(), RejectSessions: true,
+		Logger: quietLogger(), RejectSessions: true, BufferResponses: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -409,6 +409,29 @@ func TestHandlerRoundTrips(t *testing.T) {
 	// refreshes than requests.
 	if cat.refreshes == 0 || cat.refreshes > 2 {
 		t.Errorf("catalog refreshes %d", cat.refreshes)
+	}
+}
+
+// A query that fails after 2 MB of rows is still an HTTP error: the
+// Lambda buffers every response it can return.
+func TestQueryErrorAfterRowsIsAnHTTPError(t *testing.T) {
+	s := newStack(t, catalog.NewMemory(), nil)
+	r := s.invoke(t, event{method: "POST", text: true,
+		body: []byte("SELECT number, intDiv(1, toInt64(number) - 250000) FROM numbers(300000)")})
+	if r.status != 500 || r.header.Get("X-ClickHouse-Exception-Code") != "153" {
+		t.Errorf("HTTP %d code %q, %d bytes", r.status, r.header.Get("X-ClickHouse-Exception-Code"), len(r.body))
+	}
+}
+
+// The Lambda buffers a response whole, and what a SELECT buffers past
+// ResponseBufferSize counts against max_memory_usage, as its collected
+// rows did before results streamed.
+func TestBufferedResultCountsAgainstTheMemoryLimit(t *testing.T) {
+	s := newStack(t, catalog.NewMemory(), nil)
+	r := s.invoke(t, event{method: "POST", text: true,
+		body: []byte("SELECT number, toString(number) FROM numbers(3000000) SETTINGS max_memory_usage = 8000000")})
+	if r.status != 500 || r.header.Get("X-ClickHouse-Exception-Code") != "241" {
+		t.Errorf("HTTP %d code %q, %d bytes", r.status, r.header.Get("X-ClickHouse-Exception-Code"), len(r.body))
 	}
 }
 

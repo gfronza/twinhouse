@@ -17,6 +17,10 @@ type expr struct {
 	val   any
 	// volatile marks non-deterministic expressions (never constant-folded).
 	volatile bool
+	// err is the error a constant expression raised when it was folded:
+	// compile reports it, as ClickHouse reports an error in a constant
+	// expression when it analyzes the query.
+	err error
 	// slot is 1 + the input column whose value it returns as is (the same
 	// box), or 0.
 	slot int
@@ -36,7 +40,7 @@ func slotExpr(i int, t chtype.Type) *expr {
 }
 
 // fold turns x into a constant when every argument is constant and nothing
-// is volatile. Evaluation errors are deferred to run time.
+// is volatile. An evaluation error is kept in x.err for compile to report.
 func fold(x *expr, args []*expr) *expr {
 	for _, a := range args {
 		if a.volatile {
@@ -51,6 +55,7 @@ func fold(x *expr, args []*expr) *expr {
 	}
 	v, err := x.fn(nil)
 	if err != nil {
+		x.err = err
 		return x
 	}
 	return constant(x.t, v)
@@ -136,6 +141,9 @@ type compiler struct {
 	agg *aggContext
 	// clause names the clause for "aggregate not allowed" errors.
 	clause string
+	// deferConstErrors leaves errors in constant expressions to run time
+	// while a branch that is never evaluated is compiled (see compileIf).
+	deferConstErrors bool
 }
 
 func (c *compiler) child() *compiler {
@@ -157,6 +165,9 @@ func (c *compiler) compile(e sqlparse.Expr) (*expr, error) {
 	consts := &c.q.plan.consts
 	mark := consts.mark()
 	x, err := c.compileNode(e)
+	if err == nil && x.err != nil && !c.deferConstErrors {
+		err = x.err
+	}
 	if err != nil {
 		consts.release(mark)
 		return nil, err
@@ -469,6 +480,59 @@ func (c *compiler) caseExpr(n *sqlparse.CaseExpr) (*expr, error) {
 	return c.call("multiIf", args...)
 }
 
+// compileIf compiles if(cond, then, else) (and cond ? then : else). With a
+// constant UInt8, Bool or NULL condition the branch it rules out is never
+// evaluated, so its constant errors stay deferred, as ClickHouse does not
+// evaluate it; other condition types, multiIf and CASE raise them, as
+// there.
+func (c *compiler) compileIf(n *sqlparse.FuncCall) (*expr, error) {
+	cond, err := c.compile(n.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	skipped := 0
+	if cond.konst && skipsDeadBranch(cond.t) {
+		skipped = 1
+		if cond.val != nil {
+			if b, err := truth(cond.val); err != nil {
+				skipped = 0
+			} else if b {
+				skipped = 2
+			}
+		}
+	}
+	args := []*expr{cond, nil, nil}
+	for i := 1; i <= 2; i++ {
+		if args[i], err = c.compileBranch(n.Args[i], i == skipped); err != nil {
+			return nil, err
+		}
+	}
+	return c.call(n.Name, args...)
+}
+
+// skipsDeadBranch reports whether a constant if condition of type t
+// leaves the branch it rules out unevaluated: UInt8, Bool or Nothing
+// (NULL), also inside Nullable or LowCardinality, as in ClickHouse.
+func skipsDeadBranch(t chtype.Type) bool {
+	for (t.Kind == chtype.Nullable || t.Kind == chtype.LowCardinality) && t.Elem != nil {
+		t = *t.Elem
+	}
+	switch t.Kind {
+	case chtype.UInt8, chtype.Bool, chtype.Nothing:
+		return true
+	}
+	return false
+}
+
+// compileBranch compiles e, leaving its constant errors to run time when
+// it is never evaluated (dead).
+func (c *compiler) compileBranch(e sqlparse.Expr, dead bool) (*expr, error) {
+	saved := c.deferConstErrors
+	c.deferConstErrors = saved || dead
+	defer func() { c.deferConstErrors = saved }()
+	return c.compile(e)
+}
+
 // callAST compiles args and calls a scalar function.
 func (c *compiler) callAST(name string, args ...sqlparse.Expr) (*expr, error) {
 	xs := make([]*expr, len(args))
@@ -548,6 +612,10 @@ func (c *compiler) funcCall(n *sqlparse.FuncCall) (*expr, error) {
 		return c.compileIn(n.Args[0], n.Args[1], canon == "notIn" || canon == "globalNotIn")
 	case "arrayJoin":
 		return nil, cherr.New(cherr.NotImplemented, "arrayJoin is supported only in SELECT, WHERE, GROUP BY, HAVING and ORDER BY of a query with a FROM source")
+	case "if":
+		if len(n.Args) == 3 {
+			return c.compileIf(n)
+		}
 	}
 	if strings.HasPrefix(canon, "toInterval") {
 		return nil, cherr.New(cherr.NotImplemented, "%s is supported only as INTERVAL n UNIT in date/time arithmetic", n.Name)
@@ -683,7 +751,6 @@ const (
 	illegalDivision             = 153
 	thereIsNoColumn             = 8
 	duplicateColumn             = 15
-	tooManyRowsOrBytes          = 396
 	ambiguousIdentifier         = 207
 	tooDeepRecursion            = 306
 	multipleExpressionsForAlias = 179

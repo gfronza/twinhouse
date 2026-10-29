@@ -96,6 +96,17 @@ var sizeSettings = map[string]bool{
 	"max_memory_usage_for_all_queries":   true,
 	"max_bytes_before_external_sort":     true,
 	"max_bytes_before_external_group_by": true,
+	"max_result_bytes":                   true,
+	"http_response_buffer_size":          true,
+}
+
+// sizeSetting returns the value of a size setting, 0 when it is unset.
+func (q *query) sizeSetting(name string) uint64 {
+	n, err := parseSizeSetting(q.settings[name])
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // resetsSetting reports whether st sets a size setting to DEFAULT (the

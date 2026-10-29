@@ -111,6 +111,10 @@ func textCases() []textCase {
 			cols: numbersCols, rows: seqRows(1005)},
 		{name: "pretty_footer", query: `SELECT number, toString(number) s FROM numbers(60)`, formats: []string{"PrettyCompact", "Pretty"},
 			cols: []Column{col("number", "UInt64"), col("s", "String")}, rows: seqStrRows(60)},
+		{name: "pretty_max_rows_0", query: `SELECT number FROM numbers(5)`, formats: []string{"PrettyCompact", "Pretty"},
+			cols: numbersCols, rows: seqRows(5), settings: map[string]string{"output_format_pretty_max_rows": "0"}},
+		{name: "pretty_max_rows_0_empty", query: `SELECT number FROM numbers(0)`, formats: []string{"PrettyCompact", "Pretty"},
+			cols: numbersCols, settings: map[string]string{"output_format_pretty_max_rows": "0"}},
 	}
 }
 

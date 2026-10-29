@@ -35,6 +35,10 @@ type Options struct {
 	Settings map[string]string
 	// Timezone is the server timezone used for DateTime rendering without explicit TZ.
 	Timezone string
+	// Charge, when set, counts n bytes the encoder holds across blocks
+	// (Pretty's kept rows) against the query's memory limit, and releases
+	// them with a negative n; an error from it fails the write.
+	Charge func(n int64) error
 }
 
 // Stats is appended by formats that print statistics (JSON family).
@@ -56,6 +60,54 @@ type Encoder interface {
 	WriteRows(rows [][]any) error
 	// Finish writes trailers (e.g. JSON "rows"/"statistics") and flushes.
 	Finish(stats Stats) error
+}
+
+// flusher is implemented by encoders that buffer output.
+type flusher interface {
+	Flush() error
+}
+
+// exceptionWriter is implemented by the encoders that end a result cut
+// short by an error with the exception inside the format.
+type exceptionWriter interface {
+	WriteException(text string) error
+}
+
+// wrapper is implemented by encoders that convert rows for another one.
+type wrapper interface {
+	unwrap() Encoder
+}
+
+// innerEncoder returns the encoder enc writes its rows to in the end.
+func innerEncoder(enc Encoder) Encoder {
+	for {
+		w, ok := enc.(wrapper)
+		if !ok {
+			return enc
+		}
+		enc = w.unwrap()
+	}
+}
+
+// Flush writes out what enc has buffered, so the rows written so far
+// reach its writer.
+func Flush(enc Encoder) error {
+	if f, ok := innerEncoder(enc).(flusher); ok {
+		return f.Flush()
+	}
+	return nil
+}
+
+// WriteException ends a result cut short by an error with the exception
+// inside the format, as ClickHouse does for the JSON formats
+// (http_write_exception_in_output_format), and flushes. It is called
+// instead of Finish. ok is false for the formats that cannot carry it.
+func WriteException(enc Encoder, text string) (ok bool, err error) {
+	w, ok := innerEncoder(enc).(exceptionWriter)
+	if !ok {
+		return false, nil
+	}
+	return true, w.WriteException(text)
 }
 
 // Decoder reads rows for INSERT. Each row returned has len(cols) values in

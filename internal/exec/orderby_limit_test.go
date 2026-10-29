@@ -77,13 +77,13 @@ func TestJSONRowsBeforeLimitCountsDroppedRows(t *testing.T) {
 	}
 }
 
-// A result cap that stops reading early sees only the rows it read, as
-// before top-N.
-func TestOrderByLimitWithResultCapCountsReadRows(t *testing.T) {
+// A result cap that ends the result early still reports the sort's whole
+// input as rows_before_limit (100, as ClickHouse 25.8 reports).
+func TestOrderByLimitWithResultCapCountsTheSortInput(t *testing.T) {
 	te := newTestEnv(t)
 	res := te.exec(`SELECT number FROM numbers(100) ORDER BY number DESC LIMIT 10 SETTINGS max_result_rows = 3, result_overflow_mode = 'break'`)
 	eq(t, len(res.Rows), 3)
-	eq(t, res.RowsBeforeLimit, uint64(4))
+	eq(t, res.RowsBeforeLimit, uint64(100))
 }
 
 func BenchmarkOrderByLimit(b *testing.B) {

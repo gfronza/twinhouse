@@ -70,6 +70,7 @@ const (
 	SizesOfArraysDontMatch           = 190
 	RequiredPassword                 = 194
 	AmbiguousIdentifier              = 207
+	SocketTimeout                    = 209
 	NotAnAggregate                   = 215
 	UnexpectedASTStructure           = 223
 	QueryIsTooLarge                  = 229

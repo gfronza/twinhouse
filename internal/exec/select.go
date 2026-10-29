@@ -227,6 +227,9 @@ func (q *query) runSelect(s *sqlparse.SelectStmt) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if q.req.Stream {
+		return q.streamSelect(rel, selectFormat(s)), nil
+	}
 	limit := q.maxResultRows()
 	collectMax := 0
 	if limit > 0 {
@@ -238,11 +241,11 @@ func (q *query) runSelect(s *sqlparse.SelectStmt) (*Result, error) {
 	}
 	if limit > 0 && len(rows) > limit {
 		if q.settings["result_overflow_mode"] != "break" {
-			return nil, cherr.New(tooManyRowsOrBytes, "Limit for result exceeded, max rows: %d", limit)
+			return nil, cherr.New(cherr.TooManyRowsOrBytes, "Limit for result exceeded, max rows: %d", limit)
 		}
 		rows = rows[:limit]
 	}
-	res := &Result{Columns: rel.cols, Rows: rows, Format: selectFormat(s), ReadRows: q.readRows.Load(), ReadBytes: q.readBytes.Load()}
+	res := &Result{Columns: rel.cols, Rows: rows, Format: selectFormat(s), Stats: Stats{ReadRows: q.readRows.Load(), ReadBytes: q.readBytes.Load()}}
 	if rel.stats != nil && rel.stats.hasLimit {
 		res.HasRowsBeforeLimit = true
 		res.RowsBeforeLimit = rel.stats.rowsBeforeLimit
@@ -744,6 +747,10 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 		if ac == nil && havingX != nil {
 			it = &filterIter{in: it, cond: havingX}
 		}
+		// input counts the rows the limit will see when a sort or GROUP BY
+		// knows them before the first is read (known).
+		var input uint64
+		known := false
 		if ac != nil {
 			out, err := runAggregation(q, it, ac)
 			it.close()
@@ -751,6 +758,7 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 				return nil, err
 			}
 			it = out
+			input, known = uint64(len(out.order)), havingX == nil
 			if havingX != nil {
 				it = &filterIter{in: it, cond: havingX}
 			}
@@ -759,6 +767,7 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 		it = &projectIter{in: it, exprs: selX, extra: extra}
 		if distinct {
 			it = newDistinctIter(q, it, width)
+			known = false
 		}
 		var dropped uint64
 		if len(orderX) > 0 {
@@ -774,14 +783,20 @@ func (q *query) planSingle(s *sqlparse.SelectStmt, parent *planEnv) (*relation, 
 			}
 			it = sorted
 			dropped = total - uint64(kept)
+			input, known = total, true
 		}
 		if hasLimitBy {
+			known = false
 			it = &limitByIter{in: it, keyFrom: width + len(orderX), keyTo: width + len(orderX) + len(limitByX), limit: lbLimit, offset: lbOffset,
 				counts: map[string]uint64{}, acct: q.mem.NewAccount()}
 		}
 		if hasLimit || offset > 0 {
-			it = &limitIter{in: it, limit: limit, hasLimit: hasLimit, offset: offset, stats: stats,
+			l := &limitIter{in: it, limit: limit, hasLimit: hasLimit, offset: offset, stats: stats,
 				drain: ac != nil || len(orderX) > 0, preCounted: dropped}
+			if known {
+				l.countInput(input)
+			}
+			it = l
 		}
 		return &trimIter{in: it, width: width}, nil
 	}
@@ -1092,6 +1107,24 @@ type limitIter struct {
 	// preCounted rows were read by a top-N sort upstream and dropped there;
 	// they still count toward rows_before_limit.
 	preCounted uint64
+	// counted is set when rows_before_limit was known up front.
+	counted bool
+}
+
+// countInput sets rows_before_limit to the input's row count, known
+// before any row is read (a sort's or GROUP BY's), so it is right however
+// early the result ends (result_overflow_mode or timeout_overflow_mode
+// 'break'), as in ClickHouse; nothing is drained.
+func (l *limitIter) countInput(n uint64) {
+	l.stats.rowsBeforeLimit, l.counted, l.drain = n, true, false
+}
+
+// see records the rows passed so far as rows_before_limit, unless it was
+// counted up front.
+func (l *limitIter) see() {
+	if !l.counted {
+		l.stats.rowsBeforeLimit = l.seen
+	}
 }
 
 // skipper is an iterator that can pass over rows without returning them.
@@ -1104,7 +1137,7 @@ func (l *limitIter) next() ([]any, error) {
 	if l.seen < l.offset {
 		if sk, ok := l.in.(skipper); ok {
 			l.seen += sk.skip(l.offset - l.seen)
-			l.stats.rowsBeforeLimit = l.seen
+			l.see()
 		}
 	}
 	for {
@@ -1120,7 +1153,7 @@ func (l *limitIter) next() ([]any, error) {
 			return nil, err
 		}
 		l.seen++
-		l.stats.rowsBeforeLimit = l.seen
+		l.see()
 		if l.seen > l.offset {
 			return row, nil
 		}
@@ -1173,7 +1206,8 @@ type group struct {
 }
 
 // runAggregation consumes it and returns an iterator over the
-// post-aggregation rows (GROUP BY keys followed by aggregate results).
+// post-aggregation rows (GROUP BY keys followed by aggregate results). On
+// error (a panic included) it releases what it charged.
 func runAggregation(q *query, it rowIter, ac *aggContext) (_ *aggOutIter, err error) {
 	ch := newAggCharge(q.mem.NewAccount(), ac)
 	defer func() {
@@ -1181,6 +1215,7 @@ func runAggregation(q *query, it rowIter, ac *aggContext) (_ *aggOutIter, err er
 			ch.acct.Close()
 		}
 	}()
+	defer recoverInternal(&err)
 	groups := map[string]*group{}
 	var order []*group
 	newGroup := func(keys []any) (*group, error) {
@@ -1310,13 +1345,14 @@ const keepAll = math.MaxUint64
 // width columns of each row, like sort.SliceStable. It returns only the
 // first keep rows of that order, kept of them, through an iterator that
 // releases each row's charge after it returns it; total counts every input
-// row. On error sortRows closes ch.acct.
+// row. On error (a panic included) sortRows closes ch.acct.
 func sortRows(q *query, it rowIter, width int, items []sqlparse.OrderItem, keep uint64, ch rowCharge) (_ rowIter, kept int, total uint64, err error) {
 	defer func() {
 		if err != nil {
 			ch.acct.Close()
 		}
 	}()
+	defer recoverInternal(&err)
 	o := newRowOrder(width, items)
 	switch {
 	case keep == keepAll && ch.acct == nil:

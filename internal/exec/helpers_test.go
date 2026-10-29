@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gfronza/twinhouse/internal/catalog"
@@ -16,11 +17,13 @@ import (
 
 // testEnv is an engine over memstore and the in-memory catalog.
 type testEnv struct {
-	t     testing.TB
-	e     *Engine
-	store *memstore.Store
-	spy   *spyStore
-	cat   catalog.Catalog
+	t testing.TB
+	e *Engine
+	// finished counts the queries that finished.
+	finished atomic.Int64
+	store    *memstore.Store
+	spy      *spyStore
+	cat      catalog.Catalog
 }
 
 // testMaxMemoryUsage is the engine tests' default memory limit: too high
@@ -47,8 +50,12 @@ func newTestEnvConfig(t testing.TB, mod func(*Config)) *testEnv {
 		t.Fatal(err)
 	}
 	e.impl.fresh.interval = 0 // the memory catalog's Refresh is free
-	e.impl.testHookFinished = func(q *query) { checkNoTrackedMemory(t, q) }
-	return &testEnv{t: t, e: e, store: ms, spy: spy, cat: cat}
+	te := &testEnv{t: t, e: e, store: ms, spy: spy, cat: cat}
+	e.impl.testHookFinished = func(q *query) {
+		te.finished.Add(1)
+		checkNoTrackedMemory(t, q)
+	}
+	return te
 }
 
 // checkNoTrackedMemory is the leak invariant: a finished query holds no

@@ -85,6 +85,9 @@ type Request struct {
 	User     string
 	// FormatOptions are passed to input decoders.
 	FormatOptions format.Options
+	// Stream asks for a top-level SELECT's rows as Result.Stream instead
+	// of Result.Rows. Other statements return Rows either way.
+	Stream bool
 }
 
 // Result is the outcome of a statement.
@@ -94,18 +97,63 @@ type Result struct {
 	Columns []format.Column
 	// Rows are the result rows (canonical values, len(Columns) each).
 	Rows [][]any
+	// Stream yields the rows instead of Rows when the request asked for it
+	// (Request.Stream). The query runs until the caller closes it.
+	Stream ResultStream
 	// Format is the FORMAT clause of the query ("" if absent).
 	Format string
-	// Stats for X-ClickHouse-Summary / JSON statistics.
-	ReadRows    uint64
-	ReadBytes   uint64
+	// Stats are the counts of collected rows (Counts adds ResultRows); a
+	// stream keeps its own.
+	Stats
+	// WrittenRows counts the rows an INSERT wrote.
 	WrittenRows uint64
-	// RowsBeforeLimit is set when the query had a LIMIT.
-	RowsBeforeLimit    uint64
-	HasRowsBeforeLimit bool
 	// Database is set by USE (session-less HTTP ignores it, like ClickHouse
 	// without session_id).
 	Database string
+}
+
+// Counts returns the result's counts: a stream's so far (final after its
+// EOF), or those of the collected rows.
+func (r *Result) Counts() Stats {
+	if r.Stream != nil {
+		return r.Stream.Stats()
+	}
+	st := r.Stats
+	st.ResultRows = uint64(len(r.Rows))
+	return st
+}
+
+// ResultStream yields a SELECT's rows block by block. It is used by one
+// goroutine.
+type ResultStream interface {
+	// Next returns the next block of at most maxRows rows, or io.EOF at
+	// the end. A block also ends once its rows hold about 1 MB, or with
+	// the source block of maxRows rows read that its rows come from. It
+	// stays valid, and charged to the query, until the next call or Close.
+	Next(maxRows int) ([][]any, error)
+	// Stats returns the counts so far; they are final after io.EOF.
+	Stats() Stats
+	// Charge counts n more bytes the caller holds for the query (a
+	// response buffered whole, rows an output format keeps) against its
+	// memory limit, until Close; a negative n releases bytes it charged.
+	Charge(n int64) error
+	// Close ends the query and releases what it holds. It may be called
+	// more than once.
+	Close()
+}
+
+// Stats are a result's counts, for X-ClickHouse-Summary, JSON statistics
+// and logs.
+type Stats struct {
+	ReadRows, ReadBytes uint64
+	// ResultRows is how many rows were returned.
+	ResultRows uint64
+	// RowsBeforeLimit is set when the query had a LIMIT.
+	RowsBeforeLimit    uint64
+	HasRowsBeforeLimit bool
+	// PeakMemory is the most memory the query had charged at once
+	// (counted only when it had a max_memory_usage).
+	PeakMemory int64
 }
 
 // Engine executes statements.
@@ -156,6 +204,12 @@ func SettingText(name string, v sqlparse.Expr) (text string, reset, ok bool) {
 	text, err := clauseValue(st)
 	return text, false, err == nil
 }
+
+// ParseSizeSetting parses a byte-size setting's text as the engine reads
+// it (ClickHouse's parseWithSizeSuffix: an optional '+', digits, a size
+// suffix), so a caller that acts on such a setting before the query runs
+// reads the value the engine checks.
+func ParseSizeSetting(s string) (uint64, error) { return parseSizeSetting(s) }
 
 // RowIDIterator is optionally implemented by a storage.RowIterator.
 // RowID returns the stored row id (the item's _rid, the same id Insert

@@ -65,8 +65,7 @@ func TestSelectOutput(t *testing.T) {
 			if got := r.Header.Get("Content-Type"); got != tc.wantType {
 				t.Errorf("Content-Type %q, want %q", got, tc.wantType)
 			}
-			re := regexp.MustCompile(`^\{"read_rows":"10","read_bytes":"100","written_rows":"0","written_bytes":"0","total_rows_to_read":"10","result_rows":"2","result_bytes":"` +
-				fmt.Sprint(len(tc.wantBody)) + `","elapsed_ns":"\d+"\}$`)
+			re := regexp.MustCompile(`^\{"read_rows":"10","read_bytes":"100","written_rows":"0","written_bytes":"0","total_rows_to_read":"10","result_rows":"0","result_bytes":"0","elapsed_ns":"\d+"\}$`)
 			if s := r.Header.Get("X-ClickHouse-Summary"); !re.MatchString(s) {
 				t.Errorf("summary %s", s)
 			}
@@ -398,6 +397,8 @@ func badRows() *exec.Result {
 	}
 }
 
+// An encoder error before commit is an HTTP error with the exception
+// text, under the format's headers (the output was set up).
 func TestEncoderErrorBeforeCommit(t *testing.T) {
 	fe := &fakeExec{fn: func(context.Context, *exec.Request) (*exec.Result, error) { return badRows(), nil }}
 	_, ts := newTestServer(t, fe, nil)
@@ -405,7 +406,7 @@ func TestEncoderErrorBeforeCommit(t *testing.T) {
 	if r.Status != 500 || r.Header.Get("X-ClickHouse-Exception-Code") != "49" || !strings.HasPrefix(r.Body, "Code: 49. DB::Exception: ") {
 		t.Errorf("%d %v %q", r.Status, r.Header, r.Body)
 	}
-	if r.Header.Get("X-ClickHouse-Format") != "" || r.Header.Get("Content-Type") != "text/plain; charset=UTF-8" {
+	if r.Header.Get("X-ClickHouse-Format") != "Native" || r.Header.Get("Content-Type") != "application/octet-stream" {
 		t.Errorf("headers %v", r.Header)
 	}
 }
@@ -418,8 +419,8 @@ func TestMidStreamException(t *testing.T) {
 		t.Fatalf("status %d", r.Status)
 	}
 	i := strings.Index(r.Body, "__exception__\r\nCode: 49. DB::Exception: ")
-	if i <= 0 || !strings.HasSuffix(r.Body, "(LOGICAL_ERROR) (version 25.8.1.1)\n") {
-		t.Errorf("body %q", r.Body)
+	if i <= 0 || !r.Cut || !strings.HasSuffix(r.Body, "(LOGICAL_ERROR) (version 25.8.1.1)\n") {
+		t.Errorf("body %q, cut %v", r.Body, r.Cut)
 	}
 	// The same framing inside a compress=1 stream (frames are emitted per
 	// MiB, so the result must be larger than that to commit before failing).
@@ -430,7 +431,7 @@ func TestMidStreamException(t *testing.T) {
 	big.Rows = append(big.Rows, []any{"bad"})
 	fe.fn = func(context.Context, *exec.Request) (*exec.Result, error) { return big, nil }
 	r = post(t, ts.URL+"/?compress=1", "SELECT n FORMAT Native")
-	if body := readNative(t, []byte(r.Body)); r.Status != 200 || !strings.HasSuffix(body, "(LOGICAL_ERROR) (version 25.8.1.1)\n") ||
+	if body := readNative(t, []byte(r.Body)); r.Status != 200 || !r.Cut || !strings.HasSuffix(body, "(LOGICAL_ERROR) (version 25.8.1.1)\n") ||
 		!strings.Contains(body, "__exception__\r\nCode: 49.") {
 		t.Errorf("compressed body: status %d, tail %q", r.Status, body[max(0, len(body)-200):])
 	}

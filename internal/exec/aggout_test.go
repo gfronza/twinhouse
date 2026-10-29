@@ -197,17 +197,22 @@ func TestMemberLoadErrorFailsBeforeAnyRow(t *testing.T) {
 	}
 }
 
-// Without ORDER BY the rows past the LIMIT are only counted, and an error
-// there stops the count without failing the query.
+// Without ORDER BY the rows past the LIMIT are not evaluated, so an error
+// there does not fail the query. rows_before_limit is the group count
+// (10, as ClickHouse 25.8 reports); after HAVING the rows past the LIMIT
+// are counted, and an error there stops the count.
 func TestErrorPastLimitWithoutOrderByIsNotRaised(t *testing.T) {
 	te := newTestEnv(t)
-	for _, c := range []struct{ sql, want string }{
-		{`SELECT number AS n, intDiv(10, toInt64(n) - 5) FROM numbers(10) GROUP BY n LIMIT 2`, "0\t-2\n1\t-2"},
-		{`SELECT number AS n FROM numbers(10) GROUP BY n HAVING intDiv(10, toInt64(n) - 5) > -100 LIMIT 2`, "0\n1"},
+	for _, c := range []struct {
+		sql, want string
+		before    uint64
+	}{
+		{`SELECT number AS n, intDiv(10, toInt64(n) - 5) FROM numbers(10) GROUP BY n LIMIT 2`, "0\t-2\n1\t-2", 10},
+		{`SELECT number AS n FROM numbers(10) GROUP BY n HAVING intDiv(10, toInt64(n) - 5) > -100 LIMIT 2`, "0\n1", 5},
 	} {
 		te.expectRows(c.sql, c.want)
-		if res := te.exec(c.sql); res.RowsBeforeLimit != 5 {
-			t.Errorf("%s: rows_before_limit %d, want 5", c.sql, res.RowsBeforeLimit)
+		if res := te.exec(c.sql); res.RowsBeforeLimit != c.before {
+			t.Errorf("%s: rows_before_limit %d, want %d", c.sql, res.RowsBeforeLimit, c.before)
 		}
 	}
 }

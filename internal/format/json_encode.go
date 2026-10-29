@@ -338,6 +338,24 @@ func (e *jsonEncoder) Finish(s Stats) error {
 	return e.w.Flush()
 }
 
+func (e *jsonEncoder) Flush() error { return e.w.Flush() }
+
+// WriteException closes the data written so far and adds the exception:
+// ClickHouse leaves out rows_before_limit_at_least and statistics then.
+func (e *jsonEncoder) WriteException(text string) error {
+	e.header()
+	b := append(e.buf[:0], "\n\t],\n\n\t\"rows\": "...)
+	b = strconv.AppendUint(b, e.rows, 10)
+	b = append(b, ",\n\n\t\"exception\": "...)
+	b = e.st.appendJSONString(b, text)
+	b = append(b, "\n}\n"...)
+	e.buf = b
+	if _, err := e.w.Write(b); err != nil {
+		return err
+	}
+	return e.w.Flush()
+}
+
 // jsonEachRowEncoder implements JSONEachRow, JSONCompactEachRow and their
 // Strings variants (one JSON value per line).
 type jsonEachRowEncoder struct {
@@ -422,6 +440,36 @@ func (e *jsonEachRowEncoder) Finish(Stats) error {
 	e.header()
 	if e.arrayRows {
 		e.w.WriteString("\n]\n")
+	}
+	return e.w.Flush()
+}
+
+func (e *jsonEachRowEncoder) Flush() error { return e.w.Flush() }
+
+// WriteException adds the exception as one more value: an object
+// {"exception": ...} or, for the compact formats, an array of it.
+func (e *jsonEachRowEncoder) WriteException(text string) error {
+	e.header()
+	b := e.buf[:0]
+	if e.arrayRows && e.rows > 0 {
+		b = append(b, ",\n"...)
+	}
+	if e.compact {
+		b = append(b, '[')
+		b = e.st.appendJSONString(b, text)
+		b = append(b, ']')
+	} else {
+		b = append(b, `{"exception": `...)
+		b = e.st.appendJSONString(b, text)
+		b = append(b, '}')
+	}
+	b = append(b, '\n')
+	if e.arrayRows {
+		b = append(b, "]\n"...)
+	}
+	e.buf = b
+	if _, err := e.w.Write(b); err != nil {
+		return err
 	}
 	return e.w.Flush()
 }

@@ -173,6 +173,8 @@ func (e *tsvEncoder) Finish(Stats) error {
 	return e.w.Flush()
 }
 
+func (e *tsvEncoder) Flush() error { return e.w.Flush() }
+
 // csvEncoder implements the CSV family.
 type csvEncoder struct {
 	w          *bufio.Writer
@@ -299,6 +301,8 @@ func (e *csvEncoder) Finish(Stats) error {
 	return e.w.Flush()
 }
 
+func (e *csvEncoder) Flush() error { return e.w.Flush() }
+
 // valuesEncoder implements Values: (v,...),(v,...) without a trailing newline.
 type valuesEncoder struct {
 	w     *bufio.Writer
@@ -339,3 +343,5 @@ func (e *valuesEncoder) WriteRows(rows [][]any) error {
 }
 
 func (e *valuesEncoder) Finish(Stats) error { return e.w.Flush() }
+
+func (e *valuesEncoder) Flush() error { return e.w.Flush() }

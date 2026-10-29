@@ -229,7 +229,15 @@ func (e *Engine) execute(ctx context.Context, req *Request) (res *Result, err er
 		return nil, err
 	}
 	q := e.newQuery(ctx, req)
-	defer q.finish()
+	defer func() {
+		// A stream finishes the query when it is closed.
+		if res == nil || res.Stream == nil {
+			q.finish()
+		}
+		if res != nil && res.Stream == nil {
+			res.PeakMemory = q.mem.Peak()
+		}
+	}()
 	for k, v := range req.Settings {
 		if err := q.checkSetting(k, v, false); err != nil {
 			return nil, err

@@ -13,6 +13,7 @@ import "sync/atomic"
 type Tracker struct {
 	limit atomic.Int64
 	used  atomic.Int64
+	peak  atomic.Int64
 	// sample and sampleStep are a test hook (SetSampleHook).
 	sample     func(used int64)
 	sampleStep int64
@@ -67,10 +68,28 @@ func (t *Tracker) Reserve(n int64) error {
 		t.used.Add(-n)
 		return LimitExceeded(u, n, l)
 	}
+	t.notePeak(u)
 	if t.sample != nil && u/t.sampleStep > (u-n)/t.sampleStep {
 		t.sample(u)
 	}
 	return nil
+}
+
+// notePeak raises the peak to u.
+func (t *Tracker) notePeak(u int64) {
+	for p := t.peak.Load(); u > p; p = t.peak.Load() {
+		if t.peak.CompareAndSwap(p, u) {
+			return
+		}
+	}
+}
+
+// Peak returns the most bytes reserved at once.
+func (t *Tracker) Peak() int64 {
+	if t == nil {
+		return 0
+	}
+	return t.peak.Load()
 }
 
 // Release returns n reserved bytes.

@@ -46,23 +46,24 @@ func wantOK(t *testing.T, what string, r resp) {
 	}
 }
 
-// 100000 collected rows estimate about 5 MB: under the 32 MB server limit,
-// over a 1 MB one set by any source.
-const collect100k = "SELECT number FROM numbers(100000)"
+// Sorting 100000 rows holds about 5 MB: under the 32 MB server limit, over
+// a 1 MB one set by any source. (A plain SELECT streams in blocks of about
+// 1 MB, so it would not tell them apart.)
+const sort100k = "SELECT number FROM numbers(100000) ORDER BY number DESC"
 
 func TestMaxMemoryUsageFromEverySource(t *testing.T) {
 	base := newMemoryLimitServer(t, 32_000_000)
 	const exceeded = "Query memory limit exceeded: would use "
 	low := url.Values{"max_memory_usage": {"1000000"}}
 
-	wantOK(t, "server default", query(t, base, collect100k, nil))
-	wantException(t, "URL", query(t, base, collect100k, low), "241", 500, exceeded)
-	wantException(t, "SETTINGS", query(t, base, collect100k+" SETTINGS max_memory_usage = 1000000", nil), "241", 500, exceeded)
+	wantOK(t, "server default", query(t, base, sort100k, nil))
+	wantException(t, "URL", query(t, base, sort100k, low), "241", 500, exceeded)
+	wantException(t, "SETTINGS", query(t, base, sort100k+" SETTINGS max_memory_usage = 1000000", nil), "241", 500, exceeded)
 
 	sess := url.Values{"session_id": {"mem"}}
 	wantOK(t, "SET in a session", query(t, base, "SET max_memory_usage = 1e6", sess))
-	wantException(t, "session", query(t, base, collect100k, sess), "241", 500, exceeded)
-	wantOK(t, "SETTINGS over the session", query(t, base, collect100k+" SETTINGS max_memory_usage = 32000000", sess))
+	wantException(t, "session", query(t, base, sort100k, sess), "241", 500, exceeded)
+	wantOK(t, "SETTINGS over the session", query(t, base, sort100k+" SETTINGS max_memory_usage = 32000000", sess))
 }
 
 func TestMaxMemoryUsageAboveServerLimitIsRejected(t *testing.T) {
@@ -75,12 +76,12 @@ func TestMaxMemoryUsageAboveServerLimitIsRejected(t *testing.T) {
 	sess := url.Values{"session_id": {"raise"}}
 	wantOK(t, "lowering SET", query(t, base, "SET max_memory_usage = 1000000", sess))
 	wantException(t, "raising SET", query(t, base, "SET max_memory_usage = 0", sess), "452", 500, violation)
-	wantException(t, "session keeps the lower limit", query(t, base, collect100k, sess), "241", 500, "Query memory limit exceeded")
+	wantException(t, "session keeps the lower limit", query(t, base, sort100k, sess), "241", 500, "Query memory limit exceeded")
 }
 
 func TestMaxMemoryUsageWithoutServerLimit(t *testing.T) {
 	base := newMemoryLimitServer(t, 0)
-	wantOK(t, "unlimited", query(t, base, collect100k, url.Values{"max_memory_usage": {"0"}}))
+	wantOK(t, "unlimited", query(t, base, sort100k, url.Values{"max_memory_usage": {"0"}}))
 	wantOK(t, "any value", query(t, base, "SELECT 1", url.Values{"max_memory_usage": {"10Gi"}}))
 	wantException(t, "bad text", query(t, base, "SELECT 1", url.Values{"max_memory_usage": {"abc"}}),
 		"27", 400, "Cannot parse input: expected 'eof' before: 'abc'")
@@ -95,14 +96,35 @@ func TestMaxMemoryUsageDefaultResetsTheSession(t *testing.T) {
 	const exceeded = "Query memory limit exceeded: would use "
 	sess := url.Values{"session_id": {"reset"}}
 	wantOK(t, "lowering SET", query(t, base, "SET max_memory_usage = 1000000", sess))
-	wantException(t, "lowered session", query(t, base, collect100k, sess), "241", 500, exceeded)
+	wantException(t, "lowered session", query(t, base, sort100k, sess), "241", 500, exceeded)
 	wantOK(t, "SET DEFAULT", query(t, base, "SET max_memory_usage = DEFAULT", sess))
-	wantOK(t, "session after DEFAULT", query(t, base, collect100k, sess))
+	wantOK(t, "session after DEFAULT", query(t, base, sort100k, sess))
 	wantOK(t, "SET lower then DEFAULT", query(t, base, "SET max_memory_usage = 1000000, max_memory_usage = DEFAULT", sess))
-	wantOK(t, "session after lower then DEFAULT", query(t, base, collect100k, sess))
+	wantOK(t, "session after lower then DEFAULT", query(t, base, sort100k, sess))
 	// As in ClickHouse, DEFAULT wins within one SET, wherever it is written.
 	wantOK(t, "SET DEFAULT then lower", query(t, base, "SET max_memory_usage = DEFAULT, max_memory_usage = 1000000", sess))
-	wantOK(t, "session after DEFAULT then lower", query(t, base, collect100k, sess))
+	wantOK(t, "session after DEFAULT then lower", query(t, base, sort100k, sess))
 	low := url.Values{"max_memory_usage": {"1000000"}}
-	wantOK(t, "SETTINGS DEFAULT over the URL", query(t, base, collect100k+" SETTINGS max_memory_usage = DEFAULT", low))
+	wantOK(t, "SETTINGS DEFAULT over the URL", query(t, base, sort100k+" SETTINGS max_memory_usage = DEFAULT", low))
+}
+
+// The rows Pretty and PrettyCompact keep for the table, up to
+// output_format_pretty_max_rows, count against max_memory_usage: with a
+// limit far above the result's block, a large max_rows fails with 241
+// before the format holds the whole result; the default 1000 rows fit.
+func TestPrettyKeptRowsCountAgainstTheMemoryLimit(t *testing.T) {
+	guardServerTest(t)
+	base := newMemoryLimitServer(t, 0)
+	for _, f := range []string{"Pretty", "PrettyCompact"} {
+		sql := "SELECT number, toString(number) s FROM numbers(1000000) FORMAT " + f
+		r := query(t, base, sql, url.Values{"output_format_pretty_max_rows": {"100000000"}, "max_memory_usage": {"20000000"}})
+		if code := r.Header.Get("X-ClickHouse-Exception-Code"); r.Status != 500 || code != "241" || !strings.Contains(r.Body, "Query memory limit exceeded") {
+			t.Errorf("%s keeping every row: HTTP %d code %q, %d bytes", f, r.Status, code, len(r.Body))
+		}
+		r = query(t, base, sql, url.Values{"max_memory_usage": {"20000000"}})
+		wantOK(t, f+" keeping 1000 rows", r)
+		if !strings.Contains(r.Body, "Showed 1000 out of 1000000 rows.") {
+			t.Errorf("%s: body ends %q", f, r.Body[max(0, len(r.Body)-80):])
+		}
+	}
 }

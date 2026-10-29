@@ -2,13 +2,18 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime/metrics"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gfronza/twinhouse/internal/chtype"
 	"github.com/gfronza/twinhouse/internal/exec"
@@ -93,6 +98,9 @@ type resp struct {
 	Status int
 	Header http.Header
 	Body   string
+	// Cut is set when the server closed the connection before the end of
+	// the body.
+	Cut bool
 }
 
 func do(t *testing.T, req *http.Request) resp {
@@ -104,10 +112,11 @@ func do(t *testing.T, req *http.Request) resp {
 	}
 	defer res.Body.Close()
 	b, err := io.ReadAll(res.Body)
-	if err != nil {
+	cut := errors.Is(err, io.ErrUnexpectedEOF)
+	if err != nil && !cut {
 		t.Fatal(err)
 	}
-	return resp{Status: res.StatusCode, Header: res.Header, Body: string(b)}
+	return resp{Status: res.StatusCode, Header: res.Header, Body: string(b), Cut: cut}
 }
 
 func get(t *testing.T, url string, hdr ...string) resp {
@@ -157,4 +166,38 @@ func httpTestServer(t *testing.T, h http.Handler) string {
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// guardServerTest skips under -short and makes a regression fail fast
+// instead of exhausting the machine: the process exits once the heap
+// passes 1 GiB.
+func guardServerTest(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("heavy: skipped with -short")
+	}
+	name := t.Name()
+	done := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				if heapObjects() > 1<<30 {
+					fmt.Fprintf(os.Stderr, "%s: heap passed 1 GiB\n", name)
+					os.Exit(3)
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { close(done) })
+}
+
+func heapObjects() uint64 {
+	s := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
+	metrics.Read(s)
+	return s[0].Value.Uint64()
 }

@@ -210,7 +210,15 @@ func init() {
 			return nil, err
 		}
 		return args[0], nil
-	}, "identity", "materialize")
+	}, "identity")
+	// materialize makes its argument a per-row value: folding stops at it,
+	// as in ClickHouse, so intDiv(materialize(1), 0) fails per row.
+	reg(func(c *compiler, name string, args []*expr) (*expr, error) {
+		if err := wantArgs(name, args, 1, 1); err != nil {
+			return nil, err
+		}
+		return &expr{t: args[0].t, fn: args[0].eval, volatile: args[0].volatile}, nil
+	}, "materialize")
 }
 
 var numericTypes = map[string]chtype.Type{
@@ -709,11 +717,9 @@ func castCompare(x *expr, to chtype.Type) (*expr, error) {
 		return res, nil
 	}}
 	folded := fold(out, []*expr{x})
-	if x.konst && !folded.konst {
+	if folded.err != nil {
 		// Constant conversion failed: report it now, like ClickHouse.
-		if _, err := out.fn(nil); err != nil {
-			return nil, err
-		}
+		return nil, folded.err
 	}
 	return folded, nil
 }

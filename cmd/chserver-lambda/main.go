@@ -102,6 +102,10 @@ func build(ctx context.Context) (Handler, error) {
 		Logger:           log,
 		MaxExecutionTime: cfg.MaxExecutionTime,
 		RejectSessions:   true,
+		// The adapter holds the whole response: buffering it first keeps
+		// every error an HTTP error and counts the buffer against
+		// max_memory_usage.
+		BufferResponses: true,
 	})
 	if err != nil {
 		return nil, err

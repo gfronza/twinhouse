@@ -43,7 +43,7 @@ func TestHandshakeQuery(t *testing.T) {
 func TestMaxResultRows(t *testing.T) {
 	te := newTestEnv(t)
 	_, err := te.runReq(&Request{Query: `SELECT number FROM numbers(10)`, Settings: map[string]string{"max_result_rows": "5"}})
-	if !cherr.Is(err, tooManyRowsOrBytes) {
+	if !cherr.Is(err, cherr.TooManyRowsOrBytes) {
 		t.Fatalf("expected TOO_MANY_ROWS_OR_BYTES, got %v", err)
 	}
 	res, err := te.runReq(&Request{Query: `SELECT number FROM numbers(10)`, Settings: map[string]string{"max_result_rows": "5", "result_overflow_mode": "break"}})
@@ -52,9 +52,9 @@ func TestMaxResultRows(t *testing.T) {
 	}
 	eq(t, len(res.Rows), 5)
 	te.e.cfg.MaxResultRows = 3
-	te.expectErr(`SELECT number FROM numbers(4)`, tooManyRowsOrBytes)
+	te.expectErr(`SELECT number FROM numbers(4)`, cherr.TooManyRowsOrBytes)
 	te.expectRows(`SELECT number FROM numbers(3)`, "0\n1\n2")
-	te.expectErr(`SELECT number FROM numbers(10) SETTINGS max_result_rows = 2`, tooManyRowsOrBytes)
+	te.expectErr(`SELECT number FROM numbers(10) SETTINGS max_result_rows = 2`, cherr.TooManyRowsOrBytes)
 }
 
 func TestCancellation(t *testing.T) {
@@ -183,5 +183,65 @@ func TestRecursionGuards(t *testing.T) {
 	te.expectErr(`CREATE OR REPLACE VIEW v AS SELECT nope FROM t`, cherr.UnknownIdentifier)
 	if _, err := te.cat.View("default", "v"); err != nil {
 		t.Fatal("failed CREATE OR REPLACE VIEW dropped the existing view")
+	}
+}
+
+// An error in a constant expression is raised when the query is planned,
+// before any row is read, as ClickHouse raises it when it analyzes the
+// query: also with no rows and in a branch of multiIf or CASE not taken,
+// but not in the branch of if that a constant UInt8, Bool or NULL
+// condition rules out.
+func TestConstantErrorsAreRaisedWhenPlanned(t *testing.T) {
+	te := newTestEnv(t)
+	for _, c := range []struct {
+		sql  string
+		code int
+	}{
+		{"SELECT intDiv(1, 0)", 153},
+		{"SELECT number + intDiv(1, 0) FROM numbers(3) WHERE 0", 153},
+		{"SELECT number, if(number > 100, intDiv(1, 0), 1) FROM numbers(3)", 153},
+		{"SELECT number FROM numbers(3) WHERE 0 AND intDiv(1, 0) = 1", 153},
+		{"SELECT toUInt8('abc') FROM numbers(3) WHERE 0", 6},
+		{"SELECT multiIf(1, 1, intDiv(1, 0))", 153},
+		{"SELECT CASE WHEN 0 THEN toUInt8('abc') ELSE 1 END", 6},
+		{"SELECT 1 OR intDiv(1, 0) = 1", 153},
+		{"SELECT ifNull(1, intDiv(1, 0))", 153},
+		{"SELECT coalesce(1, intDiv(1, 0))", 153},
+		{"SELECT materialize(intDiv(1, 0)) FROM numbers(0)", 153},
+		{"SELECT if(toInt8(1), 1, intDiv(1, 0))", 153},
+		{"SELECT if(toUInt16(1), 1, intDiv(1, 0))", 153},
+		{"SELECT if(256, 1, intDiv(1, 0))", 153},
+		{"SELECT if(-1, 1, intDiv(1, 0))", 153},
+		{"SELECT if(1.5, 1, intDiv(1, 0))", 153},
+		{"SELECT if(toNullable(toInt8(1)), 1, intDiv(1, 0))", 153},
+	} {
+		for _, stream := range []bool{false, true} {
+			_, err := te.e.Execute(context.Background(), &Request{Query: c.sql, Stream: stream})
+			wantCode(t, c.sql, err, c.code, "")
+		}
+	}
+	// A function of a column or of materialize() is evaluated per row, and
+	// the branch of if (or ?:) that a constant UInt8, Bool or NULL condition
+	// rules out is never evaluated (results from 25.8.33.6).
+	for _, c := range []struct{ sql, want string }{
+		{"SELECT intDiv(number, 0) FROM numbers(3) WHERE 0", ""},
+		{"SELECT intDiv(materialize(1), 0) FROM numbers(3) WHERE 0", ""},
+		{"SELECT materialize(2) + 1, toTypeName(materialize(2))", "3\tUInt8"},
+		{"SELECT if(1, 1, intDiv(1, 0))", "1"},
+		{"SELECT if(0, intDiv(1, 0), 1)", "1"},
+		{"SELECT number, if(1, number, intDiv(1, 0)) FROM numbers(2)", "0\t0\n1\t1"},
+		{"SELECT if(1, 1, toUInt8('abc'))", "1"},
+		{"SELECT if(1, if(0, intDiv(1, 0), 2), 3)", "2"},
+		{"SELECT if(0, if(1, intDiv(1, 0), 2), 3)", "3"},
+		{"SELECT 1 ? 2 : intDiv(1, 0)", "2"},
+		{"SELECT if(1 = 1, 1, intDiv(1, 0))", "1"},
+		{"WITH 0 AS z SELECT if(z, intDiv(1, 0), 1)", "1"},
+		{"SELECT if(NULL, intDiv(1, 0), 1)", "1"},
+		{"SELECT if(true, 1, intDiv(1, 0))", "1"},
+		{"SELECT if(toNullable(1), 1, intDiv(1, 0))", "1"},
+		{"SELECT if(toLowCardinality(toUInt8(1)), 1, intDiv(1, 0))", "1"},
+		{"SELECT number FROM numbers(3) WHERE if(0, intDiv(1, 0), 1) = 1", "0\n1\n2"},
+	} {
+		te.expectRows(c.sql, c.want)
 	}
 }

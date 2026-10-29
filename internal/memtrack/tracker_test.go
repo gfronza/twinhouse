@@ -225,3 +225,24 @@ func TestLimitExceededMessage(t *testing.T) {
 		t.Fatalf("message\n got: %s\nwant: %s", err.Msg, want)
 	}
 }
+
+func TestTrackerPeakKeepsTheHighestReservation(t *testing.T) {
+	tr := New(100)
+	for _, n := range []int64{30, 40} {
+		if err := tr.Reserve(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tr.Release(50)
+	if err := tr.Reserve(10); err != nil {
+		t.Fatal(err)
+	}
+	_ = tr.Reserve(90) // fails: a refused reservation is not a peak
+	if tr.Peak() != 70 {
+		t.Fatalf("peak = %d, want 70", tr.Peak())
+	}
+	var none *Tracker
+	if none.Peak() != 0 {
+		t.Fatal("nil tracker has a peak")
+	}
+}

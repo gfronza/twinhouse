@@ -460,16 +460,22 @@ func (spec *joinSpec) appendKey(dst []byte, row []any, keys []*expr, convs []fun
 }
 
 // build reads the right side into rows and indexes it by key. What it holds
-// is charged to the query until the join closes.
-func (spec *joinSpec) build(q *query, it rowIter) (*joinBuild, error) {
+// is charged to the query until the join closes, or released on error (a
+// panic included).
+func (spec *joinSpec) build(q *query, it rowIter) (_ *joinBuild, err error) {
 	b := &joinBuild{index: map[string]int{}, ch: newRowCharge(q.mem.NewAccount(), spec.rightCols)}
+	defer func() {
+		if err != nil {
+			b.ch.acct.Close()
+		}
+	}()
+	defer recoverInternal(&err)
 	if b.ch.sz != nil {
 		if n, ok := b.ch.sz.fixedRow(); ok {
 			b.fixedRow = n
 		}
 	}
 	if err := b.fill(q, spec, it); err != nil {
-		b.ch.acct.Close()
 		return nil, err
 	}
 	return b, nil

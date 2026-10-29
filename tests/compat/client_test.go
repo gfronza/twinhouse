@@ -98,7 +98,8 @@ type httpResult struct {
 	body    []byte
 	ctype   string
 	xformat string
-	err     error // transport error
+	summary string // X-ClickHouse-Summary
+	err     error  // transport error
 }
 
 func (r httpResult) failed() bool { return r.err != nil || r.status != 200 || r.code != 0 }
@@ -121,6 +122,8 @@ type reqOpts struct {
 	settings []kv
 	gzip     bool
 	split    bool // first line → ?query=, rest → body
+	// acceptGzip asks for a gzip response and keeps the body compressed.
+	acceptGzip bool
 }
 
 // do runs one statement over raw HTTP (POST, query in body).
@@ -159,6 +162,9 @@ func (tg *target) do(ctx context.Context, sql string, o reqOpts) httpResult {
 	if o.gzip {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
+	if o.acceptGzip {
+		req.Header.Set("Accept-Encoding", "gzip")
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return httpResult{err: err}
@@ -166,7 +172,8 @@ func (tg *target) do(ctx context.Context, sql string, o reqOpts) httpResult {
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	r := httpResult{status: resp.StatusCode, body: b, err: err,
-		ctype: resp.Header.Get("Content-Type"), xformat: resp.Header.Get("X-ClickHouse-Format")}
+		ctype: resp.Header.Get("Content-Type"), xformat: resp.Header.Get("X-ClickHouse-Format"),
+		summary: resp.Header.Get("X-ClickHouse-Summary")}
 	if c := resp.Header.Get("X-ClickHouse-Exception-Code"); c != "" {
 		r.code, _ = strconv.Atoi(c)
 	} else if r.status != 200 {

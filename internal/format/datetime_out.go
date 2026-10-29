@@ -246,3 +246,5 @@ func (e *dtEncoder) WriteRows(rows [][]any) error {
 }
 
 func (e *dtEncoder) Finish(s Stats) error { return e.inner.Finish(s) }
+
+func (e *dtEncoder) unwrap() Encoder { return e.inner }

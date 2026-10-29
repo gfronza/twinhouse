@@ -254,6 +254,210 @@ in the serverless deployment behind API Gateway, see "Lambda API mode"):
   `Timeout exceeded: elapsed <x> ms, maximum: <y> ms`. Unparseable values
   fail like ClickHouse (27 / 72). `MAX_EXECUTION_TIME` (seconds or a Go
   duration, default 0) is the server-wide default a query may override.
+  It also covers sending the result: a SELECT that expires while its rows
+  are sent ends with 159 as below. With `timeout_overflow_mode = 'break'`
+  a streamed SELECT instead ends normally after the rows read so far, as
+  in ClickHouse; a query that expires before its first row (while a sort,
+  GROUP BY or JOIN build reads its input) or a statement collected first
+  still fails with 159, where ClickHouse returns what it has.
+* **Results stream.** A SELECT's rows are encoded as they are read, block
+  by block (`max_block_size` rows from the URL, session or the query's
+  `SETTINGS` clause, default 65409, about 1 MB of estimated memory, or
+  the rows of one source block of `max_block_size` rows read, whichever
+  comes first; `exec.ResultStream`), so an export or `SELECT
+  number FROM system.numbers` runs in bounded memory and ends when the
+  client goes away. Other statements are collected first. Errors come in
+  ClickHouse's order: an error in a constant expression (`intDiv(1, 0)`,
+  `toUInt8('abc')`, also with no input rows and in a branch of `multiIf`
+  or `CASE` not taken) is raised when the query is planned, like
+  ClickHouse's analysis errors, so it comes before the output is set up
+  (JSON has an empty `meta`); then setting up the output (an unknown
+  format, a bad `date_time_output_format`); then errors while rows are
+  read, including while a sort, GROUP BY or JOIN build reads its input.
+  As in ClickHouse, the branch of `if` (or `?:`) that a constant
+  UInt8, Bool or NULL condition (also Nullable or LowCardinality of
+  those) rules out is never evaluated, so its errors are not raised
+  (with any other condition type both branches are, as there), and
+  `materialize(x)` is a per-row value, so `intDiv(materialize(1), 0)`
+  fails only when a row is computed.
+  * Commit. The first `http_response_buffer_size` bytes (URL or session;
+    when it is not set, the `buffer_size` URL parameter; default
+    `ResponseBufferSize`, 1 MiB) are buffered before the status and
+    headers are sent; a given 0 commits at the first block. With
+    `wait_end_of_query` (URL) or `http_wait_end_of_query` (URL or
+    session) set the whole body is. As in ClickHouse 25.8,
+    `http_response_buffer_size` wins over `buffer_size` (which is then
+    not parsed; otherwise it takes an optional `+` and digits only, and
+    fails with 27 on anything else, a size suffix included, 32 when
+    empty, 72 when negative or without digits: `+`, `++1`), either form
+    of waiting is enough, and both settings have no effect in the
+    query's `SETTINGS` clause. `http_response_buffer_size` is read as the
+    engine reads a size setting (an optional `+`, a size suffix: `+16`,
+    `1K`, `1Ki`).
+    `http_wait_end_of_query` takes 0, 1, true or false (any case; else
+    `CANNOT_PARSE_BOOL`, 467); `wait_end_of_query` is read as
+    ClickHouse's `readBoolText` reads it: any first character but `0` is
+    true, a longer value starting with t or f must spell true or false
+    (else 27), and an empty one fails with 32. What a SELECT buffers past
+    `ResponseBufferSize` counts against `max_memory_usage` (§3).
+    `X-ClickHouse-Summary` has the rows read so far. As in ClickHouse,
+    `result_rows` and `result_bytes` are set when the body is sent at
+    once and the client set its buffering (`wait_end_of_query`,
+    `http_wait_end_of_query`, a buffer size the body fits in) or
+    compression (`compress=1`, `enable_http_compression`), or when the
+    body is empty (`FORMAT Null`); with the default buffer, or once the
+    body is committed before its end, they are 0.
+  * Flush. Once the response is committed, each block reaches the client
+    when it ends (with the status and headers, after the commit), as
+    ClickHouse's auto-flush sends each block, so the rows of a slow query
+    arrive as they come. A block that ends within 2 ms of the last flush
+    goes out with the blocks that follow it at the end of those 2 ms, so
+    small blocks do not cost a system call each and none waits longer;
+    the body is sent in writes of up to 256 KiB. With `compress=1` each
+    block ends a frame (of at most 1 MiB), as in ClickHouse. HTTP
+    compression keeps its own buffering, as there: a slow gzip result
+    sends nothing until its compressor emits output.
+  * HEAD: the status and headers are sent once the first block is
+    encoded, and the query stops there, as ClickHouse answers it, so
+    `HEAD` on `system.numbers` returns at once, and with a selective
+    filter once its first block ends (see (a)). As in ClickHouse, a
+    HEAD whose filter passes nothing waits for the query's end (25.8:
+    408 after `max_execution_time`). An error in the first
+    block is an HTTP error, later ones are not reached (with parallel
+    formatting ClickHouse reads further first, so a later error can be a
+    500 there, see (b)). With the whole body buffered the query runs to
+    its end first. ClickHouse sends no `X-ClickHouse-Summary` with HEAD;
+    twinhouse sends the early one.
+  * An error before the commit is an HTTP error in the result's format:
+    the format's `Content-Type` and `X-ClickHouse-Format`, for the JSON
+    formats the result's `meta` with no rows, and the rows read so far in
+    the summary, as in ClickHouse 25.8. With
+    `http_write_exception_in_output_format = 0` (URL, session or `SETTINGS`
+    clause; clickhouse-go's `QueryFormat` sets it) the body is the plain
+    exception text, still with the format's headers.
+  * An error after the commit ends the 200 body, after every row of the
+    blocks returned before it, as in ClickHouse 25.8 (the blocks differ,
+    see (a)). The JSON formats
+    carry the exception and end normally (JSON and JSONCompact[Strings]
+    close `data` and end with `"rows": <n>` and `"exception": "<text>"`,
+    without statistics; the EachRow formats add a `{"exception":
+    "<text>"}` line, `["<text>"]` for the compact ones). The other formats
+    get `__exception__\r\n<exception text>\n` (with `compress=1` in a
+    frame of its own) and the transfer is then cut off without its end
+    (no final chunk), so a client that does not look for the marker still
+    sees it fail; with HTTP compression (`enable_http_compression`) they
+    get no exception text, only the cut-off stream. With
+    `http_write_exception_in_output_format = 0` the JSON formats end like
+    the others (`}__exception__\r\n…` after the last whole row), as in
+    ClickHouse.
+  * `http_send_timeout` (seconds, URL or session, default 30, 0 = none)
+    bounds each write of at most 256 KiB to the client: a client that stops
+    reading ends the query, logged as `SOCKET_TIMEOUT` (209), as in
+    ClickHouse, while one that reads slowly but steadily gets the whole
+    response however long it takes.
+  * `max_result_rows` and `max_result_bytes` are checked per block, as in
+    ClickHouse: with `result_overflow_mode = 'throw'` (the default) the
+    block that takes the totals past a limit fails with
+    `TOO_MANY_ROWS_OR_BYTES` (396) `Limit for result exceeded, max rows:
+    <n>, current rows: <m>` (readable quantities: `5.00`, `65.41
+    thousand`) or `max bytes: 100.00 B, current bytes: 160.00 B`, after
+    the blocks before it; with `break` the block that reaches a limit is
+    the last one, so up to a block more than the limit is returned. Bytes
+    are ClickHouse's column bytes (a value's width, a String's length plus
+    8, a Nullable's extra byte, an Array's or Map's 8-byte offset).
+  * A statement run outside HTTP (tests, `Request.Stream` unset) is
+    collected and keeps the exact `max_result_rows` and ignores
+    `max_result_bytes`.
+
+  Known deviations: (a) As in ClickHouse, which filters each source block
+  into one result block, a result block ends with its source block
+  (`max_block_size` rows read, as `read_rows` counts them; a block is
+  never empty), so a filtered `numbers()` result has ClickHouse's blocks
+  (`% 2 = 0` in blocks of 10: blocks of 5). But twinhouse sees that end
+  only when a row of a later source block passes the filter, or the
+  input ends: rows that pass before a long run of rows that do not wait
+  for the next row that passes (`WHERE number = 0 OR number = 10^11`:
+  ClickHouse sends row 0 when its source block ends, twinhouse when the
+  query ends), and an early commit's `read_rows` counts the rows read up
+  to that row (`numbers(100) WHERE number % 2 = 1` failing at 55, blocks
+  of 10, a 16-byte buffer: 25 rows in both, `read_rows` 10 there, 12
+  here). Blocks also end at about 1 MB of twinhouse's estimate (about 12k
+  rows of one UInt64 column, where ClickHouse's hold 65409), and rows a
+  JOIN or ARRAY JOIN multiplies fill blocks of `max_block_size` rows. In
+  those cases `break` can return a different number of rows past the
+  limit, `throw` can report a different `current rows` and a mid-stream
+  error comes after a different number of rows; a LIMIT over a filter
+  reports `rows_before_limit_at_least` and `rows_read` from the same
+  blocks (`numbers(100) WHERE number % 3 = 0 LIMIT 5`, blocks of 10: 7
+  and 20 there, 5 and 13 here). In `max_result_bytes` LowCardinality
+  counts as its value type, a constant as a value per row and an
+  aggregate state as twinhouse's estimate. Under a sort,
+  `rows_before_limit_at_least` is the sort's whole input, also when
+  `break` (or `timeout_overflow_mode = 'break'`) ends the result early,
+  as in ClickHouse. Under a GROUP BY without ORDER BY it is the number of
+  groups, which is ClickHouse's value only when its aggregation output
+  fits in one `max_block_size` block; otherwise ClickHouse counts the
+  output blocks the LIMIT read (100 groups, blocks of 10: `LIMIT 50` 56
+  there, `LIMIT 5` 12 there, 100 here for both). After `HAVING`,
+  `DISTINCT` or `LIMIT BY`, an early end counts only the rows that
+  reached the LIMIT so far (ClickHouse: the rows after `HAVING`). With
+  `LIMIT 0` ClickHouse reads nothing (`rows_before_limit_at_least` 0),
+  where twinhouse still runs the sort or GROUP BY under it and reports
+  its input.
+  (b) ClickHouse's commit point depends on parallel formatting
+  (`output_format_parallel_formatting`), its send buffer and compression,
+  so a failing result there can be a 500 or a 200 with fewer rows than
+  twinhouse sends, and it drops what is still in its send buffer when the
+  error comes; twinhouse commits at `http_response_buffer_size` bytes of
+  output (after compression) and sends every row encoded before the
+  error. Without parallel formatting (always for Native, the format of
+  clickhouse-go's `Query`, and with `max_threads = 1`) ClickHouse commits
+  after its first block, so a small Native result that fails after its
+  first block is a 200 with `__exception__` there (clickhouse-go reports
+  the exception from the stream) and an HTTP 500 here (clickhouse-go
+  reports an HTTP error with the same code). With compression ClickHouse
+  holds the headers until about 1 MiB of compressed output, whatever
+  `http_response_buffer_size` is, while twinhouse commits at
+  `http_response_buffer_size` bytes of compressed output. With HTTP
+  compression an error before ClickHouse's commit is a 500 whose
+  compressed body has what was formatted before the error and then the
+  exception text: nothing more with parallel formatting (gzip,
+  `numbers(100000)` TSV failing at row 90000, a 16-byte buffer: the text
+  alone), the first block without it (65409 rows, then the text), and
+  every block before the error in Native (1.77 MB for `numbers(300000)`
+  failing at row 250000); an error after that commit is a 200 cut off
+  with no text (incompressible TSV failing after 1.3 MB compressed).
+  twinhouse sends a 200 cut off with no text in each of these cases, and
+  a 500 with the exception alone, see (f), only for an error before its
+  own commit. With `compress=1` both frame each block, so with a small
+  buffer a failing result can be a 500 there and a 200 here (300k TSV
+  rows failing at row 250000 with a 16-byte buffer: ClickHouse 500 after
+  two frames, twinhouse 200 after 27 frames of rows).
+  The earlier commit also leaves the summary's `result_rows` and
+  `result_bytes` 0 for a small compressed body sent with a small
+  `http_response_buffer_size` (`numbers(40)`, `compress=1`, a 50-byte
+  buffer: 40 rows there, 0 here). (c) ClickHouse keeps a
+  `wait_end_of_query` response in memory only up to
+  `http_response_buffer_size` and spills the rest to a temporary file
+  outside `max_memory_usage`; twinhouse holds it in memory and counts it,
+  so a large one fails with 241. (d) An early commit's
+  `total_rows_to_read` is the rows read so far: twinhouse has no estimate
+  of the rows a query will read, where ClickHouse sends its estimate
+  (300000 for `numbers(300000)`). (e) `send_progress_in_http_headers` is
+  accepted and ignored: Go's HTTP server cannot send header lines one by
+  one before the body, so no `X-ClickHouse-Progress` headers are sent; the
+  summary has the final counts. (f) With `compress=1` or HTTP compression,
+  the body of an error before the commit has only the exception (its
+  frame, or the compressed text or JSON exception line); ClickHouse also
+  sends the rows it formatted before the error, in their frames or
+  compressed ahead of the exception (`numbers(40)` TSV failing at row 25
+  with gzip: 20 rows and the text there, the text alone here). Clients
+  parse both. (g) A response buffered whole is sent with `Content-Length`,
+  where ClickHouse always uses chunked encoding. The summary's
+  `result_bytes` is the encoded body size, where ClickHouse counts its
+  blocks' bytes (50 UInt64 rows in TSV: 140 here, 1040 there); after an
+  error its `read_rows` counts the rows up to the failing one, where
+  ClickHouse counts whole blocks (26 here, 30 there with blocks of 10).
 * **Lambda API mode** (`cmd/chserver-lambda`, `deploy/aws-lambda`): the same
   `server.Server` wired exactly like `cmd/chserver` (same `exec.Config` and
   `server.Config`), served to API Gateway REST proxy events through
@@ -284,8 +488,13 @@ in the serverless deployment behind API Gateway, see "Lambda API mode"):
     UTF-8), so API Gateway returns the exact bytes. Error bodies, headers
     (`X-ClickHouse-Exception-Code`, …) and HTTP statuses are those above.
   * Limits: request and response bodies are bounded by the Lambda payload
-    (6 MB; the whole response is buffered, so the server's streaming
-    commit logic only decides the status of a late error); a query is
+    (6 MB). The server buffers each response whole
+    (`server.Config.BufferResponses`), so every query error is an HTTP
+    error and the transfer is never cut off, and the summary has the
+    final result counts as with `wait_end_of_query=1`; what a SELECT
+    buffers past `ResponseBufferSize` counts against `max_memory_usage`
+    (a large result fails with 241), and the adapter's copy of the
+    response is not counted. A query is
     bounded by the API Gateway integration timeout (29 s by default; set
     `MAX_EXECUTION_TIME` below it so a slow query fails with 159 rather
     than a 504). DDL runs with `dynamo.Options.AsyncDDL` (below).
@@ -642,9 +851,14 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   in a `SETTINGS` clause a different zone is `NOT_IMPLEMENTED` (the server
   formats results in the request's zone).
 * **Query memory (`max_memory_usage`)** (`internal/memtrack`): each query
-  accounts the memory its materialized state holds: the rows a SELECT
-  collects (its result and subquery results) and the sets of IN
-  subqueries, whose rows stream into the set, until the query ends;
+  accounts the memory its materialized state holds: a streamed result's
+  current block until the next one is read, and what its response
+  buffers past `ResponseBufferSize` (`wait_end_of_query=1`, a larger
+  `http_response_buffer_size`) until the query ends (§2 "Results
+  stream");
+  the rows a SELECT collects (a collected result and subquery results)
+  and the sets of IN subqueries, whose rows stream into the set, until
+  the query ends;
   sort buffers (a full sort's rows until they are read out, a top-N sort's
   kept rows); GROUP BY's groups and aggregate states (set members,
   `groupArray` lists, kept values; each group's until its row is out);
@@ -696,9 +910,14 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   limit, so concurrent heavy queries can still exhaust the process.
   (c) **Estimates, not allocator counts.** Memory is estimated where state
   is materialized, from the Go size of each value; per-row temporaries and
-  encoder state are not counted. So 241 can fire at a different point, and
-  for a different amount, than in ClickHouse. twinhouse's in-memory rows
-  and values also take several times ClickHouse's columnar memory (about
+  encoder state are not counted (one Native block, the 64 KiB buffers
+  and the 256 KiB send buffer, the HTTP compression stages (zstd's
+  window holds about 20 MiB per response)). The rows Pretty and
+  PrettyCompact keep for the table (up to `output_format_pretty_max_rows`)
+  are counted from each block until the table is written. So 241 can fire at a
+  different point, and for a different amount, than in ClickHouse.
+  twinhouse's in-memory rows and values also take several times
+  ClickHouse's columnar memory (about
   370 B per GROUP BY group of a UInt64 key with `count()`, about 75 B per
   sorted row of two UInt64, 24–32 B per array element), and the estimates
   add up to about 1.7× that, so a limit sized for ClickHouse holds a

@@ -57,6 +57,8 @@ const (
 	// are passed to encoders (Native: one block each) in batches of it.
 	defaultBlockSize = 65409
 	maxBlockSize     = 1 << 20
+	// defaultSendTimeout is ClickHouse's http_send_timeout default.
+	defaultSendTimeout = 30 * time.Second
 )
 
 // Config configures a Server.
@@ -82,6 +84,11 @@ type Config struct {
 	// status and headers are sent (default 1 MiB). Errors raised before that
 	// get a proper HTTP error status; later ones are appended to the body.
 	ResponseBufferSize int
+	// BufferResponses buffers every response whole before sending it, so
+	// every error is an HTTP error; what a SELECT buffers past
+	// ResponseBufferSize counts against its max_memory_usage. The Lambda
+	// sets it: its adapter holds the whole response anyway.
+	BufferResponses bool
 	// MaxQuerySize is the largest max_query_size a request may set
 	// (default 256 MiB); larger values are lowered to it.
 	MaxQuerySize int
@@ -237,10 +244,26 @@ type call struct {
 	defaultFormat string
 	data          *countingReader
 
-	// outFormat is the selected output format once a result is written.
+	// outFormat is the selected output format once a result is written,
+	// outCanon its canonical name once its encoder is set up.
 	outFormat string
+	outCanon  string
+	// sendTimeout is http_send_timeout (0: none).
+	sendTimeout time.Duration
+	// bufferSize is how many response bytes are buffered before the
+	// commit; wholeBody buffers the whole response (bufferSize -1)
+	// because the client or the server config asked for it;
+	// explicitBuffer is set when the client gave the size.
+	bufferSize     int
+	wholeBody      bool
+	explicitBuffer bool
 	// outSettings caches outputSettings().
 	outSettings map[string]string
+
+	// queryCtx is the running query's context, bounded by queryLimit
+	// (max_execution_time; 0 = none).
+	queryCtx   context.Context
+	queryLimit time.Duration
 
 	// outcome, for logging
 	status    int
@@ -378,6 +401,8 @@ func (c *call) run() error {
 		Settings: c.engineSettings(readonly),
 		QueryID:  c.queryID,
 		User:     c.user,
+		// A SELECT's rows are encoded as they are read.
+		Stream: true,
 		FormatOptions: format.Options{
 			// Clients encode INSERT data with revision 0 over HTTP
 			// (client_protocol_version only applies to output).
@@ -392,39 +417,59 @@ func (c *call) run() error {
 	if err != nil {
 		return err
 	}
-	res, err := c.execute(req, limit)
+	if c.sendTimeout, err = c.httpSendTimeout(); err != nil {
+		return err
+	}
+	if err := c.readResponseBuffer(); err != nil {
+		return err
+	}
+	res, cancel, err := c.execute(req, limit)
+	// max_execution_time also covers sending the result.
+	defer cancel()
 	if err != nil {
 		return err
 	}
 	if res == nil {
 		res = &exec.Result{}
 	}
+	if res.Stream != nil {
+		defer res.Stream.Close()
+	}
 	c.result = res
 	c.updateSession(res)
 	return c.writeResult(res)
 }
 
-// execute runs req, bounded by limit (max_execution_time; 0 = none). When
-// the limit expires the query fails with TIMEOUT_EXCEEDED (159), whatever
-// error the cancelled storage call reported.
-func (c *call) execute(req *exec.Request, limit time.Duration) (res *exec.Result, err error) {
-	parent := c.r.Context()
-	ctx := parent
+// execute runs req, bounded by limit (max_execution_time; 0 = none), and
+// returns the cancel func of the query's context: a streamed result keeps
+// running in it until the caller cancels it.
+func (c *call) execute(req *exec.Request, limit time.Duration) (res *exec.Result, cancel context.CancelFunc, err error) {
+	c.queryCtx, cancel = c.r.Context(), func() {}
 	if limit > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(parent, limit)
-		defer cancel()
+		c.queryCtx, cancel = context.WithTimeout(c.queryCtx, limit)
 	}
+	c.queryLimit = limit
 	defer func() {
 		if p := recover(); p != nil {
 			c.s.log.Error("panic in executor", "query_id", c.queryID, "panic", p, "stack", string(debug.Stack()))
 			err = cherr.New(cherr.LogicalError, "Internal error: %v", p)
 		}
-		if err != nil && limit > 0 && parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			err = timeoutExceeded(c.s.now().Sub(c.start), limit)
+		if err != nil {
+			err = c.queryError(err)
 		}
 	}()
-	return c.s.cfg.Executor.Execute(ctx, req)
+	res, err = c.s.cfg.Executor.Execute(c.queryCtx, req)
+	return res, cancel, err
+}
+
+// queryError maps an error of the running query: once max_execution_time
+// has expired it is TIMEOUT_EXCEEDED (159), whatever error the cancelled
+// storage call reported.
+func (c *call) queryError(err error) error {
+	if c.queryLimit > 0 && c.r.Context().Err() == nil && errors.Is(c.queryCtx.Err(), context.DeadlineExceeded) {
+		return timeoutExceeded(c.s.now().Sub(c.start), c.queryLimit)
+	}
+	return err
 }
 
 // timeoutExceeded is ClickHouse 25.8's max_execution_time error, e.g.
@@ -445,14 +490,158 @@ func (c *call) maxExecutionTime() (time.Duration, error) {
 	if !ok {
 		return c.s.cfg.MaxExecutionTime, nil
 	}
+	return parseDuration(v)
+}
+
+// httpSendTimeout returns http_send_timeout, how long one write to the
+// client may block (seconds; 0 or negative = no limit), from the URL or
+// session settings.
+func (c *call) httpSendTimeout() (time.Duration, error) {
+	v := c.setting("http_send_timeout")
+	if v == "" {
+		return defaultSendTimeout, nil
+	}
+	return parseDuration(v)
+}
+
+// readResponseBuffer reads how much of the response is buffered before
+// its status and headers are sent, as ClickHouse 25.8 reads it: the whole
+// body with wait_end_of_query (URL) or http_wait_end_of_query (URL or
+// session); else http_response_buffer_size (URL or session; the engine
+// reports an invalid value) if set, else the buffer_size URL parameter,
+// else ResponseBufferSize. A given size, 0 included, is explicit.
+func (c *call) readResponseBuffer() error {
+	wait, err := c.waitEndOfQuery()
+	if err != nil {
+		return err
+	}
+	c.bufferSize = c.s.cfg.ResponseBufferSize
+	c.wholeBody = c.s.cfg.BufferResponses || wait
+	if v := c.setting("http_response_buffer_size"); v != "" {
+		if n, err := exec.ParseSizeSetting(v); err == nil {
+			c.setBufferSize(n)
+		}
+	} else if v, ok := c.params["buffer_size"]; ok && len(v) > 0 {
+		n, err := parseBufferSize(v[0])
+		if err != nil {
+			return err
+		}
+		c.setBufferSize(n)
+	}
+	if c.wholeBody {
+		c.bufferSize = -1
+	}
+	return nil
+}
+
+// setBufferSize sets the response buffer size the client gave.
+func (c *call) setBufferSize(n uint64) {
+	c.bufferSize = int(min(n, math.MaxInt))
+	c.explicitBuffer = true
+}
+
+// waitEndOfQuery reports whether the client asked for the whole body to be
+// buffered. http_wait_end_of_query is a Bool setting (0, 1, true or false
+// in any case, else 467); the wait_end_of_query URL parameter is read as
+// ClickHouse's readBoolText reads it (parseURLBool).
+func (c *call) waitEndOfQuery() (bool, error) {
+	if v := c.setting("http_wait_end_of_query"); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true":
+			return true, nil
+		case "0", "false":
+		default:
+			return false, cherr.New(cherr.CannotParseBool, "Cannot parse bool from string '%s'", v)
+		}
+	}
+	if v, ok := c.params["wait_end_of_query"]; ok && len(v) > 0 {
+		return parseURLBool(v[0])
+	}
+	return false, nil
+}
+
+// parseURLBool parses a bool URL parameter as ClickHouse 25.8 does: any
+// first character but '0' is true, and a longer value starting with t or
+// f must spell true or false (in any case).
+func parseURLBool(v string) (bool, error) {
+	if v == "" {
+		return false, cherr.New(cherr.AttemptToReadAfterEOF, "Attempt to read after eof")
+	}
+	x, rest := v[0] != '0', v[1:]
+	var err error
+	if rest != "" {
+		switch v[0] {
+		case 't', 'T':
+			rest, err = expectFold(rest, "rue")
+		case 'f', 'F':
+			x = false
+			rest, err = expectFold(rest, "alse")
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	if rest != "" {
+		return false, cherr.New(cherr.CannotParseInputAssertionFailed, "Cannot parse input: expected 'eof' before: '%s'", rest)
+	}
+	return x, nil
+}
+
+// expectFold reads the lower-case word from the start of s, ignoring
+// ASCII case, and returns the rest.
+func expectFold(s, word string) (string, error) {
+	for i := 0; i < len(word); i++ {
+		if i == len(s) {
+			return "", cherr.New(cherr.CannotParseInputAssertionFailed, "Cannot parse input: expected '%s' at end of stream.", word)
+		}
+		if ch := s[i] | 0x20; ch != word[i] {
+			return "", cherr.New(cherr.CannotParseInputAssertionFailed, "Cannot parse input: expected '%s' before: '%s'", word, s[i:])
+		}
+	}
+	return s[len(word):], nil
+}
+
+// parseBufferSize parses the buffer_size URL parameter as ClickHouse 25.8
+// does: an optional '+', then decimal digits only, too large a value
+// saturating.
+func parseBufferSize(v string) (uint64, error) {
+	if v == "" {
+		return 0, cherr.New(cherr.AttemptToReadAfterEOF, "Attempt to read after eof")
+	}
+	switch v[0] {
+	case '-':
+		return 0, cherr.New(cherr.CannotParseNumber, "Unsigned type must not contain '-' symbol")
+	case '+':
+		v = v[1:]
+		switch {
+		case v != "" && (v[0] == '+' || v[0] == '-'):
+			return 0, cherr.New(cherr.CannotParseNumber, "Cannot parse number with multiple sign (+/-) characters")
+		case v == "" || v[0] < '0' || v[0] > '9':
+			return 0, cherr.New(cherr.CannotParseNumber, "Cannot parse number without any digits")
+		}
+	}
+	n := 0
+	for n < len(v) && v[n] >= '0' && v[n] <= '9' {
+		n++
+	}
+	if n < len(v) {
+		return 0, cherr.New(cherr.CannotParseInputAssertionFailed, "Cannot parse input: expected 'eof' before: '%s'", v[n:])
+	}
+	x, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return math.MaxUint64, nil
+	}
+	return x, nil
+}
+
+// parseDuration parses a Seconds setting (may be fractional); 0, negative
+// and out-of-range values mean no limit.
+func parseDuration(v string) (time.Duration, error) {
 	secs, err := parseSecondsSetting(v)
 	if err != nil {
 		return 0, err
 	}
-	if secs <= 0 || math.IsNaN(secs) {
-		return 0, nil
-	}
-	if secs > float64(math.MaxInt64/int64(time.Second)) {
+	if secs <= 0 || math.IsNaN(secs) || secs > float64(math.MaxInt64/int64(time.Second)) {
 		return 0, nil
 	}
 	return time.Duration(secs * float64(time.Second)), nil
