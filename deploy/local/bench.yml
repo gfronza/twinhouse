@@ -1,0 +1,20 @@
+# Resource caps for the ClickHouse comparison (make chbench-up,
+# docs/clickhouse-comparison.md), layered over docker-compose.yml.
+# Each side gets 4 CPUs and 4 GiB: ClickHouse alone, twinhouse split
+# between the server and DynamoDB Local. CHBENCH_UNCAPPED=1 leaves this
+# file out.
+services:
+  clickhouse:
+    cpus: 4
+    mem_limit: 4g
+
+  chserver-single:
+    cpus: 1.5
+    mem_limit: 1g
+
+  dynamodb-single:
+    cpus: 2.5
+    mem_limit: 3g
+    environment:
+      # The JVM's default heap is a quarter of the container's memory.
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75
