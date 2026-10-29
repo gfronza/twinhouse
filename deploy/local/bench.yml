@@ -1,8 +1,10 @@
 # Resource caps for the ClickHouse comparison (make chbench-up,
 # docs/clickhouse-comparison.md), layered over docker-compose.yml.
-# Each side gets 4 CPUs and 4 GiB: ClickHouse alone, twinhouse split
-# between the server and DynamoDB Local. CHBENCH_UNCAPPED=1 leaves this
-# file out.
+# Each side gets 4 CPUs: ClickHouse alone, twinhouse split between the
+# server and DynamoDB Local. Memory is not split evenly: ClickHouse keeps
+# its data on disk, while DynamoDB Local holds every item and stream
+# record in memory (300k events need about 2 GiB, 1M about 5 GiB).
+# CHBENCH_UNCAPPED=1 leaves this file out.
 services:
   clickhouse:
     cpus: 4
@@ -14,7 +16,7 @@ services:
 
   dynamodb-single:
     cpus: 2.5
-    mem_limit: 3g
+    mem_limit: 6g
     environment:
-      # The JVM's default heap is a quarter of the container's memory.
-      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75
+      # Half for the heap: the in-memory database lives outside it.
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=50

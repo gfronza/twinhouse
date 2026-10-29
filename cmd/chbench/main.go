@@ -43,7 +43,7 @@ func main() {
 		thURL   = flag.String("twinhouse", "http://localhost:38125", "twinhouse HTTP endpoint")
 		chURL   = flag.String("clickhouse", "http://localhost:38123", "ClickHouse HTTP endpoint")
 		db      = flag.String("db", "chbench", "database the benchmark creates (dropped first)")
-		size    = flag.String("size", "S", "events to load: S (100k), M (1M) or a number")
+		size    = flag.String("size", "S", "events to load: S (100k), M (300k) or a number")
 		mvRows  = flag.Int("mv-rows", 200_000, "events loaded through the materialized view (W2), at most -size")
 		small   = flag.Int("small-inserts", 2000, "single-row INSERTs per server (W3)")
 		rounds  = flag.Int("rounds", 20, "timed rounds per read; a quarter (at least 5) when a warm-up run takes over 2s")
@@ -63,7 +63,9 @@ func main() {
 	case "S":
 		cfg.rows = 100_000
 	case "M":
-		cfg.rows = 1_000_000
+		// Not 1M: DynamoDB Local's Scan slows with table size per page, so
+		// a full scan of 1M events takes minutes (docs/clickhouse-comparison.md).
+		cfg.rows = 300_000
 	default:
 		if _, err := fmt.Sscan(*size, &cfg.rows); err != nil || cfg.rows <= 0 {
 			log.Fatalf("-size %q: want S, M or a positive number", *size)
