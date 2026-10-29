@@ -48,7 +48,7 @@ GITLEAKS              ?= $(GO) run github.com/zricethezav/gitleaks/v8@$(GITLEAKS
 # which the deploy/aws-lambda and deploy/aws-ecs Go tests run when sam is on PATH.
 SAM_CLI_VERSION       ?= 1.170.0
 
-.PHONY: all build image test bench vet fmt test-integration up up-single down logs ps e2e compat multiregion \
+.PHONY: all build image test bench bench-compare vet fmt test-integration up up-single down logs ps e2e compat multiregion \
         logs-dump verify tidy mod-check fmt-check leaks leaks-staged lint lint-install sam-install test-race vulncheck hooks \
         aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy \
         ecs-validate ecs-local image-push ecs-deploy
@@ -79,6 +79,32 @@ BENCH_TIMEOUT ?= 60m
 bench:
 	$(GO) test -run '^$$' -bench '$(BENCH)' -benchmem -count $(BENCH_COUNT) \
 		-benchtime $(BENCH_TIME) -timeout $(BENCH_TIMEOUT) $(BENCH_PKGS)
+
+# The benchmarks of BASE against the working tree (scripts/bench-compare.sh):
+# alternating pairs, each started below load BENCH_MAX_LOAD, compared with
+# benchstat. Fails if a benchmark of BENCH_GATE_PKGS is significantly slower
+# by more than BENCH_MAX_REGRESSION percent; BENCH_REPORT_PKGS are only
+# printed. Without BASE, a dirty tree is compared with HEAD and a clean one
+# with HEAD~1. About 13 minutes with the defaults (more if it waits for the
+# load); BENCH=<regexp> narrows it. Not part of verify: CI runners are too
+# noisy for a 3% limit.
+#   make bench-compare
+#   make bench-compare BASE=main~3 BENCH=SelectStream
+BENCHSTAT_VERSION    ?= v0.0.0-20261009192801-be2c69fb417e
+BENCHSTAT            ?= $(GO) run golang.org/x/perf/cmd/benchstat@$(BENCHSTAT_VERSION)
+BASE                 ?=
+BENCH_PAIRS          ?= 8
+BENCH_MAX_LOAD       ?= 8
+BENCH_LOAD_WAIT      ?= 900
+BENCH_MAX_REGRESSION ?= 3
+BENCH_GATE_PKGS      ?= ./internal/exec ./internal/server
+BENCH_REPORT_PKGS    ?= ./internal/format ./internal/sqlparse
+BENCH_OUT            ?= bin/bench-compare
+bench-compare:
+	GO='$(GO)' BENCHSTAT='$(BENCHSTAT)' BASE='$(BASE)' BENCH='$(BENCH)' BENCH_TIME='$(BENCH_TIME)' \
+	BENCH_PAIRS='$(BENCH_PAIRS)' BENCH_MAX_LOAD='$(BENCH_MAX_LOAD)' BENCH_LOAD_WAIT='$(BENCH_LOAD_WAIT)' \
+	BENCH_MAX_REGRESSION='$(BENCH_MAX_REGRESSION)' BENCH_GATE_PKGS='$(BENCH_GATE_PKGS)' \
+	BENCH_REPORT_PKGS='$(BENCH_REPORT_PKGS)' BENCH_OUT='$(BENCH_OUT)' scripts/bench-compare.sh
 
 # The default build, then the tagged suites (they need a running stack to
 # run, but must always compile).
