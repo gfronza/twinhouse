@@ -27,7 +27,7 @@ This file is the contract for all contributors. Code-level contracts live in:
 | Container deployment (ECS Fargate) | `deploy/aws-ecs/template.yaml`, `deploy/aws-ecs/README.md` |
 
 When a change alters behaviour described here, update this file in the
-same change. User-facing documentation is in `README.md`.
+same change. User-facing documentation is in `README.md` and `docs/`.
 
 ---
 
@@ -1740,7 +1740,8 @@ differential compatibility tests.
   stream, since it reloads the catalog every `CATALOG_REFRESH`. Conversely
   `cmd/reconciler-lambda` with `MVWORKER_FUNCTION_ARN` empty manages
   tables only (schedule-driven), for the API Lambda with long-running
-  stream consumers. README "Hybrid deployments" lists them.
+  stream consumers. [docs/deployment-self-managed.md, "Hybrid deployments"](docs/deployment-self-managed.md#hybrid-deployments)
+  lists them.
 
 ---
 

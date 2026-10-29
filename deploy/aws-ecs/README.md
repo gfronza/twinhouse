@@ -368,8 +368,8 @@ DynamoDB allows removing a replica only 24 hours after it was added.
 Both use the same image or binaries, the same tables and the same
 `TABLE_PREFIX` contract, so a region can move from one to the other by
 deploying the other stack with the same parameters, moving the clients
-and deleting the old stack (the tables stay; see "Moving between options"
-in the top-level README).
+and deleting the old stack (the tables stay; see
+[Moving between options](../../docs/deployment.md#moving-between-options)).
 
 ## Local check without AWS
 
