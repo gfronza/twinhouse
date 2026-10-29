@@ -80,13 +80,8 @@ bench:
 	$(GO) test -run '^$$' -bench '$(BENCH)' -benchmem -count $(BENCH_COUNT) \
 		-benchtime $(BENCH_TIME) -timeout $(BENCH_TIMEOUT) $(BENCH_PKGS)
 
-# The benchmarks of BASE against the working tree (scripts/bench-compare.sh):
-# alternating pairs, each started below load BENCH_MAX_LOAD, compared with
-# benchstat. Fails if a benchmark of BENCH_GATE_PKGS is significantly slower
-# by more than BENCH_MAX_REGRESSION percent; BENCH_REPORT_PKGS are only
-# printed. Without BASE, a dirty tree is compared with HEAD and a clean one
-# with HEAD~1. About 13 minutes with the defaults (more if it waits for the
-# load); BENCH=<regexp> narrows it. Not part of verify: CI runners are too
+# The benchmarks of BASE against the working tree (scripts/bench-compare.sh),
+# about 13 minutes with the defaults. Not part of verify: CI runners are too
 # noisy for a 3% limit. Details in docs/benchmarks.md.
 #   make bench-compare
 #   make bench-compare BASE=main~3 BENCH=SelectStream

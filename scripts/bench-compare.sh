@@ -1,6 +1,6 @@
 #!/bin/sh
-# Compares the Go benchmarks of a base revision with the current code
-# (make bench-compare; the Makefile sets every variable below).
+# Compares the Go benchmarks of a base revision with the current code.
+# Run it through make bench-compare, which sets every variable it reads.
 #
 # The base revision is checked out in a temporary git worktree. Both sides are
 # compiled once, then run in alternating pairs (base/new, new/base, ...), each
@@ -12,18 +12,7 @@
 # BENCH_REPORT_PKGS are compared and printed, never gated.
 set -eu
 
-GO=${GO:-go}
-: "${BENCHSTAT:?BENCHSTAT must be set (run through make bench-compare)}"
-BASE=${BASE:-}
-BENCH=${BENCH:-.}
-BENCH_TIME=${BENCH_TIME:-1s}
-BENCH_PAIRS=${BENCH_PAIRS:-8}
-BENCH_MAX_LOAD=${BENCH_MAX_LOAD:-8}
-BENCH_LOAD_WAIT=${BENCH_LOAD_WAIT:-900}
-BENCH_MAX_REGRESSION=${BENCH_MAX_REGRESSION:-3}
-BENCH_GATE_PKGS=${BENCH_GATE_PKGS:-./internal/exec ./internal/server}
-BENCH_REPORT_PKGS=${BENCH_REPORT_PKGS:-}
-BENCH_OUT=${BENCH_OUT:-bin/bench-compare}
+: "${BENCHSTAT:?run through make bench-compare}"
 
 die() { echo "bench-compare: $*" >&2; exit 2; }
 
