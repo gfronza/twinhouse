@@ -48,7 +48,7 @@ GITLEAKS              ?= $(GO) run github.com/zricethezav/gitleaks/v8@$(GITLEAKS
 # which the deploy/aws-lambda and deploy/aws-ecs Go tests run when sam is on PATH.
 SAM_CLI_VERSION       ?= 1.170.0
 
-.PHONY: all build image test vet fmt test-integration up up-single down logs ps e2e compat multiregion \
+.PHONY: all build image test bench vet fmt test-integration up up-single down logs ps e2e compat multiregion \
         logs-dump verify tidy mod-check fmt-check leaks leaks-staged lint lint-install sam-install test-race vulncheck hooks \
         aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy \
         ecs-validate ecs-local image-push ecs-deploy
@@ -67,6 +67,18 @@ test:
 
 test-race:
 	$(GO) test -race -timeout $(RACE_TIMEOUT) ./...
+
+# The Go benchmarks (no tests), with allocations. A full run takes about a
+# minute; narrow it with BENCH (a -bench regexp) and BENCH_PKGS, e.g.
+#   make bench BENCH=SelectStream BENCH_PKGS=./internal/server/
+BENCH         ?= .
+BENCH_PKGS    ?= ./...
+BENCH_COUNT   ?= 1
+BENCH_TIME    ?= 1s
+BENCH_TIMEOUT ?= 60m
+bench:
+	$(GO) test -run '^$$' -bench '$(BENCH)' -benchmem -count $(BENCH_COUNT) \
+		-benchtime $(BENCH_TIME) -timeout $(BENCH_TIMEOUT) $(BENCH_PKGS)
 
 # The default build, then the tagged suites (they need a running stack to
 # run, but must always compile).
