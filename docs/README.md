@@ -28,6 +28,7 @@ stack, then read the pages that match what you are doing.
 | Page | What it covers |
 |---|---|
 | [Testing](testing.md) | What the suites verify, the local gate (`make verify`), and how to run the unit, integration, e2e, compat, multiregion and deployment tests. |
+| [Benchmarks](benchmarks.md) | What the Go benchmarks measure, `make bench`, and `make bench-compare`: comparing two revisions and the 3% slowdown limit. |
 | [Limitations and roadmap](roadmap.md) | Known gaps, roughly in priority order, and how to contribute. |
 | [DESIGN.md](../DESIGN.md) | The detailed contract: physical layout, encodings, write conditions, reset epochs, stream handling and error classification. |
 

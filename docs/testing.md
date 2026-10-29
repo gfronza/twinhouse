@@ -51,6 +51,7 @@ false positive, add its fingerprint to a `.gitleaksignore` file.
 make test               # go test ./... — unit tests, no Docker needed
 make bench              # the Go benchmarks with -benchmem (BENCH=<regexp> BENCH_PKGS=<pkgs> BENCH_COUNT=<n>)
 make bench-compare      # benchmarks of BASE (default HEAD, or HEAD~1 on a clean tree) vs the working tree; fails on a >3% exec/server slowdown
+                        # (both described in docs/benchmarks.md)
 make test-integration   # storage, streams, replicator and mvworker against two throwaway DynamoDB Local containers
 DYNAMODB_TEST_ENDPOINT=http://localhost:18101 go test ./internal/storage/dynamo/...   # storage integration tests (any DynamoDB Local)
 
