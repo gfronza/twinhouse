@@ -40,12 +40,16 @@ GOLANGCI_LINT         ?= golangci-lint
 BUILD_TAGS            ?= e2e,compat,multiregion,ecslocal,samlocal,tools
 RACE_TIMEOUT          ?= 30m
 GOVULNCHECK_VERSION   ?= v1.9.0
+# gitleaks runs through `go run` at this version (make leaks, the pre-commit
+# hook); the first run downloads and builds it, later runs use the Go cache.
+GITLEAKS_VERSION      ?= v8.30.1
+GITLEAKS              ?= $(GO) run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 # The SAM CLI the CI installs (make sam-install) for `sam validate --lint`,
 # which the deploy/aws-lambda and deploy/aws-ecs Go tests run when sam is on PATH.
 SAM_CLI_VERSION       ?= 1.170.0
 
 .PHONY: all build image test vet fmt test-integration up up-single down logs ps e2e compat multiregion \
-        logs-dump verify tidy mod-check fmt-check lint lint-install sam-install test-race vulncheck hooks \
+        logs-dump verify tidy mod-check fmt-check leaks leaks-staged lint lint-install sam-install test-race vulncheck hooks \
         aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy \
         ecs-validate ecs-local image-push ecs-deploy
 
@@ -81,13 +85,14 @@ fmt:
 # ---------------------------------------------------------------------------
 # Quality gate. `make verify` is what CI runs and what the pre-push hook runs
 # (install the hooks once per clone with `make hooks`):
-#   make verify      mod-check, fmt-check, vet, lint and test, in that order
+#   make verify      mod-check, fmt-check, leaks, vet, lint and test, in that order
 #   make tidy        go mod tidy (the pre-commit hook runs it too)
+#   make leaks       gitleaks over the git history (secrets in any commit)
 #   make lint        golangci-lint with .golangci.yml
 #   make test-race   the unit tests under the race detector
 #   make vulncheck   govulncheck (CI job; not in verify: it needs the network and
 #                    flags standard-library fixes of newer Go patch releases)
-verify: mod-check fmt-check vet lint test
+verify: mod-check fmt-check leaks vet lint test
 	@echo "verify: OK"
 
 tidy:
@@ -97,6 +102,15 @@ tidy:
 mod-check:
 	$(GO) mod tidy -diff
 	$(GO) mod verify
+
+# No commit reachable from HEAD may contain a secret. --redact keeps the
+# matched values out of the output (and CI logs).
+leaks:
+	$(GITLEAKS) git --no-banner --redact --verbose --log-level warn .
+
+# The changes staged for the next commit (the pre-commit hook).
+leaks-staged:
+	$(GITLEAKS) git --pre-commit --staged --no-banner --redact --verbose --log-level warn .
 
 # Tracked and untracked (not ignored) Go files must be gofmt-clean.
 fmt-check:

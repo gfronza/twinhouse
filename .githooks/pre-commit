@@ -1,6 +1,8 @@
 #!/bin/sh
-# pre-commit: keep go.mod and go.sum tidy. Runs `go mod tidy` and, if that
-# changed go.mod or go.sum, stages them into the commit being made.
+# pre-commit: refuse staged secrets, and keep go.mod and go.sum tidy.
+# Scans the staged changes with gitleaks (make leaks-staged), then runs
+# `go mod tidy` and, if that changed go.mod or go.sum, stages them into the
+# commit being made.
 # When go.mod/go.sum also have unstaged changes, the hook cannot tell what to
 # stage (or whether the staged version is tidy), so it stops and says so.
 # Enable once per clone with `make hooks` (git config core.hooksPath .githooks);
@@ -14,6 +16,11 @@ fi
 
 top=$(git rev-parse --show-toplevel)
 cd "$top"
+
+if ! make -s leaks-staged; then
+	echo "pre-commit: gitleaks found a secret in the staged changes (see above); remove it, or commit with --no-verify if it is a false positive" >&2
+	exit 1
+fi
 
 # The blob ids of go.mod and go.sum in the working tree ("-" for a missing file).
 state() {

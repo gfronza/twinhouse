@@ -137,12 +137,14 @@ Everyday targets:
 | `make test-race` | `go test -race ./...`. |
 | `make fmt` | `gofmt -w` on every Go file; fixes the `gofmt` step of `make verify`. |
 | `make vet` | `go vet ./...`, then again with the build tags of the tagged suites, so they compile. |
+| `make leaks` | gitleaks over every commit: no secret in the git history. |
 | `make lint` | golangci-lint with `.golangci.yml`. |
 | `make tidy` | `go mod tidy`; fixes the `go.mod`/`go.sum` step of `make verify`. |
-| `make verify` | The full local gate, the same one CI runs: `go.mod`/`go.sum` tidy and verified, `gofmt` check, `make vet`, `make lint` and `make test`. |
+| `make verify` | The full local gate, the same one CI runs: `go.mod`/`go.sum` tidy and verified, `gofmt` check, `make leaks`, `make vet`, `make lint` and `make test`. |
 
-**Hooks.** `pre-commit` runs `go mod tidy` and stages `go.mod` and
-`go.sum` if it changed them. `pre-push` runs `make verify` on the tip
+**Hooks.** `pre-commit` scans the staged changes with gitleaks and stops
+the commit if they hold a secret, then runs `go mod tidy` and stages
+`go.mod` and `go.sum` if it changed them. `pre-push` runs `make verify` on the tip
 commit of each ref being pushed (in a temporary worktree unless it is the
 current, clean `HEAD`) and blocks the push if it fails;
 `git push --no-verify` skips it.

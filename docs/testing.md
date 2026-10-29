@@ -27,12 +27,20 @@ Docker, and runs these steps in order:
 1. `go mod tidy -diff` and `go mod verify`: `go.mod` and `go.sum` are tidy
    and the module cache matches them (`make tidy` fixes the first).
 2. `gofmt -l`: every Go file is formatted (`make fmt` fixes it).
-3. `make vet`: `go vet ./...`, then `go vet` again with the build tags in
+3. `make leaks`: gitleaks finds no secret in any commit reachable from
+   `HEAD`. It runs through `go run` at `GITLEAKS_VERSION` from the
+   Makefile, so it needs no install; the first run downloads and builds
+   it.
+4. `make vet`: `go vet ./...`, then `go vet` again with the build tags in
    the Makefile's `BUILD_TAGS` (`e2e`, `compat`, `multiregion`,
    `ecslocal`, `samlocal`, `tools`), so the tagged suites at least compile
    without their stack.
-4. `make lint`: golangci-lint with `.golangci.yml`.
-5. `make test`: `go test ./...`.
+5. `make lint`: golangci-lint with `.golangci.yml`.
+6. `make test`: `go test ./...`.
+
+A secret that is already committed stays in the history after it is
+deleted from the file: rotate it first, then rewrite the history or, for a
+false positive, add its fingerprint to a `.gitleaksignore` file.
 
 `make test-race` runs the unit tests under the race detector
 (`go test -race ./...`).
