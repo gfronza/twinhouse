@@ -1,7 +1,15 @@
+<div align="center">
+
 # twinhouse
 
-A ClickHouse-compatible HTTP server that stores its data in Amazon DynamoDB,
-so a ClickHouse-style workload can run **multi-region active-active**.
+**A ClickHouse-compatible HTTP server that stores its data in Amazon DynamoDB.**
+Run a ClickHouse-style workload multi-region active-active.
+
+`ClickHouse HTTP` · `DynamoDB global tables` · `AWS Lambda` · `ECS Fargate`
+
+</div>
+
+---
 
 ClickHouse Cloud has no multi-region active-active mode. DynamoDB global
 tables do. This server speaks ClickHouse's HTTP protocol, so an application
