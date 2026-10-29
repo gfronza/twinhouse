@@ -87,7 +87,7 @@ bench:
 # printed. Without BASE, a dirty tree is compared with HEAD and a clean one
 # with HEAD~1. About 13 minutes with the defaults (more if it waits for the
 # load); BENCH=<regexp> narrows it. Not part of verify: CI runners are too
-# noisy for a 3% limit.
+# noisy for a 3% limit. Details in docs/benchmarks.md.
 #   make bench-compare
 #   make bench-compare BASE=main~3 BENCH=SelectStream
 BENCHSTAT_VERSION    ?= v0.0.0-20261009192801-be2c69fb417e
