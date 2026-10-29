@@ -19,14 +19,33 @@ export DDB_US_ENDPOINT    ?= http://localhost:18000
 export DDB_EU_ENDPOINT    ?= http://localhost:18001
 export TABLE_PREFIX       ?= twinhouse_
 
-# DynamoDB Local containers for the stream/replicator integration tests.
+# DynamoDB Local containers for the integration tests (make test-integration).
+# The image is pinned (tag and digest); keep it in sync with the x-ddb image of
+# deploy/local/docker-compose.yml.
 ITEST_DDB_A    ?= twinhouse-itest-ddb-a
 ITEST_DDB_B    ?= twinhouse-itest-ddb-b
 ITEST_PORT_A   ?= 18101
 ITEST_PORT_B   ?= 18102
-DDB_LOCAL_IMG  ?= amazon/dynamodb-local:latest
+DDB_LOCAL_IMG  ?= amazon/dynamodb-local:3.3.2@sha256:6ada631ec7aa5fc83446855eb17233e3dad184fec47477e8140c6c569cfe0c86
+
+# Quality gate (make verify, run by CI and by the pre-push hook).
+# GOLANGCI_LINT_VERSION is the single source of the linter version: CI
+# installs exactly this one with `make lint-install`.
+GOLANGCI_LINT_VERSION ?= v2.15.0
+GOLANGCI_LINT         ?= golangci-lint
+# Build tags of the suites outside the default build (tests/e2e, tests/compat,
+# tests/multiregion, deploy/aws-ecs ecslocal, cmd/chserver-lambda samlocal,
+# tools/deps.go); `make vet` compiles and vets them too. Keep in sync with
+# run.build-tags in .golangci.yml.
+BUILD_TAGS            ?= e2e,compat,multiregion,ecslocal,samlocal,tools
+RACE_TIMEOUT          ?= 30m
+GOVULNCHECK_VERSION   ?= v1.9.0
+# The SAM CLI the CI installs (make sam-install) for `sam validate --lint`,
+# which the deploy/aws-lambda and deploy/aws-ecs Go tests run when sam is on PATH.
+SAM_CLI_VERSION       ?= 1.170.0
 
 .PHONY: all build image test vet fmt test-integration up up-single down logs ps e2e compat multiregion \
+        logs-dump verify tidy mod-check fmt-check lint lint-install sam-install test-race vulncheck hooks \
         aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy \
         ecs-validate ecs-local image-push ecs-deploy
 
@@ -42,22 +61,101 @@ image:
 test:
 	$(GO) test ./...
 
+test-race:
+	$(GO) test -race -timeout $(RACE_TIMEOUT) ./...
+
+# The default build, then the tagged suites (they need a running stack to
+# run, but must always compile).
 vet:
 	$(GO) vet ./...
+	$(GO) vet -tags $(BUILD_TAGS) ./...
+
+# GO_FILES lists, NUL-separated, the tracked and untracked (not ignored) Go
+# files that exist in the working tree (a deleted tracked file is skipped).
+GO_FILES := git ls-files -z --cached --others --exclude-standard -- '*.go' | \
+	xargs -0 sh -c 'for f; do [ ! -e "$$f" ] || printf "%s\0" "$$f"; done' sh
 
 fmt:
-	gofmt -l -w $$(git ls-files '*.go' 2>/dev/null || find . -name '*.go' -not -path './vendor/*')
+	@$(GO_FILES) | xargs -0 gofmt -l -w
 
-# Streams + replicator tests against two throwaway DynamoDB Local instances.
+# ---------------------------------------------------------------------------
+# Quality gate. `make verify` is what CI runs and what the pre-push hook runs
+# (install the hooks once per clone with `make hooks`):
+#   make verify      mod-check, fmt-check, vet, lint and test, in that order
+#   make tidy        go mod tidy (the pre-commit hook runs it too)
+#   make lint        golangci-lint with .golangci.yml
+#   make test-race   the unit tests under the race detector
+#   make vulncheck   govulncheck (CI job; not in verify: it needs the network and
+#                    flags standard-library fixes of newer Go patch releases)
+verify: mod-check fmt-check vet lint test
+	@echo "verify: OK"
+
+tidy:
+	$(GO) mod tidy
+
+# go.mod/go.sum must be tidy and the module cache must match go.sum.
+mod-check:
+	$(GO) mod tidy -diff
+	$(GO) mod verify
+
+# Tracked and untracked (not ignored) Go files must be gofmt-clean.
+fmt-check:
+	@files=$$($(GO_FILES) | xargs -0 gofmt -l) || { echo "gofmt failed (see above)" >&2; exit 1; }; \
+	if [ -n "$$files" ]; then echo "gofmt: these files need formatting (make fmt):" >&2; echo "$$files" >&2; exit 1; fi
+
+lint:
+	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
+		echo "golangci-lint not found: run 'make lint-install' to install $(GOLANGCI_LINT_VERSION) into \$$GOBIN (default \$$GOPATH/bin, which must be on PATH)," >&2; \
+		echo "or see https://golangci-lint.run/docs/welcome/install/local" >&2; exit 1; }
+	@v=$$($(GOLANGCI_LINT) version --short 2>/dev/null); \
+	if [ "v$${v#v}" != "$(GOLANGCI_LINT_VERSION)" ]; then \
+		echo "warning: $(GOLANGCI_LINT) is $${v:-of unknown version}, the pinned version is $(GOLANGCI_LINT_VERSION) (make lint-install); findings may differ from CI" >&2; fi
+	$(GOLANGCI_LINT) run
+
+lint-install:
+	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+vulncheck:
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+# The pinned SAM CLI, with pipx (CI; locally any recent sam works). Fails if
+# another sam comes first on PATH.
+sam-install:
+	pipx install --force "aws-sam-cli==$(SAM_CLI_VERSION)"
+	@v=$$($(SAM) --version); case "$$v" in *" $(SAM_CLI_VERSION)") echo "$$v";; \
+		*) echo "$(SAM) on PATH is '$$v', not $(SAM_CLI_VERSION): put pipx's bin dir (pipx environment --value PIPX_BIN_DIR) first on PATH" >&2; exit 1;; esac
+
+# One-time, per clone: use the versioned hooks in .githooks (pre-commit runs
+# go mod tidy, pre-push runs make verify; git push --no-verify skips it).
+hooks:
+	git config core.hooksPath .githooks
+
+# Integration tests against two throwaway DynamoDB Local instances: the
+# streams, replicator and mvworker tests (DDB_TEST_ENDPOINT[_B]), then the
+# storage-layer tests of internal/storage/dynamo (DYNAMODB_TEST_ENDPOINT, on
+# instance B, so they do not share an instance with the stream tests). The
+# containers are removed on success and failure; on a startup failure their
+# logs are printed.
+ITEST_WAIT_TRIES ?= 240
 test-integration:
 	@docker rm -f $(ITEST_DDB_A) $(ITEST_DDB_B) >/dev/null 2>&1 || true
 	docker run -d --name $(ITEST_DDB_A) -p $(ITEST_PORT_A):8000 $(DDB_LOCAL_IMG) -jar DynamoDBLocal.jar -sharedDb -inMemory >/dev/null
 	docker run -d --name $(ITEST_DDB_B) -p $(ITEST_PORT_B):8000 $(DDB_LOCAL_IMG) -jar DynamoDBLocal.jar -sharedDb -inMemory >/dev/null
-	@for p in $(ITEST_PORT_A) $(ITEST_PORT_B); do \
-		until curl -s -o /dev/null http://localhost:$$p/; do sleep 0.5; done; done
+	@for p in $(ITEST_PORT_A) $(ITEST_PORT_B); do n=0; \
+		until curl -s -o /dev/null http://localhost:$$p/; do \
+			n=$$((n+1)); if [ $$n -ge $(ITEST_WAIT_TRIES) ]; then \
+				echo "DynamoDB Local on :$$p did not start" >&2; \
+				docker logs $(ITEST_DDB_A) >&2; docker logs $(ITEST_DDB_B) >&2; \
+				docker rm -f $(ITEST_DDB_A) $(ITEST_DDB_B) >/dev/null; exit 1; fi; \
+			sleep 0.5; done; done
+	@status=0; \
+	echo "DDB_TEST_ENDPOINT=http://localhost:$(ITEST_PORT_A) DDB_TEST_ENDPOINT_B=http://localhost:$(ITEST_PORT_B) $(GO) test -count=1 ./internal/streams/... ./internal/replicator/... ./internal/mvworker/..."; \
 	DDB_TEST_ENDPOINT=http://localhost:$(ITEST_PORT_A) DDB_TEST_ENDPOINT_B=http://localhost:$(ITEST_PORT_B) \
-		$(GO) test -count=1 ./internal/streams/... ./internal/replicator/... ./internal/mvworker/...; \
-		status=$$?; docker rm -f $(ITEST_DDB_A) $(ITEST_DDB_B) >/dev/null; exit $$status
+		$(GO) test -count=1 ./internal/streams/... ./internal/replicator/... ./internal/mvworker/... || status=1; \
+	echo "DYNAMODB_TEST_ENDPOINT=http://localhost:$(ITEST_PORT_B) $(GO) test -count=1 ./internal/storage/dynamo/..."; \
+	DYNAMODB_TEST_ENDPOINT=http://localhost:$(ITEST_PORT_B) \
+		$(GO) test -count=1 ./internal/storage/dynamo/... || status=1; \
+	docker rm -f $(ITEST_DDB_A) $(ITEST_DDB_B) >/dev/null; exit $$status
 
 # Local stack. PROFILES=compat adds the reference ClickHouse.
 up:
@@ -72,12 +170,16 @@ down:
 logs:
 	$(COMPOSE) --profile compat --profile single logs -f --tail=200
 
+# The same logs without following (for CI failure reports).
+logs-dump:
+	$(COMPOSE) --profile compat --profile single logs --no-color --timestamps --tail=1000
+
 ps:
 	$(COMPOSE) --profile compat --profile single ps
 
 # Test suites against the running stack (make up first).
 e2e:
-	$(GO) test -tags e2e -count=1 -v ./tests/e2e/...
+	$(GO) test -tags e2e -count=1 -v -timeout 20m ./tests/e2e/...
 
 compat:
 	$(COMPOSE) --profile compat up -d --wait clickhouse

@@ -385,7 +385,7 @@ func TestLoadBalancerAndPorts(t *testing.T) {
 	}
 	tg := s.eval(t, tp.resource(t, "TargetGroup"))
 	for path, want := range map[string]string{"Port": "8123", "Protocol": "HTTP", "TargetType": "ip", "HealthCheckPath": "/ping", "Matcher.HttpCode": "200"} {
-		var got node = get(tg, "Properties")
+		got := get(tg, "Properties")
 		for _, p := range strings.Split(path, ".") {
 			got = get(got, p)
 		}

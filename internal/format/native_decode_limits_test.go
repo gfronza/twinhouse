@@ -47,8 +47,8 @@ func nativeColumn(b []byte, name, typ string, data ...uint64) []byte {
 }
 
 // decodeNativeErr decodes body into column c of type typ until an error and
-// returns it with the bytes allocated meanwhile.
-func decodeNativeErr(t *testing.T, typ string, body []byte) (error, uint64) {
+// returns the bytes allocated meanwhile with that error.
+func decodeNativeErr(t *testing.T, typ string, body []byte) (uint64, error) {
 	t.Helper()
 	var err error
 	n := allocated(func() {
@@ -57,7 +57,7 @@ func decodeNativeErr(t *testing.T, typ string, body []byte) (error, uint64) {
 			_, err = dec.Next()
 		}
 	})
-	return err, n
+	return n, err
 }
 
 func TestNativeShortBodyAllocatesLittle(t *testing.T) {
@@ -82,7 +82,7 @@ func TestNativeShortBodyAllocatesLittle(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err, n := decodeNativeErr(t, tc.typ, tc.body)
+			n, err := decodeNativeErr(t, tc.typ, tc.body)
 			if n > 4<<20 {
 				t.Errorf("allocated %d bytes for a %d-byte body", n, len(tc.body))
 			}
@@ -98,7 +98,7 @@ func TestNativeFixedStringSizeIsCapped(t *testing.T) {
 	if _, err := compileNative(typ); !cherr.Is(err, cherr.ArgumentOutOfBound) {
 		t.Fatalf("FixedString(%d): got %v, want ARGUMENT_OUT_OF_BOUND", typ.N, err)
 	}
-	err, n := decodeNativeErr(t, "String", nativeBlock(1, "FixedString(16777216)"))
+	n, err := decodeNativeErr(t, "String", nativeBlock(1, "FixedString(16777216)"))
 	if err == nil || err == io.EOF {
 		t.Fatal("FixedString(16777216) was accepted")
 	}
@@ -109,7 +109,7 @@ func TestNativeFixedStringSizeIsCapped(t *testing.T) {
 
 func TestNativeStringSizeIsCapped(t *testing.T) {
 	body := binary.AppendUvarint(nativeBlock(1, "String"), maxNativeString+1)
-	err, n := decodeNativeErr(t, "String", body)
+	n, err := decodeNativeErr(t, "String", body)
 	if !cherr.Is(err, cherr.TooLargeStringSize) {
 		t.Errorf("got %v, want TOO_LARGE_STRING_SIZE", err)
 	}
@@ -157,7 +157,7 @@ func TestNativeValuesWithoutDataAreCappedPerBlock(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err, n := decodeNativeErr(t, tc.typ, tc.body)
+			n, err := decodeNativeErr(t, tc.typ, tc.body)
 			if !cherr.Is(err, cherr.TooLargeArraySize) {
 				t.Errorf("got %v, want TOO_LARGE_ARRAY_SIZE", err)
 			}

@@ -277,6 +277,7 @@ func TestClientStructsAndIdioms(t *testing.T) {
 	if err := conn.Exec(actx, "INSERT INTO tenants VALUES ('acme', 'pro', 'us')"); err != nil {
 		t.Errorf("insert with async_insert settings: %v", err)
 	}
+	//nolint:staticcheck // SA1019: apps still call the deprecated AsyncInsert; it must keep working.
 	if err := conn.AsyncInsert(ctx, "INSERT INTO tenants VALUES ('globex', 'free', 'eu')", true); err != nil {
 		t.Errorf("AsyncInsert(wait=true): %v", err)
 	}

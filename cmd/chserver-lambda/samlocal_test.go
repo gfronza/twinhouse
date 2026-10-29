@@ -133,8 +133,12 @@ func TestSamLocal(t *testing.T) {
 		fmt.Fprintf(&raw, `{"tenant":"t%d","id":%d,"ts":"2026-03-04 05:06:07.%03d","amount":%g,"note":"n%d"}`+"\n", i%7, i, i%1000, float64(i)/4, i)
 	}
 	zw := gzip.NewWriter(&gz)
-	zw.Write(raw.Bytes())
-	zw.Close()
+	if _, err := zw.Write(raw.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	timed(fmt.Sprintf("INSERT JSONEachRow gzip, %d rows (%d -> %d bytes)", jsonRows, raw.Len(), gz.Len()), func() {
 		res, b := do("POST", "/?query="+url.QueryEscape("INSERT INTO "+table+" FORMAT JSONEachRow"), gz.Bytes(), "Content-Encoding", "gzip")
 		if res.StatusCode != 200 {

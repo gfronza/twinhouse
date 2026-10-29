@@ -241,8 +241,8 @@ func bestEffortISO(s string, loc *time.Location, us bool) (time.Time, bool) {
 	p := &beScanner{s: s}
 	var y, mo, d int
 	first, n := p.digits(8)
-	switch {
-	case n == 4:
+	switch n {
+	case 4:
 		sep := p.peek()
 		if sep != '-' && sep != '/' && sep != '.' {
 			return time.Time{}, false
@@ -256,9 +256,9 @@ func bestEffortISO(s string, loc *time.Location, us bool) (time.Time, bool) {
 			return time.Time{}, false
 		}
 		y = first
-	case n == 8:
+	case 8:
 		y, mo, d = first/10000, first/100%100, first%100
-	case n == 1 || n == 2:
+	case 1, 2:
 		sep := p.peek()
 		if sep != '-' && sep != '/' && sep != '.' {
 			return time.Time{}, false

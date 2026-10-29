@@ -1,0 +1,169 @@
+# Continuous integration. `verify` is the same gate as `make verify` and the
+# pre-push hook; the other jobs cover what that gate does not: the race
+# detector, the DynamoDB Local integration tests, the local compose stack
+# with the e2e suite, cross-compilation and govulncheck. The SAM templates
+# are linted by the Go tests of deploy/aws-lambda and deploy/aws-ecs
+# (`sam validate --lint`, with the SAM CLI pinned in the Makefile).
+# The compat and multiregion suites run on demand (suites.yml).
+# A weekly scheduled run of main surfaces new vulnerability advisories and
+# upstream drift (runner image, base images) without a code change.
+#
+# Go: setup-go installs the version of the go directive of go.mod (exactly
+# 1.27.0); the e2e image (golang:1.27-alpine) and the govulncheck job use the
+# latest 1.27.x patch. A `toolchain` line in go.mod would align them.
+#
+# Actions are pinned by commit SHA (the comment names the release tag).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded pull request runs are cancelled; every push to main finishes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: verify (mod, fmt, vet, lint, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The version is GOLANGCI_LINT_VERSION in the Makefile.
+      - name: Install golangci-lint
+        run: |
+          make lint-install
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # The runner image ships some SAM CLI; the template tests use the
+      # pinned one (SAM_CLI_VERSION in the Makefile) so a cfn-lint update
+      # cannot turn the job red without a change here.
+      - name: Install the SAM CLI
+        run: make sam-install
+      - run: make verify
+
+  race:
+    name: test (race detector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Pinned SAM CLI for the template tests, as in verify.
+      - name: Install the SAM CLI
+        run: make sam-install
+      - run: make test-race
+
+  integration:
+    name: integration (DynamoDB Local)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Only verify and race use the setup-go cache (one shared key).
+          cache: false
+      # Two throwaway DynamoDB Local containers on :18101/:18102, removed by
+      # the target itself.
+      - run: make test-integration
+
+  # Builds the image from deploy/Dockerfile (linux/amd64) as part of
+  # `make up`, so no separate docker build job.
+  e2e:
+    name: e2e (local compose stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Only verify and race use the setup-go cache (one shared key).
+          cache: false
+      - name: Start the stack (make up)
+        run: make up
+      # The suite skips its tests when the stack is unreachable; fail here instead.
+      - name: Check the stack answers
+        run: |
+          curl -fsS http://localhost:8123/ping
+          curl -fsS http://localhost:8124/ping
+      - run: make e2e
+      - name: Stack logs
+        if: failure()
+        run: |
+          make ps
+          make logs-dump
+      - name: Stop the stack (make down)
+        if: always()
+        run: make down
+
+  build:
+    name: build (linux/amd64, linux/arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Only verify and race use the setup-go cache (one shared key).
+          cache: false
+      # Every package, and the binaries: the Lambda bootstraps and the
+      # default ECS image are arm64, the e2e image is amd64.
+      - name: Cross-compile
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          for arch in amd64 arm64; do
+            echo "::group::linux/$arch"
+            GOARCH=$arch go build ./...
+            GOARCH=$arch go build -trimpath -o "bin/linux-$arch/" ./cmd/...
+            file bin/linux-"$arch"/*
+            echo "::endgroup::"
+          done
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # go.mod pins the minimum Go (go 1.27.0); scan with the latest patch
+      # release of that minor version, the one builds should use, so that
+      # standard-library fixes already released do not fail the job.
+      - name: Go minor version from go.mod
+        id: go
+        run: echo "minor=$(sed -n 's/^go \([0-9]*\.[0-9]*\).*/\1/p' go.mod)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go.outputs.minor }}.x
+          check-latest: true
+      # The version is GOVULNCHECK_VERSION in the Makefile.
+      - run: make vulncheck

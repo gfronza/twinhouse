@@ -457,7 +457,7 @@ func (a *aggCall) add(st *acc, vs []any) error {
 			return a.keep(st, vs[0], vs[1])
 		}
 	case "uniq", "uniqExact", "groupUniqArray":
-		var m any = vs[0]
+		m := vs[0]
 		if len(vs) > 1 {
 			m = append([]any(nil), vs...)
 		}

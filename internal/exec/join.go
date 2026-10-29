@@ -249,7 +249,7 @@ func (q *query) joinTwo(left, right *source, j *sqlparse.JoinClause, where sqlpa
 		return nil, cherr.New(cherr.IncorrectQuery, "CROSS JOIN cannot have an ON clause")
 	}
 	if len(residual) > 0 {
-		var cond sqlparse.Expr = residual[0]
+		cond := residual[0]
 		for _, r := range residual[1:] {
 			cond = &sqlparse.BinaryExpr{Op: "AND", Left: cond, Right: r}
 		}

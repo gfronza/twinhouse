@@ -5,7 +5,6 @@ package multiregion
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"net/url"
@@ -198,16 +197,6 @@ func (d *ddb) physical(ctx context.Context, db, table string) (string, error) {
 		return "", fmt.Errorf("%s: catalog entry of %s.%s has no physical name (%v)", d.name, db, table, err)
 	}
 	return e.PhysicalName, nil
-}
-
-// tableExists reports whether a physical table exists (ACTIVE or being created).
-func (d *ddb) tableExists(ctx context.Context, name string) (bool, error) {
-	_, err := d.db.DescribeTable(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(name)})
-	var nf *ddbtypes.ResourceNotFoundException
-	if errors.As(err, &nf) {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 // streamPosition returns, per shard of the table's latest stream, the

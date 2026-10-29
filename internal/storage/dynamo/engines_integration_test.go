@@ -286,29 +286,28 @@ func aggTable(e *env) *catalog.Table {
 }
 
 type aggInput struct {
-	n       uint64
-	total   uint64
-	neg     int64
-	avgSum  float64
-	mn      int64
-	mxs     string
-	last    string
-	lastTS  time.Time
-	first   string
-	firstK  float64
-	anyv    string
-	users   []any
-	pairs   []any
-	guniq   []any
-	garr    []any
-	sSum    float64
-	sMin    string
-	sMax    time.Time
-	sAny    string
-	sSet    []any
-	sArr    []any
-	plain   string
-	setNone bool
+	n      uint64
+	total  uint64
+	neg    int64
+	avgSum float64
+	mn     int64
+	mxs    string
+	last   string
+	lastTS time.Time
+	first  string
+	firstK float64
+	anyv   string
+	users  []any
+	pairs  []any
+	guniq  []any
+	garr   []any
+	sSum   float64
+	sMin   string
+	sMax   time.Time
+	sAny   string
+	sSet   []any
+	sArr   []any
+	plain  string
 }
 
 func aggRow(k string, in aggInput) storage.Row {

@@ -1,0 +1,96 @@
+# The compat and multiregion suites against the local compose stack, run on
+# demand (Actions > suites > Run workflow). They are not part of ci.yml:
+#   - compat needs the reference ClickHouse (compose profile compat) and
+#     diffs the whole corpus against it; known issue: the
+#     20_insert_atomic_fixedstring case currently exceeds the suite's 60 s
+#     client timeout, so the job is expected to fail on it.
+#   - multiregion stops, kills and recreates containers of its own compose
+#     project (dhmr, on the 28xxx ports its defaults expect) and takes up to
+#     20 minutes.
+#
+# Actions are pinned by commit SHA (the comment names the release tag).
+name: suites
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite to run
+        type: choice
+        options: [both, compat, multiregion]
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compat:
+    if: inputs.suite != 'multiregion'
+    name: compat (vs reference ClickHouse)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Start the stack with the reference ClickHouse
+        run: make up PROFILES=compat
+      # The suite skips its tests when a server is unreachable; fail here instead.
+      - name: Check the stack answers
+        run: |
+          curl -fsS http://localhost:8123/ping
+          curl -fsS http://localhost:18123/ping
+      - run: make compat
+      - name: Stack logs
+        if: failure()
+        run: |
+          make ps
+          make logs-dump
+      - name: Stop the stack
+        if: always()
+        run: make down
+
+  multiregion:
+    if: inputs.suite != 'compat'
+    name: multiregion (fault injection)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The suite refuses to inject faults into the "twinhouse" project; these
+      # are the project and ports its MR_* defaults point at.
+      COMPOSE_PROJECT: dhmr
+      US_HTTP_PORT: "28123"
+      EU_HTTP_PORT: "28124"
+      DDB_US_PORT: "28000"
+      DDB_EU_PORT: "28001"
+      CH_REF_PORT: "28125"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Start the stack (project dhmr)
+        run: make up
+      # The suite skips its tests when the stack is unreachable; fail here instead.
+      - name: Check the stack answers
+        run: |
+          curl -fsS "http://localhost:$US_HTTP_PORT/ping"
+          curl -fsS "http://localhost:$EU_HTTP_PORT/ping"
+      - run: make multiregion
+      - name: Stack logs
+        if: failure()
+        run: |
+          make ps
+          make logs-dump
+      - name: Stop the stack
+        if: always()
+        run: make down

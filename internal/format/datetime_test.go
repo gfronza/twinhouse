@@ -71,8 +71,12 @@ func TestDateTimeOutputFormatDetails(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		enc.WriteRows([][]any{{c.v}})
-		enc.Finish(Stats{})
+		if err := enc.WriteRows([][]any{{c.v}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := enc.Finish(Stats{}); err != nil {
+			t.Fatal(err)
+		}
 		if buf.String() != c.want {
 			t.Errorf("%s %s: got %q want %q", c.typ, c.mode, buf.String(), c.want)
 		}
@@ -80,8 +84,12 @@ func TestDateTimeOutputFormatDetails(t *testing.T) {
 	// Types header and JSON meta keep the real type.
 	var buf bytes.Buffer
 	enc, _ := NewEncoder("TSVWithNamesAndTypes", &buf, []Column{col("t", "DateTime('UTC')")}, Options{Settings: map[string]string{"date_time_output_format": "iso"}})
-	enc.WriteRows([][]any{{tsUTC("2024-01-02 03:04:05")}})
-	enc.Finish(Stats{})
+	if err := enc.WriteRows([][]any{{tsUTC("2024-01-02 03:04:05")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Finish(Stats{}); err != nil {
+		t.Fatal(err)
+	}
 	if want := "t\nDateTime(\\'UTC\\')\n2024-01-02T03:04:05Z\n"; buf.String() != want {
 		t.Errorf("types header: got %q want %q", buf.String(), want)
 	}
@@ -114,8 +122,12 @@ func TestNullRepresentation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		enc.WriteRows([][]any{row})
-		enc.Finish(Stats{})
+		if err := enc.WriteRows([][]any{row}); err != nil {
+			t.Fatal(err)
+		}
+		if err := enc.Finish(Stats{}); err != nil {
+			t.Fatal(err)
+		}
 		if buf.String() != c.want {
 			t.Errorf("%s %s=%q: got %q want %q", c.format, c.key, c.val, buf.String(), c.want)
 		}
@@ -123,8 +135,12 @@ func TestNullRepresentation(t *testing.T) {
 	// A top-level CSV tuple is flattened; its NULL elements use the setting.
 	var buf bytes.Buffer
 	enc, _ := NewEncoder("CSV", &buf, []Column{col("t", "Tuple(Nullable(UInt8), UInt8)")}, Options{Settings: map[string]string{"format_csv_null_representation": "NULL"}})
-	enc.WriteRows([][]any{{[]any{nil, uint64(2)}}})
-	enc.Finish(Stats{})
+	if err := enc.WriteRows([][]any{{[]any{nil, uint64(2)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Finish(Stats{}); err != nil {
+		t.Fatal(err)
+	}
 	if buf.String() != "NULL,2\n" {
 		t.Errorf("csv tuple: got %q", buf.String())
 	}
@@ -242,8 +258,12 @@ func TestJSONQuotedNegativeNaN(t *testing.T) {
 	for _, c := range cases {
 		var buf bytes.Buffer
 		enc, _ := NewEncoder(c.format, &buf, cols, Options{Settings: map[string]string{"output_format_json_quote_denormals": "1"}})
-		enc.WriteRows([][]any{row})
-		enc.Finish(Stats{})
+		if err := enc.WriteRows([][]any{row}); err != nil {
+			t.Fatal(err)
+		}
+		if err := enc.Finish(Stats{}); err != nil {
+			t.Fatal(err)
+		}
 		if buf.String() != c.want {
 			t.Errorf("%s: got %q want %q", c.format, buf.String(), c.want)
 		}

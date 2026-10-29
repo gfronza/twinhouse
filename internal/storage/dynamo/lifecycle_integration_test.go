@@ -198,7 +198,7 @@ func TestIntegrationStreamRecords(t *testing.T) {
 	e := newEnv(t)
 	tbl := e.table(&catalog.Table{Database: "default", Name: "src", Engine: catalog.EngineMergeTree,
 		Columns: cols("k", "String", "n", "Nullable(UInt64)", "f", "Float64", "arr", "Array(Tuple(UInt32, Array(String)))"), OrderBy: []string{"k"}})
-	rows := []storage.Row{{"a", uint64(1), 1.5, []any{[]any{uint64(12), []any{"1", "3"}}}}, {"b\xff", nil, -0.0, []any{}}}
+	rows := []storage.Row{{"a", uint64(1), 1.5, []any{[]any{uint64(12), []any{"1", "3"}}}}, {"b\xff", nil, 0.0, []any{}}}
 	res := e.insert(tbl, rows...)
 	arn, err := e.store.StreamARN(e.ctx, tbl.PhysicalName)
 	if err != nil {

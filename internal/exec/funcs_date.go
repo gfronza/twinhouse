@@ -772,7 +772,7 @@ func formatDateTime(t time.Time, f string) string {
 		case 'E':
 			b.WriteString(t.Format("Mon"))
 		case 'f':
-			b.WriteString(fmt.Sprintf("%06d", t.Nanosecond()/1000))
+			b.WriteString(fmt.Sprintf("%06d", t.Nanosecond()/1000)) //nolint:staticcheck // QF1012: fmt.Fprintf(&b) makes b escape, an allocation per call
 		case 'F':
 			b.WriteString(t.Format("2006-01-02"))
 		case 'g':
@@ -780,7 +780,7 @@ func formatDateTime(t time.Time, f string) string {
 			b.WriteString(two(y % 100))
 		case 'G':
 			y, _ := t.ISOWeek()
-			b.WriteString(fmt.Sprintf("%04d", y))
+			b.WriteString(fmt.Sprintf("%04d", y)) //nolint:staticcheck // QF1012: fmt.Fprintf(&b) makes b escape, an allocation per call
 		case 'h', 'I', 'l':
 			b.WriteString(two(hour12()))
 		case 'H', 'k':
@@ -788,7 +788,7 @@ func formatDateTime(t time.Time, f string) string {
 		case 'i':
 			b.WriteString(two(t.Minute()))
 		case 'j':
-			b.WriteString(fmt.Sprintf("%03d", t.YearDay()))
+			b.WriteString(fmt.Sprintf("%03d", t.YearDay())) //nolint:staticcheck // QF1012: fmt.Fprintf(&b) makes b escape, an allocation per call
 		case 'n':
 			b.WriteByte('\n')
 		case 'p':
@@ -824,7 +824,7 @@ func formatDateTime(t time.Time, f string) string {
 		case 'y':
 			b.WriteString(two(t.Year() % 100))
 		case 'Y':
-			b.WriteString(fmt.Sprintf("%04d", t.Year()))
+			b.WriteString(fmt.Sprintf("%04d", t.Year())) //nolint:staticcheck // QF1012: fmt.Fprintf(&b) makes b escape, an allocation per call
 		case 'z':
 			b.WriteString(t.Format("-0700"))
 		case 'Z':

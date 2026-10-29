@@ -457,20 +457,50 @@ func TestLocalComposeConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	compose := filepath.Join("..", "local", "docker-compose.yml")
+	// JSON rather than YAML: the YAML output wraps long values (a checkout
+	// path with spaces, for one), which a substring match would miss.
 	cmd := exec.CommandContext(ctx, "docker", "compose", "-p", "dhconfigtest", "-f", compose,
-		"--profile", "compat", "--profile", "single", "config")
-	out, err := cmd.CombinedOutput()
+		"--profile", "compat", "--profile", "single", "config", "--format", "json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		if strings.Contains(string(out), "Cannot connect to the Docker daemon") {
+		if strings.Contains(stderr.String(), "Cannot connect to the Docker daemon") {
 			t.Skip("docker daemon not running")
 		}
-		t.Fatalf("docker compose config: %v\n%s", err, out)
+		t.Fatalf("docker compose config: %v\n%s%s", err, out, stderr.Bytes())
+	}
+	var cfg struct {
+		Services map[string]struct {
+			Image string `json:"image"`
+			Build *struct {
+				Context    string `json:"context"`
+				Dockerfile string `json:"dockerfile"`
+			} `json:"build"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatalf("docker compose config --format json: %v\n%s", err, out)
 	}
 	root, _ := filepath.Abs(repoRoot)
-	if !strings.Contains(string(out), "context: "+root+"\n") || !strings.Contains(string(out), "dockerfile: deploy/Dockerfile") {
-		t.Errorf("compose build context should be the repository root with deploy/Dockerfile:\n%s", out)
+	built, devImage := 0, false
+	for name, svc := range cfg.Services {
+		if svc.Image == "twinhouse:dev" {
+			devImage = true
+		}
+		if svc.Build == nil {
+			continue
+		}
+		built++
+		if svc.Build.Context != root || svc.Build.Dockerfile != "deploy/Dockerfile" {
+			t.Errorf("%s: compose build should be context %s with deploy/Dockerfile, got context %q dockerfile %q",
+				name, root, svc.Build.Context, svc.Build.Dockerfile)
+		}
 	}
-	if !strings.Contains(string(out), "twinhouse:dev") {
+	if built == 0 {
+		t.Errorf("no compose service builds the image:\n%s", out)
+	}
+	if !devImage {
 		t.Errorf("compose should default the image to twinhouse:dev")
 	}
 }

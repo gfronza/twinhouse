@@ -81,7 +81,9 @@ func (s *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := enc.WriteRows(res.rows); err != nil {
 		s.t.Errorf("WriteRows: %v", err)
 	}
-	enc.Finish(Stats{})
+	if err := enc.Finish(Stats{}); err != nil {
+		s.t.Errorf("Finish: %v", err)
+	}
 }
 
 func TestClickHouseGoClientOverHTTP(t *testing.T) {

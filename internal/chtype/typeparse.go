@@ -117,15 +117,15 @@ func readQuotedStringLit(s string, q byte) (string, int, error) {
 	i := 1
 	for i < len(s) {
 		c := s[i]
-		switch {
-		case c == q:
+		switch c {
+		case q:
 			if i+1 < len(s) && s[i+1] == q {
 				b.WriteByte(q)
 				i += 2
 				continue
 			}
 			return exactString(&b), i + 1, nil
-		case c == '\\':
+		case '\\':
 			n, err := unescapeSeq(s[i:], &b)
 			if err != nil {
 				return "", 0, err

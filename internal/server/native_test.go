@@ -36,21 +36,21 @@ func nativeFrame(method byte, rawSize, dataSize uint32, payload []byte) []byte {
 	return append(f, h...)
 }
 
-// readNativeErr reads body through a nativeReader and returns the error and
-// the bytes allocated meanwhile.
-func readNativeErr(body []byte) (error, uint64) {
+// readNativeErr reads body through a nativeReader and returns the bytes
+// allocated meanwhile and the error.
+func readNativeErr(body []byte) (uint64, error) {
 	var err error
 	n := allocated(func() {
 		nr := newNativeReader(bytes.NewReader(body))
 		defer nr.Close()
 		_, err = io.Copy(io.Discard, nr)
 	})
-	return err, n
+	return n, err
 }
 
 func TestNativeReaderShortFrameAllocatesLittle(t *testing.T) {
 	body := nativeFrame(nativeMethodNone, 64<<20+nativeHeaderSize, 64<<20, nil)
-	err, n := readNativeErr(body)
+	n, err := readNativeErr(body)
 	if n > 4<<20 {
 		t.Errorf("allocated %d bytes for a %d-byte body", n, len(body))
 	}
@@ -63,7 +63,7 @@ func TestNativeReaderRejectsDataSizeBeyondPayload(t *testing.T) {
 	payload := []byte{0x10, 'x', 0, 0}
 	for _, method := range []byte{nativeMethodLZ4, nativeMethodZSTD} {
 		body := nativeFrame(method, nativeHeaderSize+uint32(len(payload)), 512<<20, payload)
-		err, n := readNativeErr(body)
+		n, err := readNativeErr(body)
 		if n > 4<<20 {
 			t.Errorf("method %#x: allocated %d bytes for a %d-byte body", method, n, len(body))
 		}
@@ -81,7 +81,7 @@ func TestNativeReaderZSTDOutputStopsAtDeclaredSize(t *testing.T) {
 	payload := enc.EncodeAll(make([]byte, 64<<20), nil)
 	enc.Close()
 	body := nativeFrame(nativeMethodZSTD, uint32(nativeHeaderSize+len(payload)), 1024, payload)
-	err, n := readNativeErr(body)
+	n, err := readNativeErr(body)
 	// The decoder's 8 MiB window is allocated up front.
 	if n > 12<<20 {
 		t.Errorf("allocated %d bytes decoding a frame declared as 1024 bytes", n)
@@ -112,7 +112,7 @@ func TestNativeReaderZSTDJunkFrameAllocatesLittle(t *testing.T) {
 	for name, window := range map[string]byte{"single segment": 0, "1 MiB window": 10 << 3} {
 		payload := zstdJunk(window, declared, 16<<10)
 		body := nativeFrame(nativeMethodZSTD, uint32(nativeHeaderSize+len(payload)), declared, payload)
-		err, n := readNativeErr(body)
+		n, err := readNativeErr(body)
 		if n > 4<<20 {
 			t.Errorf("%s: allocated %d bytes for a %d-byte body", name, n, len(body))
 		}
@@ -132,7 +132,7 @@ func TestNativeReaderZSTDOutputMustMatchDeclaredSize(t *testing.T) {
 	enc.Close()
 	for _, dataSize := range []int{len(data) - 1, len(data) + 1} {
 		body := nativeFrame(nativeMethodZSTD, uint32(nativeHeaderSize+len(payload)), uint32(dataSize), payload)
-		if err, _ := readNativeErr(body); !cherr.Is(err, cherr.CannotDecompress) {
+		if _, err := readNativeErr(body); !cherr.Is(err, cherr.CannotDecompress) {
 			t.Errorf("declared %d of %d bytes: got %v, want CANNOT_DECOMPRESS", dataSize, len(data), err)
 		}
 	}

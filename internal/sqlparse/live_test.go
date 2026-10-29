@@ -77,12 +77,16 @@ func TestLiveRandomPrecedence(t *testing.T) {
 	base := liveURL(t)
 	seed := int64(42)
 	if s := os.Getenv("SQLPARSE_LIVE_SEED"); s != "" {
-		fmt.Sscan(s, &seed)
+		if _, err := fmt.Sscan(s, &seed); err != nil {
+			t.Fatalf("SQLPARSE_LIVE_SEED: %v", err)
+		}
 	}
 	r := rand.New(rand.NewSource(seed))
 	n := 400
 	if s := os.Getenv("SQLPARSE_LIVE_N"); s != "" {
-		fmt.Sscan(s, &n)
+		if _, err := fmt.Sscan(s, &n); err != nil {
+			t.Fatalf("SQLPARSE_LIVE_N: %v", err)
+		}
 	}
 	checked := 0
 	for i := 0; i < n; i++ {

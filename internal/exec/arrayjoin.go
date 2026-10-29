@@ -21,8 +21,7 @@ type ajStage struct {
 
 // arrayJoinPlan collects ARRAY JOIN clause items and arrayJoin() calls.
 type arrayJoinPlan struct {
-	stages []*ajStage
-	calls  map[string]string // fingerprint of arrayJoin(x) -> generated column
+	calls map[string]string // fingerprint of arrayJoin(x) -> generated column
 }
 
 // rewrite replaces arrayJoin(x) calls in e with references to

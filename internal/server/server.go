@@ -835,7 +835,7 @@ func (c *call) assembleQuery(body io.Reader, maxSize int) error {
 	if leadingKeyword(string(head[:min(len(head), 4096)])) == "INSERT" {
 		if end, isFormat, ok := insertDataSplit(string(head)); ok {
 			c.query = string(head[:end])
-			var data io.Reader = io.MultiReader(bytes.NewReader(head[end:]), br)
+			data := io.MultiReader(bytes.NewReader(head[end:]), br)
 			if isFormat {
 				data = trimInlineDataStart(data)
 			}

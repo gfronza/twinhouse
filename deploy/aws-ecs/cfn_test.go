@@ -343,8 +343,8 @@ func (f *flowParser) value() (node, error) {
 	if f.i >= len(f.s) {
 		return "", nil
 	}
-	switch c := f.s[f.i]; {
-	case c == '!':
+	switch c := f.s[f.i]; c {
+	case '!':
 		j := f.i
 		for j < len(f.s) && f.s[j] != ' ' && f.s[j] != ',' && f.s[j] != ']' {
 			j++
@@ -356,7 +356,7 @@ func (f *flowParser) value() (node, error) {
 			return nil, err
 		}
 		return applyTag(tag, v), nil
-	case c == '[':
+	case '[':
 		f.i++
 		f.depth++
 		var out []any
@@ -382,7 +382,7 @@ func (f *flowParser) value() (node, error) {
 			}
 			return nil, fmt.Errorf("unterminated flow sequence in %q", f.s)
 		}
-	case c == '{':
+	case '{':
 		f.i++
 		f.depth++
 		out := map[string]any{}
@@ -409,7 +409,7 @@ func (f *flowParser) value() (node, error) {
 				f.i++
 			}
 		}
-	case c == '\'':
+	case '\'':
 		var b strings.Builder
 		for j := f.i + 1; j < len(f.s); j++ {
 			if f.s[j] == '\'' {
@@ -424,7 +424,7 @@ func (f *flowParser) value() (node, error) {
 			b.WriteByte(f.s[j])
 		}
 		return nil, fmt.Errorf("unterminated single-quoted string in %q", f.s)
-	case c == '"':
+	case '"':
 		var b strings.Builder
 		for j := f.i + 1; j < len(f.s); j++ {
 			switch f.s[j] {
@@ -761,11 +761,11 @@ func (s *stack) sub(t testing.TB, arg node) string {
 		name := str[i+2 : i+j]
 		str = str[i+j+1:]
 		if v, ok := vars[name]; ok {
-			b.WriteString(fmt.Sprint(v))
+			fmt.Fprint(&b, v)
 		} else if res, attr, ok := strings.Cut(name, "."); ok && !strings.HasPrefix(name, "AWS::") {
 			fmt.Fprintf(&b, "<%s.%s>", res, attr)
 		} else {
-			b.WriteString(fmt.Sprint(s.ref(t, name)))
+			fmt.Fprint(&b, s.ref(t, name))
 		}
 	}
 }

@@ -1,0 +1,67 @@
+#!/bin/sh
+# pre-commit: keep go.mod and go.sum tidy. Runs `go mod tidy` and, if that
+# changed go.mod or go.sum, stages them into the commit being made.
+# When go.mod/go.sum also have unstaged changes, the hook cannot tell what to
+# stage (or whether the staged version is tidy), so it stops and says so.
+# Enable once per clone with `make hooks` (git config core.hooksPath .githooks);
+# `git commit --no-verify` skips it.
+set -eu
+
+if ! command -v go >/dev/null 2>&1; then
+	echo "pre-commit: go not found on PATH (needed for go mod tidy); install Go or commit with --no-verify" >&2
+	exit 1
+fi
+
+top=$(git rev-parse --show-toplevel)
+cd "$top"
+
+# The blob ids of go.mod and go.sum in the working tree ("-" for a missing file).
+state() {
+	for f in go.mod go.sum; do
+		if [ -f "$f" ]; then git hash-object "$f"; else echo -; fi
+	done
+}
+
+# The tree the commit is made on (the empty tree for a first commit).
+if parent=$(git rev-parse --verify -q HEAD); then :; else
+	parent=$(git hash-object -t tree /dev/null)
+fi
+
+# Unstaged changes to go.mod/go.sum (working tree vs the index being committed).
+unstaged=no
+git diff --quiet -- go.mod go.sum || unstaged=yes
+
+before=$(state)
+if ! go mod tidy; then
+	echo "pre-commit: go mod tidy failed; fix go.mod or commit with --no-verify" >&2
+	exit 1
+fi
+after=$(state)
+
+if [ "$after" = "$before" ]; then
+	# The working tree is tidy. If the commit changes go.mod/go.sum to
+	# something else than the working tree, that staged version is unchecked.
+	if [ "$unstaged" = yes ] && ! git diff --cached --quiet "$parent" -- go.mod go.sum; then
+		echo "pre-commit: the staged go.mod/go.sum differ from the (tidy) working tree, so the hook cannot tell whether they are tidy;" >&2
+		echo "pre-commit: review and git add go.mod go.sum, or commit with --no-verify" >&2
+		exit 1
+	fi
+	exit 0
+fi
+
+if [ "$unstaged" = yes ]; then
+	echo "pre-commit: go mod tidy changed go.mod/go.sum, which also have unstaged changes;" >&2
+	echo "pre-commit: review them (git diff go.mod go.sum) and git add them, or commit with --no-verify" >&2
+	exit 1
+fi
+
+git add go.mod
+if [ -f go.sum ]; then git add go.sum; fi
+echo "pre-commit: go mod tidy changed go.mod/go.sum; staged them into this commit"
+
+# Tidy may undo the only staged change (git does not re-check for an empty
+# commit after the hook). A merge commit is never empty in that sense.
+gitdir=$(git rev-parse --git-dir)
+if [ ! -f "$gitdir/MERGE_HEAD" ] && git diff --cached --quiet "$parent"; then
+	echo "pre-commit: warning: after go mod tidy this commit has no changes and will be empty (undo with git reset --soft HEAD~1)" >&2
+fi

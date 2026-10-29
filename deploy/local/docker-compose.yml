@@ -34,7 +34,8 @@ x-env: &env
   STREAM_POLL_INTERVAL: 100ms
 
 x-ddb: &ddb
-  image: amazon/dynamodb-local:latest
+  # Pinned (tag and digest); keep in sync with DDB_LOCAL_IMG in the Makefile.
+  image: amazon/dynamodb-local:3.3.2@sha256:6ada631ec7aa5fc83446855eb17233e3dad184fec47477e8140c6c569cfe0c86
   command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
   restart: unless-stopped
   healthcheck:

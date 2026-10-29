@@ -408,7 +408,7 @@ func walkAST(v reflect.Value, fn func(reflect.Value)) {
 		if !v.IsNil() {
 			walkAST(v.Elem(), fn)
 		}
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return
 		}

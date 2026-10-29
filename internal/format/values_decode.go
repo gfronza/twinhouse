@@ -98,7 +98,7 @@ func (d *valuesDecoder) Next() ([]any, error) {
 		return nil, err
 	}
 	if c == ';' {
-		d.r.ReadByte()
+		_, _ = d.r.ReadByte() // the ';' just peeked: cannot fail
 		if c, err := d.skipSeparators(false); err == nil {
 			return nil, cherr.New(cherr.CannotParseText, "unexpected data %q after ';' in Values input", c)
 		}

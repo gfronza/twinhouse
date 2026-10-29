@@ -1,0 +1,95 @@
+#!/bin/sh
+# pre-push: run `make verify` (the same gate as CI) on the tip commit of every
+# ref being pushed and block the push if it fails. A tip that is the current
+# HEAD, with a clean index and working tree (untracked files included), is
+# verified in place; any other tip (or HEAD with local changes) is verified
+# in a temporary detached worktree, removed on exit.
+# Skipped: deleted refs, tips the remote already has (reachable from its
+# remote-tracking branches), and commits from before this hook existed (no
+# `make verify` to run).
+# MAKE overrides the make command and is word-split, e.g. MAKE='make -j4'.
+# Enable once per clone with `make hooks` (git config core.hooksPath .githooks);
+# `git push --no-verify` skips it.
+set -eu
+
+remote=${1:-}
+top=$(git rev-parse --show-toplevel)
+cd "$top"
+make=${MAKE:-make}
+
+# Read every ref line first: "<local ref> <local sha> <remote ref> <remote sha>".
+commits=""
+while read -r local_ref local_sha remote_ref _; do
+	[ -n "$local_sha" ] || continue
+	case $local_sha in
+	*[!0]*) ;;
+	*)
+		echo "pre-push: $remote_ref is being deleted, nothing to verify"
+		continue
+		;;
+	esac
+	# Annotated tags are verified as the commit they point to.
+	if ! commit=$(git rev-parse --verify -q "$local_sha^{commit}"); then
+		echo "pre-push: $local_ref ($local_sha) is not a commit, nothing to verify"
+		continue
+	fi
+	short=$(git rev-parse --short "$commit")
+	if [ -n "$remote" ] && new=$(git rev-list -n 1 "$commit" --not --remotes="$remote" --) && [ -z "$new" ]; then
+		echo "pre-push: $short ($local_ref) is already on $remote, nothing to verify"
+		continue
+	fi
+	if ! git cat-file -e "$commit:.githooks/pre-push" 2>/dev/null; then
+		echo "pre-push: warning: $short ($local_ref) predates the make verify gate, not verified" >&2
+		continue
+	fi
+	case " $commits " in
+	*" $commit "*) ;;
+	*) commits="$commits $commit" ;;
+	esac
+done
+
+[ -n "$commits" ] || exit 0
+
+head=$(git rev-parse --verify -q HEAD || true)
+base=""
+cleanup() {
+	if [ -n "$base" ]; then
+		for wt in "$base"/*; do
+			if [ -d "$wt" ]; then git -C "$top" worktree remove --force "$wt" >/dev/null 2>&1 || true; fi
+		done
+		rm -rf "$base"
+		git -C "$top" worktree prune
+	fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+for commit in $commits; do
+	short=$(git rev-parse --short "$commit")
+	# Untracked files count: they would be compiled, vetted and fmt-checked.
+	status=$(git status --porcelain --untracked-files=normal)
+	if [ "$commit" = "$head" ] && [ -z "$status" ]; then
+		echo "pre-push: verifying $short in place (make verify)"
+		dir=$top
+	else
+		if [ -z "$base" ]; then
+			base=$(mktemp -d "${TMPDIR:-/tmp}/twinhouse-pre-push.XXXXXX")
+		fi
+		dir=$base/$short
+		echo "pre-push: verifying $short in a temporary worktree at $dir (make verify)"
+		git worktree add --quiet --detach "$dir" "$commit"
+	fi
+	# A hook may inherit GIT_DIR and friends; let git find the worktree from $dir.
+	# $make is unquoted on purpose (MAKE may carry flags).
+	# shellcheck disable=SC2086
+	if ! (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX; cd "$dir" && $make verify); then
+		echo "pre-push: make verify failed on $short; push blocked (git push --no-verify skips this check)" >&2
+		exit 1
+	fi
+	if [ "$dir" != "$top" ]; then
+		git worktree remove --force "$dir"
+	fi
+done
+echo "pre-push: verified$commits"

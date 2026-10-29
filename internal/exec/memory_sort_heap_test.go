@@ -121,7 +121,7 @@ func TestStreamedRowsStayChargedWhileTheirReaderHoldsThem(t *testing.T) {
 		"SELECT count() FROM (SELECT concat(toString(r.number), repeat('q', 1000)) AS w FROM (" + arr + ") AS l " +
 			"CROSS JOIN numbers(40000) AS r ORDER BY w)",
 	} {
-		wantPeakWithinLimit(t, te, sql, 32000000)
+		_ = wantPeakWithinLimit(t, te, sql, 32000000) // hitting the limit is fine; other errors fail inside
 	}
 }
 
@@ -150,7 +150,7 @@ func TestSortedRowsReleaseTheSameInEitherOrder(t *testing.T) {
 		} {
 			for _, c := range []struct{ dir, x string }{{"", "1"}, {" DESC", "2"}} {
 				inner := "(SELECT x, arr FROM (" + src + ") ARRAY JOIN [1, 2] AS x ORDER BY x" + c.dir + ")"
-				wantPeakWithinLimit(t, te, "SELECT count() FROM (SELECT DISTINCT toString(k) FROM (SELECT arrayJoin(arr) AS k FROM "+
+				_ = wantPeakWithinLimit(t, te, "SELECT count() FROM (SELECT DISTINCT toString(k) FROM (SELECT arrayJoin(arr) AS k FROM "+
 					inner+" WHERE x = "+c.x+"))", limit)
 			}
 		}

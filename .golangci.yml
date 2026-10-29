@@ -1,0 +1,79 @@
+# golangci-lint v2 configuration. Run with `make lint` (part of `make verify`
+# and of CI); the golangci-lint version is pinned in the Makefile
+# (GOLANGCI_LINT_VERSION).
+version: "2"
+
+run:
+  # Lint the build-tagged suites too, not only the default build:
+  #   e2e, compat, multiregion  tests/* against a running stack
+  #   ecslocal                  deploy/aws-ecs task definitions as local containers
+  #   samlocal                  cmd/chserver-lambda against `sam local start-api`
+  #   tools                     tools/deps.go (module dependency pins)
+  # The `!race` heap/size tests are part of the default build already.
+  build-tags:
+    - e2e
+    - compat
+    - multiregion
+    - ecslocal
+    - samlocal
+    - tools
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    # Keeps the //nolint directives honest: each names its linter and says
+    # why, and one that no longer suppresses anything is reported.
+    - nolintlint
+  settings:
+    errcheck:
+      # The output encoders (internal/format) write through a *bufio.Writer:
+      # its write errors are sticky, every later write is a no-op, and each
+      # encoder returns the error from Flush in Finish, so the error is not
+      # lost. Checking every Write/WriteString/WriteByte in the per-row
+      # encoding loops would add noise and branches to a hot path.
+      exclude-functions:
+        - (*bufio.Writer).Write
+        - (*bufio.Writer).WriteByte
+        - (*bufio.Writer).WriteRune
+        - (*bufio.Writer).WriteString
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    staticcheck:
+      # golangci-lint's default set, plus -QF1001: its De Morgan rewrite turns
+      # character-class tests such as !(c >= 'a' && c <= 'z' || c == '_') into
+      # harder-to-read chains of negations; the quick fix is a style
+      # suggestion, not a bug finder.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF1001
+  exclusions:
+    generated: lax
+    presets:
+      # Unchecked errors of Close/Flush on deferred cleanup, fmt.Print* to
+      # stdout/stderr, os.Remove(All) and os.(Un)Setenv: idiomatic Go where a
+      # failure has nowhere useful to go. Errors of Close on a write path are
+      # still checked explicitly in code where they matter.
+      - std-error-handling
+
+issues:
+  # Report every finding, not the first 3 of a kind / 50 per linter.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax

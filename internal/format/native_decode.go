@@ -136,14 +136,6 @@ func AppendFull(r io.Reader, buf []byte, n int) ([]byte, error) {
 	return buf, nil
 }
 
-func (r *binReader) u8() (uint8, error) {
-	b, err := r.r.ReadByte()
-	if err != nil {
-		return 0, errTruncated(err)
-	}
-	return b, nil
-}
-
 func (r *binReader) u64() (uint64, error) {
 	b, err := r.full(8)
 	if err != nil {
