@@ -51,7 +51,7 @@ SAM_CLI_VERSION       ?= 1.170.0
 .PHONY: all build image test bench bench-compare vet fmt test-integration up up-single down logs ps e2e compat multiregion \
         logs-dump verify tidy mod-check fmt-check leaks leaks-staged lint lint-install sam-install test-race vulncheck hooks \
         aws-validate aws-build aws-local-reconcile aws-local-api aws-local-e2e aws-deploy \
-        ecs-validate ecs-local image-push ecs-deploy
+        ecs-validate ecs-local image-push ecs-deploy chbench-up chbench-down chbench
 
 all: build test
 
@@ -234,6 +234,33 @@ compat:
 
 multiregion:
 	$(GO) test -tags multiregion -count=1 -v -timeout 20m ./tests/multiregion/...
+
+# Comparison with ClickHouse (cmd/chbench, docs/clickhouse-comparison.md):
+# single-region twinhouse on DynamoDB Local and a ClickHouse, in their own
+# compose project and ports so no development stack is shared. Each side is
+# capped at 4 CPUs and 4 GiB (deploy/local/bench.yml) unless CHBENCH_UNCAPPED=1.
+#   make chbench-up && make chbench
+#   make chbench CHBENCH_ARGS='-size M -only R2,R5'
+CHBENCH_PROJECT  ?= twinhouse-bench
+CHBENCH_TH_PORT  ?= 38125
+CHBENCH_CH_PORT  ?= 38123
+CHBENCH_DDB_PORT ?= 38002
+CHBENCH_UNCAPPED ?=
+CHBENCH_ARGS     ?=
+CHBENCH_COMPOSE  := SINGLE_HTTP_PORT=$(CHBENCH_TH_PORT) CH_REF_PORT=$(CHBENCH_CH_PORT) \
+	DDB_SINGLE_PORT=$(CHBENCH_DDB_PORT) TWINHOUSE_IMAGE=twinhouse:bench \
+	docker compose -p $(CHBENCH_PROJECT) -f $(COMPOSE_YML) \
+	$(if $(CHBENCH_UNCAPPED),,-f deploy/local/bench.yml) --profile single --profile compat
+
+chbench-up:
+	$(CHBENCH_COMPOSE) up -d --build --wait dynamodb-single chserver-single clickhouse
+
+chbench-down:
+	$(CHBENCH_COMPOSE) down -v --remove-orphans
+
+chbench:
+	$(GO) run ./cmd/chbench -twinhouse http://localhost:$(CHBENCH_TH_PORT) \
+		-clickhouse http://localhost:$(CHBENCH_CH_PORT) $(CHBENCH_ARGS)
 
 # ---------------------------------------------------------------------------
 # Serverless AWS deployment (deploy/aws-lambda, SAM): the API on Lambda behind a
