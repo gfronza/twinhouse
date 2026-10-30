@@ -290,21 +290,22 @@ stay unchanged.
 - **ClickHouse:** the same version (25.8) on one EC2 instance with as
   many vCPUs and as much memory as the twinhouse tasks get in total.
 - **chbench:** on a third EC2 instance in the same region and
-  availability zone, so both servers pay the same network hop. The ECS
+  availability zone as ClickHouse. The twinhouse task may run in the
+  other zone, and is reached through its load balancer. The ECS
   load balancer is internal, so the client has to be in the VPC anyway.
 - Sizes S and M as here, plus 1M events and up: DynamoDB has no
   quadratic `Scan`, so [the reason for capping M](#why-size-m-is-300k-events-not-1m)
   goes away.
 
-**What chbench needs first.**
-- **Credentials:** a deployed twinhouse checks users (`ChUsersSecretArn`),
-  so chbench needs a user and password for each side.
-- **An idle wait without Docker:** the wait after a load reads
-  `docker stats`, which an AWS run doesn't have. On twinhouse it can wait
-  for the stream worker's reported lag (`lag_ms`) to reach zero; on
-  ClickHouse, for `system.merges` to empty.
-- **Cost per run:** read and write units consumed, from DynamoDB's
-  `ConsumedCapacity` or CloudWatch, next to each step's time. On
+**How.** [deploy/aws-bench](../deploy/aws-bench/README.md) sets this up
+and runs it:
+- chbench logs in to both servers (`http://user:password@host` endpoints,
+  or `$CHBENCH_TWINHOUSE` and `$CHBENCH_CLICKHOUSE`).
+- Without Docker, `-settle` waits until ClickHouse has no merges and for
+  a fixed time for twinhouse's stream worker, whose progress is not
+  visible over HTTP. The catch-up time after W2 is then not measured.
+- chbench records when each step ran, and `bench.sh capacity` reads
+  DynamoDB's consumed units per step from CloudWatch, with their cost. On
   DynamoDB, how much a query costs matters as much as how long it takes.
 
 **What it answers.**
