@@ -563,7 +563,7 @@ func (st *acc) flushPending(ctx context.Context) error {
 		}
 		held := int64(0)
 		if st.mem != nil {
-			// What queue charged, before loading changes it.
+			// What queue charged; loading leaves p unchanged.
 			held = memtrack.Value(p)
 		}
 		m, err := aggstate.Members(ctx, p)

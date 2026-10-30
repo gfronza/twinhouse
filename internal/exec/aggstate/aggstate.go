@@ -65,7 +65,9 @@ func Clone(p *chtype.AggPartial) *chtype.AggPartial {
 	return &c
 }
 
-// Members returns the set members of p, loading them when necessary.
+// Members returns the set members of p, loading them when necessary. It
+// leaves p unchanged: a stored state can be shared by several aggregates
+// that load it concurrently, and each charges p's size as it was merged.
 func Members(ctx context.Context, p *chtype.AggPartial) ([]any, error) {
 	if p.SetLoaded || p.SetSize == 0 && len(p.Set) == 0 && p.LoadSet == nil {
 		return p.Set, nil
@@ -73,12 +75,7 @@ func Members(ctx context.Context, p *chtype.AggPartial) ([]any, error) {
 	if p.LoadSet == nil {
 		return nil, cherr.New(cherr.LogicalError, "aggregate state %s has %d unloaded members and no loader", p.Func, p.SetSize)
 	}
-	m, err := p.LoadSet(ctx)
-	if err != nil {
-		return nil, err
-	}
-	p.Set, p.SetLoaded, p.SetSize = m, true, uint64(len(m))
-	return m, nil
+	return p.LoadSet(ctx)
 }
 
 // SetCount returns the number of distinct members without loading them.

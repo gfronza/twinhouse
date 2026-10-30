@@ -153,3 +153,29 @@ func TestMemberLoadReservesBeforeReading(t *testing.T) {
 	}
 	eq(t, spy.calls.Load(), int64(0))
 }
+
+// Two aggregates over one column load the same stored states at once
+// without racing on them (run under -race), and each gets every member.
+func TestSharedSetStatesLoadConcurrently(t *testing.T) {
+	spy := &loadSpy{load: func(_ context.Context, m []any) ([]any, error) {
+		time.Sleep(5 * time.Millisecond)
+		return append([]any(nil), m...), nil
+	}}
+	te := newTestEnv(t)
+	q := te.e.newQuery(context.Background(), &Request{})
+	ac := compileAggregation(t, q, []string{"a"}, nil)
+	merge := func() *aggCall {
+		return &aggCall{spec: aggSpec{base: "groupUniqArray", merge: true}, name: "groupUniqArrayMerge",
+			argTypes: []chtype.Type{chtype.TString},
+			args:     []*expr{{fn: func(row []any) (any, error) { return row[1], nil }}}, ctx: q.ctx}
+	}
+	ac.calls = []*aggCall{merge(), merge()}
+	input := [][]any{{int64(1), spy.state("x", "y")}, {int64(2), spy.state("z")}}
+	out, err := runAggregation(q, &sliceIter{rows: input}, ac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(drainRows(t, out)), "[[1 [x y] [x y]] [2 [z] [z]]]"; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
