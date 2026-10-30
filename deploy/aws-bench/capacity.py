@@ -2,6 +2,10 @@
 """DynamoDB capacity per chbench step, from CloudWatch.
 
     capacity.py <chbench results JSON> <table> [<table> ...]
+    capacity.py <chbench results JSON> --prefix <table prefix>
+
+With --prefix, the tables are those CloudWatch has DynamoDB metrics for
+(it keeps them two weeks), so tables dropped since the run still count.
 
 CloudWatch sums ConsumedRead/WriteCapacityUnits and Read/WriteThrottleEvents
 per table and minute; a
@@ -59,11 +63,27 @@ def metric_data(tables, start, end):
     return out
 
 
+def metric_tables(prefix):
+    """Tables with a write-capacity metric whose name starts with prefix."""
+    out = json.loads(subprocess.check_output([
+        "aws", "cloudwatch", "list-metrics", "--output", "json", "--namespace", "AWS/DynamoDB",
+        "--metric-name", "ConsumedWriteCapacityUnits"]))
+    names = set()
+    for m in out["Metrics"]:
+        dims = {d["Name"]: d["Value"] for d in m["Dimensions"]}
+        if set(dims) == {"TableName"} and dims["TableName"].startswith(prefix):
+            names.add(dims["TableName"])
+    return sorted(names)
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
     run = json.load(open(sys.argv[1]))
-    tables = sys.argv[2:]
+    if sys.argv[2] == "--prefix" and len(sys.argv) == 4:
+        tables = metric_tables(sys.argv[3])
+    else:
+        tables = sys.argv[2:]
     steps = [(s["id"], ts(s["start"]), ts(s["end"])) for s in run.get("steps", [])]
     if not steps:
         sys.exit("no steps in the results (chbench older than -align-steps?)")

@@ -242,10 +242,9 @@ unprovision() {
 
 cmd_capacity() {
 	local json=${1:?usage: capacity bin/aws/<run>.json}
-	local tables
-	tables=$(aws dynamodb list-tables --output text --query 'TableNames[]' | tr '\t' '\n' | grep "^$PREFIX" || true)
-	# shellcheck disable=SC2086 # one argument per table
-	python3 "$DIR/capacity.py" "$json" $tables
+	# Tables come from CloudWatch's metrics, so tables dropped since the run
+	# (the next run's setup drops them) still count.
+	python3 "$DIR/capacity.py" "$json" --prefix "$PREFIX"
 }
 
 cmd_status() {
