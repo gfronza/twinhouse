@@ -369,9 +369,11 @@ func (a *aggCall) skipsNulls() bool { return !a.spec.merge }
 type acc struct {
 	p       *chtype.AggPartial
 	members map[string]struct{}
-	// pending holds the first merged set state while it is the only one, so
-	// a single stored state can be finalized from SetSize without loading.
-	pending *chtype.AggPartial
+	// pending holds the merged set states whose members are not loaded yet,
+	// in input order, so they load together when the result needs them. A
+	// group that merged only one state is counted from its SetSize without
+	// loading.
+	pending []*chtype.AggPartial
 	merged  int
 	// mem is charged what the state grows by (nil: not tracked); bytes is
 	// how much that is so far.
@@ -517,13 +519,11 @@ func (a *aggCall) mergeState(st *acc, in *chtype.AggPartial) error {
 		return a.mergeValues(st, in)
 	}
 	st.merged++
-	if st.merged == 1 && !in.SetLoaded {
-		st.pending = in
-		if st.mem == nil {
-			return nil
-		}
-		return st.charge(memtrack.Value(in))
+	if !in.SetLoaded {
+		return st.queue(in)
 	}
+	// A loaded state is added now; the states queued before it go first,
+	// so members keep their input order.
 	if err := st.flushPending(a.ctx); err != nil {
 		return err
 	}
@@ -534,25 +534,57 @@ func (a *aggCall) mergeState(st *acc, in *chtype.AggPartial) error {
 	return st.addMembers(m)
 }
 
-func (st *acc) flushPending(ctx context.Context) error {
-	p := st.pending
-	if p == nil {
+// queue appends an unloaded state to pending, charging the state and the
+// growth of pending's array before append allocates it.
+func (st *acc) queue(in *chtype.AggPartial) error {
+	if st.mem == nil {
+		st.pending = append(st.pending, in)
 		return nil
 	}
-	held := int64(0)
-	if st.mem != nil {
-		// What mergeState charged, before loading changes it.
-		held = memtrack.Value(p)
+	n := memtrack.Value(in)
+	if len(st.pending) < cap(st.pending) {
+		st.pending = append(st.pending, in)
+		return st.charge(n)
 	}
-	m, err := aggstate.Members(ctx, p)
-	if err != nil {
+	old, next := memtrack.Pointers(cap(st.pending)), memtrack.Pointers(grownCap(cap(st.pending)))
+	if err := st.charge(next); err != nil {
 		return err
+	}
+	st.pending = append(st.pending, in)
+	return st.charge(n + memtrack.Pointers(cap(st.pending)) - next - old)
+}
+
+// flushPending loads the pending states' members, in input order, and adds
+// them to the state.
+func (st *acc) flushPending(ctx context.Context) error {
+	for i, p := range st.pending {
+		if p == nil {
+			continue
+		}
+		held := int64(0)
+		if st.mem != nil {
+			// What queue charged; loading leaves p unchanged.
+			held = memtrack.Value(p)
+		}
+		m, err := aggstate.Members(ctx, p)
+		if err != nil {
+			return err
+		}
+		st.pending[i] = nil
+		if err := st.addMembers(m); err != nil {
+			return err
+		}
+		if err := st.charge(-held); err != nil {
+			return err
+		}
+	}
+	if st.mem != nil {
+		if err := st.charge(-memtrack.Pointers(cap(st.pending))); err != nil {
+			return err
+		}
 	}
 	st.pending = nil
-	if err := st.addMembers(m); err != nil {
-		return err
-	}
-	return st.charge(-held)
+	return nil
 }
 
 // load loads the stored set members that result will need. It is the part
@@ -565,9 +597,9 @@ func (a *aggCall) load(st *acc) error {
 }
 
 // countsPending reports whether result counts a single stored set state
-// without loading its members.
+// without loading its members: the group merged that one state only.
 func (a *aggCall) countsPending(st *acc) bool {
-	return st.pending != nil && !a.spec.state && a.spec.base != "groupUniqArray"
+	return st.merged == 1 && len(st.pending) == 1 && !a.spec.state && a.spec.base != "groupUniqArray"
 }
 
 // result returns the aggregate's output value for a group.
@@ -575,7 +607,7 @@ func (a *aggCall) result(st *acc) (any, error) {
 	p := st.p
 	if aggstate.IsSetFunc(a.spec.base) {
 		if a.countsPending(st) {
-			return aggstate.SetCount(st.pending), nil
+			return aggstate.SetCount(st.pending[0]), nil
 		}
 		if err := st.flushPending(a.ctx); err != nil {
 			return nil, err

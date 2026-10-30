@@ -202,6 +202,9 @@ func TestMergedSetStateIsChargedOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := call.load(merged); err != nil {
+		t.Fatal(err)
+	}
 	built := call.newAcc()
 	built.mem = q.mem.NewAccount()
 	if err := built.addMembers(append(members(0), members(1000)...)); err != nil {
@@ -209,5 +212,45 @@ func TestMergedSetStateIsChargedOnce(t *testing.T) {
 	}
 	if merged.bytes != built.bytes {
 		t.Errorf("merged states charged %d, the same members added %d", merged.bytes, built.bytes)
+	}
+}
+
+// Two aggregates over one column merge the same stored states. Each is
+// charged only the members it added, whichever loads them first.
+func TestSharedSetStatesAreChargedPerAggregate(t *testing.T) {
+	te := newTestEnv(t)
+	q := te.e.newQuery(context.Background(), &Request{})
+	spec, _ := parseAggName("uniqExactMerge")
+	call, err := newAggCall(q.ctx, spec, "uniqExactMerge", []*expr{{t: chtype.MustParse("AggregateFunction(uniqExact, UInt64)")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var states []*chtype.AggPartial
+	for _, from := range []uint64{0, 1000} {
+		m := make([]any, 1000)
+		for i := range m {
+			m[i] = from + uint64(i)
+		}
+		p := aggstate.New("uniqExact", []chtype.Type{chtype.TUInt64})
+		p.SetLoaded, p.SetSize, p.LoadSetBytes = false, uint64(len(m)), int32(memtrack.Value(m))
+		p.LoadSet = func(context.Context) ([]any, error) { return append([]any(nil), m...), nil }
+		states = append(states, p)
+	}
+	accs := []*acc{call.newAcc(), call.newAcc()}
+	for _, st := range accs {
+		st.mem = q.mem.NewAccount()
+		for _, p := range states {
+			if err := call.mergeState(st, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, st := range accs {
+		if err := call.load(st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if accs[0].bytes != accs[1].bytes {
+		t.Errorf("first to load charged %d, second %d", accs[0].bytes, accs[1].bytes)
 	}
 }

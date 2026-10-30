@@ -28,10 +28,11 @@ type config struct {
 	setupOnly, skipSetup       bool
 }
 
-// wants reports whether step id (W1…W3, R1…R6) runs.
+// wants reports whether step id (W1…W5, R1…R10) runs.
 func (c config) wants(id string) bool { return len(c.only) == 0 || c.only[id] }
 
-// wantsReads reports whether any read runs; reads need W1 and W2's data.
+// wantsReads reports whether any read runs; reads need W1 and W2's data
+// (R7 and R8 also W5's).
 func (c config) wantsReads() bool {
 	for _, r := range reads {
 		if c.wants(r.id) {
@@ -47,14 +48,14 @@ func main() {
 		chURL   = flag.String("clickhouse", env("CHBENCH_CLICKHOUSE", "http://localhost:38123"), "ClickHouse HTTP endpoint, as -twinhouse (default from $CHBENCH_CLICKHOUSE)")
 		db      = flag.String("db", "chbench", "database the benchmark creates (dropped first)")
 		size    = flag.String("size", "S", "events to load: S (100k), M (300k) or a number")
-		mvRows  = flag.Int("mv-rows", 200_000, "events loaded through the materialized view (W2), at most -size")
-		small   = flag.Int("small-inserts", 2000, "single-row INSERTs per server (W3)")
+		mvRows  = flag.Int("mv-rows", 200_000, "events loaded through the materialized view (W2) and through the three views (W5), at most -size")
+		small   = flag.Int("small-inserts", 2000, "single-row INSERTs per server (W3, and again for W4)")
 		rounds  = flag.Int("rounds", 20, "timed rounds per read; a quarter (at least 5) when a warm-up run takes over 2s")
 		warmup  = flag.Int("warmup", 3, "untimed rounds per read")
-		conc    = flag.Int("conc", 8, "concurrent clients for W3 and the concurrent reads")
+		conc    = flag.Int("conc", 8, "concurrent clients for W3, W4 and the concurrent reads")
 		seed    = flag.Uint64("seed", 1, "seed of the data and the query parameters")
-		only    = flag.String("only", "", "comma-separated steps to run (W1,W2,W3,R1…R6); reads load the data they need")
-		skip    = flag.Bool("skip-load", false, "reuse the data of a previous run (same -size and -seed): run only W3 and the reads")
+		only    = flag.String("only", "", "comma-separated steps to run (W1…W5,R1…R10); reads load the data they need")
+		skip    = flag.Bool("skip-load", false, "reuse the data of a previous run (same -size and -seed): run only W3, W4 and the reads")
 		timeout = flag.Duration("timeout", 120*time.Second, "max_execution_time sent with every request")
 		project = flag.String("compose-project", "twinhouse-bench", "compose project of the stack, for the idle wait and the run context")
 		settleD = flag.Duration("settle", 0, "without Docker (a deployed stack): after a load, wait until ClickHouse has no merges and at least this long, instead of watching the containers' CPU")
@@ -86,7 +87,7 @@ func main() {
 		}
 	}
 	if "("+cfg.eventsKey+")" != defaultEventsKey && cfg.wantsReads() {
-		log.Fatalf("-events-key %q: the reads assume (tenant_id, ts); add -only with writes only (W1,W2,W3)", cfg.eventsKey)
+		log.Fatalf("-events-key %q: the reads assume (tenant_id, ts); add -only with writes only (W1…W5)", cfg.eventsKey)
 	}
 	if cfg.setupOnly && (cfg.skipSetup || cfg.skipLoad) {
 		log.Fatal("-setup-only cannot be combined with -skip-setup or -skip-load")
@@ -110,7 +111,7 @@ func main() {
 		b.quiet = &settle{ch: b.ch, min: *settleD, logf: logf}
 	} else {
 		names = []string{*project + "-chserver-single-1", *project + "-dynamodb-single-1", *project + "-clickhouse-1"}
-		b.quiet = &quiescence{containers: names, maxCPU: 10, limit: 30 * time.Minute, logf: logf}
+		b.quiet = &quiescence{containers: names, maxCPU: 10, maxCPUs: map[string]float64{names[1]: 30}, limit: 30 * time.Minute, logf: logf}
 	}
 	if cfg.setupOnly {
 		if err := b.setup(ctx); err != nil {
@@ -160,6 +161,11 @@ func run(ctx context.Context, b *bench, names []string) error {
 	if b.cfg.skipLoad {
 		if b.cfg.wants("W3") {
 			if err := b.smallInserts(ctx); err != nil {
+				return err
+			}
+		}
+		if b.cfg.wants("W4") {
+			if err := b.viewInserts(ctx); err != nil {
 				return err
 			}
 		}

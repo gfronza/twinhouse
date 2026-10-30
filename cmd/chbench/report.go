@@ -35,7 +35,9 @@ type runContext struct {
 	LoadStart   string      `json:"load_avg_start"`
 	LoadEnd     string      `json:"load_avg_end"`
 	ViewCatchUp string      `json:"view_catch_up,omitempty"`
-	Duration    string      `json:"duration"`
+	// ViewCatchUpW5 is the same wait after W5.
+	ViewCatchUpW5 string `json:"view_catch_up_w5,omitempty"`
+	Duration      string `json:"duration"`
 }
 
 type writeResult struct {
@@ -192,7 +194,10 @@ func (r *results) markdown(w io.Writer) {
 			fmt.Fprintf(w, "| %s %s | %s | %s | %s | %s faster |\n", t.ID, t.What, count(float64(t.Rows)), count(t.PerSec), count(h.PerSec), ratio(h.PerSec, t.PerSec))
 		}
 		if c.ViewCatchUp != "" {
-			fmt.Fprintf(w, "\nAfter W2, both servers settled (every container under 10%% CPU) within %s.\n", c.ViewCatchUp)
+			fmt.Fprintf(w, "\nAfter W2, both servers settled (ClickHouse and twinhouse under 10%% CPU, DynamoDB Local under 30%%) within %s.\n", c.ViewCatchUp)
+		}
+		if c.ViewCatchUpW5 != "" {
+			fmt.Fprintf(w, "After W5, within %s.\n", c.ViewCatchUpW5)
 		}
 	}
 	if len(small) > 0 {

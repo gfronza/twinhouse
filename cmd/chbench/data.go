@@ -115,3 +115,7 @@ func (p *params) user() int      { return p.r.IntN(users) + 1 }
 func (p *params) hour() time.Time {
 	return dataStart.Add(time.Duration(p.r.IntN(spanDays*24)) * time.Hour)
 }
+func (p *params) minute() time.Time {
+	return dataStart.Add(time.Duration(p.r.IntN(spanDays*24*60)) * time.Minute)
+}
+func (p *params) kind() string { return kinds[p.r.IntN(len(kinds))] }

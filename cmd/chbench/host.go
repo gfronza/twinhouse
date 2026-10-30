@@ -68,8 +68,13 @@ func sleep(ctx context.Context, d time.Duration) {
 type quiescence struct {
 	containers []string
 	maxCPU     float64
-	limit      time.Duration
-	logf       func(string, ...any)
+	// maxCPUs overrides maxCPU per container. DynamoDB Local needs a
+	// higher bar: after a load, the stream worker's idle polling alone
+	// keeps it at 10–20%, because its GetRecords cost grows with the
+	// stream's history.
+	maxCPUs map[string]float64
+	limit   time.Duration
+	logf    func(string, ...any)
 }
 
 // wait reports how long that took; ok is false when it could not be
@@ -89,7 +94,11 @@ func (q *quiescence) wait(ctx context.Context) (d time.Duration, ok bool) {
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			name, pct, _ := strings.Cut(line, "\t")
 			v, _ := strconv.ParseFloat(strings.TrimSuffix(pct, "%"), 64)
-			if v > q.maxCPU {
+			limit, ok := q.maxCPUs[name]
+			if !ok {
+				limit = q.maxCPU
+			}
+			if v > limit {
 				busy += fmt.Sprintf(" %s=%.0f%%", name, v)
 			}
 		}

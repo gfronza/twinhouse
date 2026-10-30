@@ -872,7 +872,10 @@ Supported (beyond this list, return `NOT_IMPLEMENTED` (48) or
   sets of constant IN lists) while the plan is kept (a view's plan for
   each block until the block is applied, else until the query ends), so a
   query full of large constants fails as it is planned.
-  DynamoDB read-ahead pages and loaded set members are not counted yet.
+  A stored set's members are charged from before they are read: an
+  estimate from its maintained size (`SetSize`) is reserved while the load
+  runs, then the members themselves as they are added. DynamoDB
+  read-ahead pages are not counted yet.
   When the next charge would pass `max_memory_usage`, the query fails with
   `MEMORY_LIMIT_EXCEEDED` (241, HTTP 500) and ClickHouse 25.8's text, e.g.
   `Query memory limit exceeded: would use 21.37 MiB (attempt to allocate
@@ -1298,7 +1301,10 @@ parallel `Scan`s, billed by the bytes scanned.
 * `ConsistentRead` when requested.
 * AggregateFunction columns are rebuilt into `*chtype.AggPartial`; for sets
   `SetSize = c#z`, `SetLoaded = (c#z == 0)`, `LoadSet` queries the members
-  table for that row/column.
+  table for that row/column. A group that merged one such state counts it
+  from `SetSize`; otherwise the aggregation loads the sets its results
+  need after the scan, up to 8 at once, and adds each group's members in
+  input order.
 * A column attribute missing from an item (the column was added by
   `ALTER TABLE ADD COLUMN` after the item was written) decodes as the type's
   zero value — or, when `ScanRequest.MarkAbsent` is set and the column has a
