@@ -77,6 +77,49 @@ prices, from CloudWatch per step):
   as much as eventually consistent reads.
 - Point lookups and key ranges: a few read units each.
 
+### Views with uniqExact (W4, W5, R7–R10)
+
+A later run of the full suite at commit d1866f8, same setup and size S
+(the tables above are from the earlier run):
+
+| Write | Rows | twinhouse rows/s | ClickHouse rows/s | ClickHouse is |
+|---|--:|--:|--:|--:|
+| W5 bulk load through three AggregatingMergeTree views | 100k | 202 | 413k | 2,047× faster |
+
+| Write | Server | p50 | p95 | p99 |
+|---|---|--:|--:|--:|
+| W4 single-row INSERT through three views, 8 concurrent clients | twinhouse | 126 ms | 210 ms | 328 ms |
+| | ClickHouse | 38 ms | 55 ms | 66 ms |
+
+| Read | Clients | twinhouse p50 / p95 | ClickHouse p50 / p95 | twinhouse / ClickHouse (p50) |
+|---|--:|--:|--:|--:|
+| R7 rollup read with `uniqExactMerge`, one row per group | 1 | 5.0 ms / 10 ms | 6.5 ms / 7.4 ms | 0.76× |
+| R7 | 8 | 27 ms / 36 ms | 14 ms / 18 ms | 1.9× |
+| R8 `uniqExactMerge` across rows (largest sets) | 1 | 356 ms / 450 ms | 9.2 ms / 9.9 ms | 39× |
+| R8 | 8 | 445 ms / 1.46 s | 18 ms / 22 ms | 25× |
+| R9 latest kind per user (`argMax`) | 1 | 93 ms / 514 ms | 6.1 ms / 8.2 ms | 15× |
+| R9 | 8 | 85 ms / 1.15 s | 17 ms / 22 ms | 4.9× |
+| R10 duplicate check | 1 | 4.5 ms / 8.4 ms | 5.4 ms / 6.0 ms | 0.84× |
+| R10 | 8 | 22 ms / 33 ms | 14 ms / 17 ms | 1.6× |
+
+**What they say.**
+- **A rollup read with one row per group (R7) and the duplicate check
+  (R10) are level with ClickHouse** with one client, and 1.6–1.9× slower
+  with 8.
+- **Merging sets across rows (R8) is 25–39× slower.** twinhouse stores
+  each member of a `uniqExact` set as its own DynamoDB item, so R8 reads
+  all 81k members of 6 rows (9 Query pages of 1 MB). Those reads are
+  nearly all of its time. Measured directly, the fastest way to read them
+  (eventually consistent, each row split into 2 key ranges) takes about
+  125 ms, still 14× ClickHouse, so twinhouse keeps its strongly
+  consistent reads.
+- **R9 reads the whole tenant**, like R3: 15× at the median with one client
+  and a p95 above 0.5 s.
+- **Writes through `uniqExact` views are slow.** A single-row insert (W4)
+  takes 3.3× ClickHouse's time. A bulk load (W5) runs at 202 rows/s, so
+  backfilling 100M events through these three views would take about
+  6 days.
+
 ## Bulk loads on DynamoDB
 
 On demand, W1 loaded 1.3–1.4k rows/s and DynamoDB throttled about a fifth
@@ -187,6 +230,10 @@ same `-seed`); these are examples.
 | R4 | `SELECT day, kind, sum(n), sum(amount) FROM events_daily WHERE tenant_id = 62 GROUP BY day, kind ORDER BY day, kind` |
 | R5 | `SELECT kind, count(), avg(duration_ms) FROM events WHERE url LIKE '%/checkout/%' GROUP BY kind ORDER BY kind` |
 | R6 | `SELECT user_id, count() AS c FROM events GROUP BY user_id ORDER BY c DESC, user_id LIMIT 10` |
+| R7 | `SELECT kind, sum(n), uniqExactMerge(users), max(last) FROM tenant_totals WHERE tenant_id = 62 AND kind IN ('view', 'click', 'purchase') GROUP BY kind ORDER BY kind` |
+| R8 | `SELECT sum(n), uniqExactMerge(users), max(last) FROM kind_totals` |
+| R9 | `SELECT latest, count(), sum(c) FROM (SELECT user_id, argMax(kind, ts) AS latest, count() AS c FROM events WHERE tenant_id = 62 GROUP BY user_id) GROUP BY latest ORDER BY latest` |
+| R10 | `SELECT tenant_id, user_id, kind, event_id, ts FROM events WHERE ts BETWEEN toDateTime64('2026-01-17 16:01:00.000', 3) AND toDateTime64('2026-01-17 16:11:00.000', 3) AND (tenant_id, user_id, kind) IN ((33, 5216, 'add_to_cart'), (25, 20771, 'view'), (34, 29785, 'signup')) ORDER BY ts` |
 
 ## What the local numbers say
 
