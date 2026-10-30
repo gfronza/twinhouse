@@ -5,6 +5,7 @@
 #   deploy/aws-bench/bench.sh up                # secret, bench stack, image, twinhouse ECS stack
 #   deploy/aws-bench/bench.sh check             # both servers answer from the client
 #   deploy/aws-bench/bench.sh run [-size M ...] # one chbench run; results in bin/aws/
+#   deploy/aws-bench/bench.sh provisioned <WCU> [-only W1 ...]  # the same on provisioned tables
 #   deploy/aws-bench/bench.sh capacity <json>   # DynamoDB capacity per step of a run
 #   deploy/aws-bench/bench.sh status
 #   deploy/aws-bench/bench.sh down              # deletes everything, chbench_* tables included
@@ -153,30 +154,90 @@ for url in \"\$CHBENCH_TWINHOUSE\" \"\$CHBENCH_CLICKHOUSE\"; do
 done" 120
 }
 
-cmd_run() {
-	local bucket name tag script
+# chbench_upload builds chbench for the client and copies it to the bucket.
+chbench_upload() {
 	bucket=$(output "$BENCH_STACK" BucketName)
-	name=chbench-aws-$(date +%Y%m%d-%H%M%S)
-	tag=$(git rev-parse --short HEAD)
 	log "building chbench for linux/arm64"
 	mkdir -p bin/aws
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/aws/chbench ./cmd/chbench
 	aws s3 cp bin/aws/chbench "s3://$bucket/chbench" --only-show-errors
-	script="set -euo pipefail
+}
+
+# chbench_remote runs the uploaded chbench on the client with its arguments.
+chbench_remote() { # label timeout args...
+	local label=$1 timeout=$2
+	shift 2
+	remote "$label" "set -euo pipefail
 cd /tmp
 aws s3 cp s3://$bucket/chbench ./chbench --only-show-errors
 chmod +x chbench
 $(endpoints)
-export CHBENCH_COMMIT=$tag
-./chbench -settle 2m -align-steps -timeout 100s -out $name.json $* > $name.md
+export CHBENCH_COMMIT=$(git rev-parse --short HEAD)
+$*" "$timeout"
+}
+
+# run_chbench runs one measured chbench and downloads its results.
+run_chbench() {
+	local name
+	name=chbench-aws-$(date +%Y%m%d-%H%M%S)
+	chbench_remote "$name" 14400 "./chbench -settle 2m -align-steps -timeout 100s -out $name.json $* > $name.md
 cat $name.md
 aws s3 cp $name.json s3://$bucket/results/$name.json --only-show-errors
 aws s3 cp $name.md s3://$bucket/results/$name.md --only-show-errors"
-	remote "$name" "$script" 14400
 	aws s3 cp "s3://$bucket/results/$name.json" "bin/aws/$name.json" --only-show-errors
 	aws s3 cp "s3://$bucket/results/$name.md" "bin/aws/$name.md" --only-show-errors
 	log "results: bin/aws/$name.md and bin/aws/$name.json"
 	echo "DynamoDB capacity per step (CloudWatch lags a few minutes): $0 capacity bin/aws/$name.json"
+}
+
+cmd_run() {
+	chbench_upload
+	run_chbench "$@"
+}
+
+# cmd_provisioned runs chbench on tables switched to provisioned capacity:
+# it creates the schema, switches the tables named in PROV_TABLES (default
+# events) to <write units> and PROV_READ_UNITS, loads with -skip-setup, then
+# recreates the schema so twinhouse drops the provisioned tables, and waits
+# until they are gone: provisioned capacity bills by the hour while a table
+# exists.
+cmd_provisioned() {
+	local wcu=${1:-} rcu=${PROV_READ_UNITS:-1000} t pattern
+	[[ $wcu =~ ^[1-9][0-9]*$ ]] || { echo "usage: $0 provisioned <write units> [chbench args]" >&2; exit 2; }
+	shift
+	# Globals: the EXIT trap runs after this function has returned.
+	prov_args="$*"
+	pattern="^${PREFIX}chbench\\.($(tr ' ' '|' <<<"${PROV_TABLES:-events}"))\\."
+	log "provisioned: $wcu write and $rcu read units per table, about \$$(python3 -c "print(round($wcu*0.00065+$rcu*0.00013, 2))") an hour each (us-east-1 list price), billed by the hour"
+	chbench_upload
+	chbench_remote setup 900 "./chbench -timeout 100s -setup-only $prov_args"
+	prov_tables=$(aws dynamodb list-tables --output text --query 'TableNames[]' | tr '\t' '\n' | grep -E "$pattern" || true)
+	[[ -n $prov_tables ]] || { echo "no table matches $pattern" >&2; exit 1; }
+	trap unprovision EXIT
+	for t in $prov_tables; do
+		log "switching $t to provisioned"
+		aws dynamodb update-table --table-name "$t" --billing-mode PROVISIONED \
+			--provisioned-throughput "ReadCapacityUnits=$rcu,WriteCapacityUnits=$wcu" >/dev/null
+		aws dynamodb wait table-exists --table-name "$t"
+		aws dynamodb describe-table --table-name "$t" \
+			--query 'Table.[TableStatus, BillingModeSummary.BillingMode, ProvisionedThroughput.WriteCapacityUnits, ProvisionedThroughput.ReadCapacityUnits]' --output text
+	done
+	run_chbench -skip-setup "$@"
+}
+
+# unprovision recreates the schema, so twinhouse drops the provisioned
+# tables, and waits until they are gone (EXIT trap of cmd_provisioned).
+# shellcheck disable=SC2329 # called by the EXIT trap
+unprovision() {
+	local left _
+	log "recreating the schema so twinhouse drops the provisioned tables"
+	chbench_remote setup 900 "./chbench -timeout 100s -setup-only $prov_args" || true
+	for _ in $(seq 60); do
+		left=$(aws dynamodb list-tables --output text --query 'TableNames[]' | tr '\t' '\n' | grep -Fx "$prov_tables" || true)
+		[[ -z $left ]] && { log "provisioned tables deleted"; return; }
+		sleep 10
+	done
+	echo "still present after 10 minutes, delete them by hand: $left" >&2
 }
 
 cmd_capacity() {
@@ -219,13 +280,13 @@ cmd_down() {
 }
 
 case ${1:-} in
-up | check | run | capacity | status | down)
+up | check | run | provisioned | capacity | status | down)
 	c=$1
 	shift
 	"cmd_$c" "$@"
 	;;
 *)
-	sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
 	exit 2
 	;;
 esac
