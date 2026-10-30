@@ -3,7 +3,8 @@
 
     capacity.py <chbench results JSON> <table> [<table> ...]
 
-CloudWatch sums ConsumedRead/WriteCapacityUnits per table and minute; a
+CloudWatch sums ConsumedRead/WriteCapacityUnits and Read/WriteThrottleEvents
+per table and minute; a
 minute counts toward a step when it starts inside the step's window
 (chbench -align-steps starts every step just after a minute boundary).
 Calls the AWS CLI with the caller's AWS_PROFILE and AWS_REGION. Prices are
@@ -26,10 +27,11 @@ def ts(s):
 
 
 def metric_data(tables, start, end):
-    """{(metric, table): {minute: sum}} for both capacity metrics."""
+    """{(metric, table): {minute: sum}} for capacity and throttle metrics."""
     queries, keys = [], {}
     for i, t in enumerate(tables):
-        for m, short in (("ConsumedReadCapacityUnits", "r"), ("ConsumedWriteCapacityUnits", "w")):
+        for m, short in (("ConsumedReadCapacityUnits", "r"), ("ConsumedWriteCapacityUnits", "w"),
+                         ("ReadThrottleEvents", "rt"), ("WriteThrottleEvents", "wt")):
             qid = f"{short}{i}"
             keys[qid] = (short, t)
             queries.append({
@@ -71,19 +73,27 @@ def main():
 
     print(f"DynamoDB capacity per step ({len(tables)} tables; "
           f"${READ_PRICE}/M reads, ${WRITE_PRICE}/M writes on demand)\n")
-    print("| Step | Read units | Write units | Cost |\n|---|--:|--:|--:|")
+    print("| Step | Read units | Write units | Throttled reads | Throttled writes | Cost |\n|---|--:|--:|--:|--:|--:|")
     total = [0.0, 0.0]
+    hot = {}
     for sid, s, e in steps:
         lo = s.replace(second=0, microsecond=0)
-        sums = {"r": 0.0, "w": 0.0}
-        for (short, _), series in data.items():
-            sums[short] += sum(v for t, v in series.items() if lo <= t < e)
+        sums = {"r": 0.0, "w": 0.0, "rt": 0.0, "wt": 0.0}
+        for (short, table), series in data.items():
+            v = sum(v for t, v in series.items() if lo <= t < e)
+            sums[short] += v
+            if short in ("rt", "wt") and v:
+                hot[table] = hot.get(table, 0) + v
         cost = sums["r"] / 1e6 * READ_PRICE + sums["w"] / 1e6 * WRITE_PRICE
         total[0] += sums["r"]
         total[1] += sums["w"]
-        print(f"| {sid} | {sums['r']:,.0f} | {sums['w']:,.0f} | ${cost:.4f} |")
+        print(f"| {sid} | {sums['r']:,.0f} | {sums['w']:,.0f} | {sums['rt']:,.0f} | {sums['wt']:,.0f} | ${cost:.4f} |")
     cost = total[0] / 1e6 * READ_PRICE + total[1] / 1e6 * WRITE_PRICE
-    print(f"| total | {total[0]:,.0f} | {total[1]:,.0f} | ${cost:.4f} |")
+    print(f"| total | {total[0]:,.0f} | {total[1]:,.0f} | | | ${cost:.4f} |")
+    if hot:
+        print("\nThrottled requests by table:")
+        for t, v in sorted(hot.items(), key=lambda x: -x[1]):
+            print(f"- {t}: {v:,.0f}")
     now = datetime.now(timezone.utc)
     if now - max(e for _, _, e in steps) < timedelta(minutes=5):
         print("\nThe run ended under 5 minutes ago; CloudWatch may not have the last minutes yet.")
