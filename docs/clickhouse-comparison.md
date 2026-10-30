@@ -299,7 +299,9 @@ The data comes from a seed, so both servers get the same rows:
   may differ in the last bits). A mismatch stops the run, so a wrong
   answer can never be reported as a fast one.
 - After the loads it waits until every container is idle, so twinhouse's
-  stream worker and ClickHouse's merges do not slow the reads.
+  stream worker and ClickHouse's merges do not slow the reads. Idle means
+  under 10% CPU, or 30% for DynamoDB Local: after a load, the stream
+  worker's polling alone keeps it at 10–20%.
 - Each side is capped at 4 CPUs: ClickHouse alone, and twinhouse split
   between the server (1.5 CPUs) and DynamoDB Local (2.5 CPUs). Memory is
   not split evenly: ClickHouse (4 GiB) keeps its data on disk, while

@@ -110,7 +110,7 @@ func main() {
 		b.quiet = &settle{ch: b.ch, min: *settleD, logf: logf}
 	} else {
 		names = []string{*project + "-chserver-single-1", *project + "-dynamodb-single-1", *project + "-clickhouse-1"}
-		b.quiet = &quiescence{containers: names, maxCPU: 10, limit: 30 * time.Minute, logf: logf}
+		b.quiet = &quiescence{containers: names, maxCPU: 10, maxCPUs: map[string]float64{names[1]: 30}, limit: 30 * time.Minute, logf: logf}
 	}
 	if cfg.setupOnly {
 		if err := b.setup(ctx); err != nil {

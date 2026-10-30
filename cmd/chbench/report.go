@@ -192,7 +192,7 @@ func (r *results) markdown(w io.Writer) {
 			fmt.Fprintf(w, "| %s %s | %s | %s | %s | %s faster |\n", t.ID, t.What, count(float64(t.Rows)), count(t.PerSec), count(h.PerSec), ratio(h.PerSec, t.PerSec))
 		}
 		if c.ViewCatchUp != "" {
-			fmt.Fprintf(w, "\nAfter W2, both servers settled (every container under 10%% CPU) within %s.\n", c.ViewCatchUp)
+			fmt.Fprintf(w, "\nAfter W2, both servers settled (ClickHouse and twinhouse under 10%% CPU, DynamoDB Local under 30%%) within %s.\n", c.ViewCatchUp)
 		}
 	}
 	if len(small) > 0 {
