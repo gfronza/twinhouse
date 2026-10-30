@@ -49,6 +49,45 @@ statement is written:
   expression); `CREATE` and `ALTER` reject wider ones with
   `NOT_IMPLEMENTED`. `min`/`max`/`uniq*` columns do not count.
 
+## Ingest throughput
+
+How fast a table takes bulk writes on DynamoDB depends on two things
+twinhouse does not choose for you. Measured with `cmd/chbench`, a load
+of 100k events went from 1.4k to 16.6k rows/s once both were handled
+([Comparison with ClickHouse](clickhouse-comparison.md#bulk-loads-on-dynamodb)).
+
+- **The partition key.** A table's DynamoDB partition key is the leading
+  `ORDER BY` column, or the columns named in `SETTINGS
+  dynamodb_partition_key` ([SQL](sql.md)). DynamoDB writes about 1,000
+  units a second per partition, so a key value that carries a large share
+  of the rows, such as one big tenant, holds back the whole load however
+  much capacity the table has.
+  - Lead with a column that has many evenly used values, if the reads
+    allow it: a query is a key `Query` only when it fixes the
+    partition-key columns, and a full `Scan` otherwise.
+  - Or spread a hot value over a bucket column: `ORDER BY (tenant_id,
+    bucket, ts)` with `SETTINGS dynamodb_partition_key = 'tenant_id,
+    bucket'`, where the writer sets `bucket` to a small hash of each row
+    (for example a hash of the event id modulo 8; twinhouse has no hash
+    functions to compute it). A tenant's reads then add `AND bucket IN
+    (0, …, 7)`, which the planner turns into one `Query` per bucket. Keep
+    a row's bucket stable on a `ReplacingMergeTree`, since the bucket is
+    part of its key.
+- **A new table.** twinhouse creates every table on demand, and each
+  `CREATE TABLE` makes a new DynamoDB table. A new on-demand table starts
+  with limited capacity and grows with its traffic, so a heavy load right
+  after `CREATE TABLE` can be throttled. Before such a load, raise the
+  table's warm throughput (`aws dynamodb update-table --warm-throughput
+  WriteUnitsPerSecond=…`) or switch it to provisioned capacity, on the
+  physical table `{prefix}{db}.{table}.{id}` (find it by listing the
+  tables with that prefix). twinhouse leaves both
+  settings alone. The system table `{prefix}__mv_markers`, written by every
+  view, warms up with use.
+
+Throttled writes are retried with backoff, so a throttled load is slow
+rather than failed. DynamoDB's `WriteThrottleEvents` metric per table
+shows it.
+
 ## Operations
 
 - **Lag and failures:** watch the stream worker's lag (the mvworker's
