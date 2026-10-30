@@ -56,16 +56,30 @@ remote() {
 		--parameters "$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":[sys.argv[2]]}))' "$script" "$timeout")" \
 		--query Command.CommandId --output text)
 	log "$label: SSM command $cmd on $client"
-	aws logs tail "$group" --log-stream-name-prefix "$cmd/" --follow --format short 2>/dev/null &
-	tailer=$!
+	# The log streams appear once the command writes output; tail fails if
+	# it starts before them, so it starts once they exist.
+	tailer=
 	status=Pending
 	while [[ $status == Pending || $status == InProgress || $status == Delayed ]]; do
-		sleep 15
+		sleep 10
+		if [[ -z $tailer ]] && [[ $(aws logs describe-log-streams --log-group-name "$group" \
+			--log-stream-name-prefix "$cmd/" --query 'length(logStreams)' --output text 2>/dev/null) =~ ^[1-9] ]]; then
+			aws logs tail "$group" --log-stream-name-prefix "$cmd/" --since 1h --follow --format short &
+			tailer=$!
+		fi
 		status=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$client" \
 			--query Status --output text 2>/dev/null || echo Pending)
 	done
-	sleep 10 # let the last lines arrive
-	kill "$tailer" 2>/dev/null || true
+	if [[ -n $tailer ]]; then
+		sleep 10 # let the last lines arrive
+		kill "$tailer" 2>/dev/null || true
+		wait "$tailer" 2>/dev/null || true
+	else
+		# Short commands can end before CloudWatch shows them: print what SSM
+		# kept (the last 24,000 characters of each stream).
+		aws ssm get-command-invocation --command-id "$cmd" --instance-id "$client" \
+			--query '[StandardOutputContent, StandardErrorContent]' --output text
+	fi
 	log "$label: $status"
 	[[ $status == Success ]]
 }
