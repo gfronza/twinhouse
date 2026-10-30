@@ -24,6 +24,7 @@ type config struct {
 	only                       map[string]bool
 	skipLoad                   bool
 	align                      bool
+	eventsKey                  string
 }
 
 // wants reports whether step id (W1…W3, R1…R6) runs.
@@ -56,12 +57,13 @@ func main() {
 		timeout = flag.Duration("timeout", 120*time.Second, "max_execution_time sent with every request")
 		project = flag.String("compose-project", "twinhouse-bench", "compose project of the stack, for the idle wait and the run context")
 		settleD = flag.Duration("settle", 0, "without Docker (a deployed stack): after a load, wait until ClickHouse has no merges and at least this long, instead of watching the containers' CPU")
+		evKey   = flag.String("events-key", "tenant_id, ts", "sorting key of events (and its copies); another key turns the tenant reads into scans, so it needs -only with writes only")
 		align   = flag.Bool("align-steps", false, "start each step on a minute boundary, so CloudWatch's per-minute DynamoDB capacity can be split by step")
 		out     = flag.String("out", "", "raw results as JSON (default bin/chbench-<size>-<time>.json)")
 	)
 	flag.Parse()
 
-	cfg := config{mvRows: *mvRows, smallInserts: *small, rounds: *rounds, warmup: *warmup, conc: *conc, seed: *seed, skipLoad: *skip, align: *align}
+	cfg := config{mvRows: *mvRows, smallInserts: *small, rounds: *rounds, warmup: *warmup, conc: *conc, seed: *seed, skipLoad: *skip, align: *align, eventsKey: strings.TrimSpace(*evKey)}
 	switch strings.ToUpper(*size) {
 	case "S":
 		cfg.rows = 100_000
@@ -79,6 +81,9 @@ func main() {
 		for _, id := range strings.Split(*only, ",") {
 			cfg.only[strings.ToUpper(strings.TrimSpace(id))] = true
 		}
+	}
+	if "("+cfg.eventsKey+")" != defaultEventsKey && cfg.wantsReads() {
+		log.Fatalf("-events-key %q: the reads assume (tenant_id, ts); add -only with writes only (W1,W2,W3)", cfg.eventsKey)
 	}
 	if *out == "" {
 		*out = fmt.Sprintf("bin/chbench-%s-%s.json", strings.ToUpper(*size), time.Now().Format("20060102-150405"))
@@ -118,6 +123,9 @@ func run(ctx context.Context, b *bench, names []string) error {
 	rc.Commit = commit()
 	rc.Host = hostDesc()
 	rc.Rows, rc.Seed = b.cfg.rows, b.cfg.seed
+	if "("+b.cfg.eventsKey+")" != defaultEventsKey {
+		rc.EventsKey = b.cfg.eventsKey
+	}
 	rc.LoadStart = loadAvg()
 	if len(names) > 0 {
 		rc.Containers = inspect(ctx, names)
