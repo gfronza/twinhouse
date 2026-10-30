@@ -31,6 +31,7 @@ type runContext struct {
 	Containers  []container `json:"containers"`
 	Rows        int         `json:"rows"`
 	Seed        uint64      `json:"seed"`
+	EventsKey   string      `json:"events_key,omitempty"`
 	LoadStart   string      `json:"load_avg_start"`
 	LoadEnd     string      `json:"load_avg_end"`
 	ViewCatchUp string      `json:"view_catch_up,omitempty"`
@@ -163,6 +164,9 @@ func count(n float64) string {
 func (r *results) markdown(w io.Writer) {
 	c := r.Context
 	fmt.Fprintf(w, "Run %s, commit %s, %d events (seed %d), %s.\n", c.Date, c.Commit, c.Rows, c.Seed, c.Duration)
+	if c.EventsKey != "" {
+		fmt.Fprintf(w, "events keyed by (%s) instead of %s.\n", c.EventsKey, defaultEventsKey)
+	}
 	fmt.Fprintf(w, "Host: %s. Load average %s at the start, %s at the end.\n", c.Host, c.LoadStart, c.LoadEnd)
 	fmt.Fprintf(w, "twinhouse %s, ClickHouse %s.\n", c.Twinhouse, c.ClickHouse)
 	for _, k := range c.Containers {

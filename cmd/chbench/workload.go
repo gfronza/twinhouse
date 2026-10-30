@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// defaultEventsKey is events' sorting key; -events-key replaces it.
+const defaultEventsKey = "(tenant_id, ts)"
+
 // The same DDL runs on both servers. events is keyed for DynamoDB as
 // _pk = tenant_id, _sk = ts (+ uniquifier), so tenant/time ranges are Queries.
 var schema = []string{
@@ -109,6 +112,9 @@ func (b *bench) setup(ctx context.Context) error {
 			return err
 		}
 		for i, q := range schema {
+			if i == 0 {
+				q = strings.Replace(q, "ORDER BY "+defaultEventsKey, "ORDER BY ("+b.cfg.eventsKey+")", 1)
+			}
 			if i == len(schema)-1 && s == b.th {
 				if err := primeStreams(ctx, s); err != nil {
 					return err
