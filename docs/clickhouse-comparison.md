@@ -4,16 +4,115 @@
 on the same machine, and checks that both return the same results before
 it times anything. This page shows what it measured and how to read it.
 
-> **twinhouse ran on DynamoDB Local, not DynamoDB.** DynamoDB Local is a
-> Java emulator. It has no network round trip, so key lookups are faster
-> than on DynamoDB, but it runs one table on a single process, so scans and
-> write-heavy work are much slower than on DynamoDB's partitioned storage.
-> Neither direction says what twinhouse does in production. What the
-> numbers do show is which query shapes stay close to ClickHouse and which
-> fall far behind, and why. For cost, see
-> [Costs, limits and operations](operations.md).
+It ran in two setups:
+- **On AWS** (2026-10-30): twinhouse on ECS with DynamoDB, ClickHouse on
+  EC2. These numbers say what twinhouse does on DynamoDB.
+- **Locally** (2026-10-29): twinhouse on DynamoDB Local, both servers in
+  Docker. DynamoDB Local is a Java emulator: it answers key lookups faster
+  than DynamoDB and runs scans and bulk writes much slower, so these
+  numbers mostly show which query shapes stay close to ClickHouse.
 
-## Results
+For cost, see [Costs, limits and operations](operations.md).
+
+## Results on DynamoDB (AWS)
+
+Measured on 2026-10-30 in us-east-1 with
+[deploy/aws-bench](../deploy/aws-bench/README.md):
+- **twinhouse:** the [ECS deployment](../deploy/aws-ecs/README.md), one
+  Fargate task with 4 vCPUs and 8 GiB (arm64), single region, stream
+  worker in-process, behind its internal load balancer. Tables on demand,
+  as twinhouse creates them.
+- **ClickHouse:** 25.8.33.6 on a c7g.xlarge (4 vCPUs, 8 GiB).
+- **chbench:** on a c7g.large in the same Availability Zone as ClickHouse.
+
+Size S (100k events), the same workload and seed as locally. A second
+run reproduced the reads within about 15% and every other number except
+W2 (see [Bulk loads](#bulk-loads-on-dynamodb)).
+
+| Write | Rows | twinhouse rows/s | ClickHouse rows/s | ClickHouse is |
+|---|--:|--:|--:|--:|
+| W1 bulk load, 10k rows per INSERT, no views | 100k | 1.4k | 592k | 422× faster |
+| W2 bulk load, 10k rows per INSERT, one SummingMergeTree view | 100k | 777 | 423k | 545× faster |
+
+| Write | Server | p50 | p95 | p99 |
+|---|---|--:|--:|--:|
+| W3 single-row INSERT, 8 concurrent clients | twinhouse | 5.6 ms | 7.5 ms | 12 ms |
+| | ClickHouse | 6.5 ms | 11 ms | 13 ms |
+| | ClickHouse, `async_insert=1` | 171 ms | 172 ms | 180 ms |
+
+| Read | Clients | twinhouse p50 / p95 | ClickHouse p50 / p95 | twinhouse / ClickHouse (p50) |
+|---|--:|--:|--:|--:|
+| R1 point lookup | 1 | 4.4 ms / 13 ms | 2.7 ms / 2.8 ms | 1.6× |
+| R1 | 8 | 4.6 ms / 12 ms | 5.3 ms / 6.9 ms | 0.85× |
+| R2 key range, aggregated | 1 | 4.5 ms / 18 ms | 4.9 ms / 5.1 ms | 0.93× |
+| R2 | 8 | 4.8 ms / 7.5 ms | 13 ms / 15 ms | 0.37× |
+| R3 key range, top-N | 1 | 132 ms / 701 ms | 6.9 ms / 7.9 ms | 19× |
+| R3 (5 rounds) | 8 | 45 ms / 709 ms | 23 ms / 28 ms | 1.9× |
+| R4 rollup read | 1 | 7.2 ms / 12 ms | 4.2 ms / 4.4 ms | 1.7× |
+| R4 | 8 | 8.9 ms / 17 ms | 8.4 ms / 10 ms | 1.1× |
+| R5 full scan + filter (5 rounds) | 1 | 1.26 s / 1.30 s | 11 ms / 13 ms | 114× |
+| R6 high-cardinality GROUP BY | 1 | 1.08 s / 1.14 s | 7.9 ms / 8.7 ms | 136× |
+
+**What they say.**
+- **Reads by key are level with ClickHouse.** A point lookup or key range
+  takes about 4–5 ms at the median: one DynamoDB request plus the load
+  balancer. twinhouse's p95 is less steady than ClickHouse's (up to 18 ms).
+- **Single-row inserts are still slightly faster than ClickHouse's.**
+- **Full scans are 100–140× slower** (about 1 s for 100k events), about
+  half the gap seen on DynamoDB Local at the same size.
+- **Top-N by the sorting key (R3) still reads the whole tenant**: the
+  engine gap seen locally.
+- **Bulk loads are much slower than on DynamoDB Local**, because DynamoDB
+  throttles them; the next section shows why and what lifts it.
+
+**DynamoDB cost of the run** ($0.64 for the whole S run at on-demand
+prices, from CloudWatch per step):
+- A plain insert: 1 write unit per row.
+- A row through the view: about 7 write units (each row's exactly-once
+  marker and the rollup update are transactional, which bills double,
+  and the stream worker's re-check cancels transactions that are still
+  billed).
+- A full scan of 100k events: about 20k read units, $0.0026 per query.
+  twinhouse reads with strong consistency by default, which costs twice
+  as much as eventually consistent reads.
+- Point lookups and key ranges: a few read units each.
+
+## Bulk loads on DynamoDB
+
+On demand, W1 loaded 1.3–1.4k rows/s and DynamoDB throttled about a fifth
+of the writes, although twinhouse writes 16 batches of 25 rows in
+parallel. Two limits cause it, and each alone holds the load to 2–3k
+rows/s:
+
+| W1, 100k events | Rows/s | Throttled writes | ClickHouse is |
+|---|--:|--:|--:|
+| on demand, events keyed by tenant (the workload) | 1.3–1.4k | 21–24k | ~430× faster |
+| on demand, keyed by user | 2.7k | 7.6k | 217× faster |
+| provisioned 10,000 write units, keyed by tenant | 2.3k | 6.7k | 257× faster |
+| **provisioned 10,000 write units, keyed by user** | **16.6k** | not checked | **37× faster** |
+
+- **A skewed partition key.** The leading `ORDER BY` column is the
+  DynamoDB partition key ([sql.md](sql.md)). The busiest tenant has 23%
+  of the events, and its partition shares them with other tenants. With
+  10,000 units provisioned the table wrote about 2,300 a second and was
+  still throttled, so the limit was not the table's capacity. The likely
+  reading is DynamoDB's limit of about 1,000 write units a second per
+  partition, reached in bursts by the 16 parallel batches. Keying by
+  `user_id` (50k values) on the same capacity loaded 7× faster.
+- **A new table.** An on-demand table starts with limited capacity and
+  grows with its traffic, and twinhouse creates a new DynamoDB table for
+  every `CREATE TABLE`. With the hot key gone, the new table still
+  throttled. The same held for the view's exactly-once markers: W2
+  throttled 8.5k marker writes on the first run and none on the second,
+  once the markers table had seen traffic, and W2 went from 777 to 1.4k
+  rows/s.
+
+With both lifted, twinhouse loaded 16.6k rows/s, faster than on DynamoDB
+Local, and ClickHouse's lead fell to 37×. How to choose the key and
+prepare tables for heavy ingest is in
+[Costs, limits and operations](operations.md#ingest-throughput).
+
+## Results on DynamoDB Local
 
 Measured on 2026-10-29 with the code at commit e4dc87c, on an Apple M5 Pro (15 CPUs,
 24 GiB) with Docker Desktop given 14 GiB. Other containers were running
@@ -89,7 +188,7 @@ same `-seed`); these are examples.
 | R5 | `SELECT kind, count(), avg(duration_ms) FROM events WHERE url LIKE '%/checkout/%' GROUP BY kind ORDER BY kind` |
 | R6 | `SELECT user_id, count() AS c FROM events GROUP BY user_id ORDER BY c DESC, user_id LIMIT 10` |
 
-## What the numbers say
+## What the local numbers say
 
 **Reads by sorting key keep up with ClickHouse.**
 - **Point lookups (R1) and key ranges (R2):** twinhouse was about twice as
@@ -134,26 +233,18 @@ same `-seed`); these are examples.
   With `async_insert=1` it waits about 180 ms for the flush to batch
   inserts together.
 
-## What to expect on DynamoDB
+## How the estimates held up
 
-These are estimates, not measurements: nothing on this page ran on AWS.
-They follow from what DynamoDB Local does differently from DynamoDB
-(above and in [How it measures](#how-it-measures)), and from the share of
-each query that twinhouse spends on its own work.
+Before the AWS run, this page estimated how each shape would change on
+DynamoDB. Measured at size S:
 
-| Shape | Measured here (300k) | Expected on DynamoDB | Why |
+| Shape | Estimate | Measured on DynamoDB | |
 |---|---|---|---|
-| Point lookups, key ranges, rollup reads (R1, R2, R4) | 0.5–1.7× ClickHouse's time | **About the same as ClickHouse, possibly slower** | DynamoDB Local answers on localhost in under a millisecond. DynamoDB in the same region usually takes a few milliseconds per request, plus the network hop, so twinhouse's lead goes away. |
-| Single-row inserts (W3) | 1.6 ms p50 | **Slower: several milliseconds** | One `BatchWriteItem` per insert, at DynamoDB's write latency. An insert that feeds a view also waits for a `TransactWriteItems`, which is slower than a plain write. ClickHouse's 6.3 ms stays the same. |
-| Bulk load, with and without a view (W1, W2) | 42× and 262× slower | **Much closer** | DynamoDB Local is one process on SQLite, and it has the [stream slowdown](#a-dynamodb-local-slowdown-the-benchmark-works-around). DynamoDB spreads writes over partitions, so throughput grows with concurrent requests. The limit becomes cost and capacity: matching ClickHouse's ~500k rows/s means paying for ~500k item writes per second. A new on-demand table also starts with a limited write rate unless warm throughput is set. |
-| Full scans (R5, R6) | ~1,400× slower | **Much closer, still two orders of magnitude behind** | DynamoDB's `Scan` page time does not grow with the table. But about 20% of R5's time here was twinhouse's own work: decoding items and evaluating rows one at a time. Even if storage took no time at all, that would leave twinhouse a couple of hundred times behind ClickHouse's column scan. Every scan also reads, and is billed for, every item. |
-| Top-N by the sorting key (R3) | 49–70× slower | **About the same** | This is an engine gap: twinhouse reads the whole key range. On DynamoDB it also bills every item it reads. |
-
-So the ordering should hold on DynamoDB, even though the ratios will
-change:
-- twinhouse keeps up with ClickHouse on reads and writes by key.
-- It falls far behind on scans and bulk loads.
-- Scans belong on a rollup.
+| Point lookups, key ranges, rollup reads | about the same as ClickHouse | 0.4–1.7× ClickHouse's time | held |
+| Single-row inserts | slower, several milliseconds | 5.6 ms p50, ClickHouse 6.5 ms | held |
+| Top-N by the sorting key | about the same gap | 1.9–19× | held |
+| Full scans | much closer, still two orders of magnitude | 114–136× (243–278× locally) | held |
+| Bulk loads | much closer | 3–10× wider by default; 37× with an even key and capacity | wrong: [throttling](#bulk-loads-on-dynamodb) |
 
 ## The workload
 
@@ -263,54 +354,34 @@ ports, so it never touches the development stack. `CHBENCH_UNCAPPED=1`
 removes the CPU and memory caps (`deploy/local/bench.yml`). Docker needs
 about 6 GiB of free memory for size M.
 
+On AWS, [deploy/aws-bench](../deploy/aws-bench/README.md) sets up the
+environment, runs chbench from a client instance and reports DynamoDB's
+consumed capacity and cost per step:
+
+```sh
+deploy/aws-bench/bench.sh up && deploy/aws-bench/bench.sh check
+deploy/aws-bench/bench.sh run -size S
+deploy/aws-bench/bench.sh capacity bin/aws/chbench-aws-<time>.json
+deploy/aws-bench/bench.sh provisioned 10000 -size S -only W1 -events-key user_id,ts
+deploy/aws-bench/bench.sh down
+```
+
 chbench prints the tables on this page and writes every sample as JSON to
 `bin/chbench-<size>-<time>.json`. `go run ./cmd/chbench -h` lists its
 flags (rounds, clients, seed, view rows, timeout).
 
 ## What it does not measure
 
-- DynamoDB itself: its latency, throughput and cost.
+- Sizes above 100k events on DynamoDB.
 - Multi-region: replication, the replicator, cross-region lag.
 - The Lambda deployment.
 - Large results: every read returns at most a few hundred rows.
+- Concurrent bulk loads: W1 and W2 use one client.
 
-## What's next: the same run on AWS
+## What's next
 
-The estimates above become measurements once the same harness runs
-against twinhouse on DynamoDB and ClickHouse on EC2. chbench talks plain
-HTTP to two endpoints, so the workload, the result check and the report
-stay unchanged.
-
-**Setup.**
-- **twinhouse:** the [ECS deployment](../deploy/aws-ecs/README.md),
-  single-region, with the stream worker in-process
-  (`WorkerMode=in-process`) as in the local stack. It is the closest match
-  to one ClickHouse server. A run against the [Lambda deployment](../deploy/aws-lambda/README.md)
-  can come later; it adds API Gateway and cold starts to every request.
-- **ClickHouse:** the same version (25.8) on one EC2 instance with as
-  many vCPUs and as much memory as the twinhouse tasks get in total.
-- **chbench:** on a third EC2 instance in the same region and
-  availability zone as ClickHouse. The twinhouse task may run in the
-  other zone, and is reached through its load balancer. The ECS
-  load balancer is internal, so the client has to be in the VPC anyway.
-- Sizes S and M as here, plus 1M events and up: DynamoDB has no
-  quadratic `Scan`, so [the reason for capping M](#why-size-m-is-300k-events-not-1m)
-  goes away.
-
-**How.** [deploy/aws-bench](../deploy/aws-bench/README.md) sets this up
-and runs it:
-- chbench logs in to both servers (`http://user:password@host` endpoints,
-  or `$CHBENCH_TWINHOUSE` and `$CHBENCH_CLICKHOUSE`).
-- Without Docker, `-settle` waits until ClickHouse has no merges and for
-  a fixed time for twinhouse's stream worker, whose progress is not
-  visible over HTTP. The catch-up time after W2 is then not measured.
-- chbench records when each step ran, and `bench.sh capacity` reads
-  DynamoDB's consumed units per step from CloudWatch, with their cost. On
-  DynamoDB, how much a query costs matters as much as how long it takes.
-
-**What it answers.**
-- Whether reads by key stay level with ClickHouse once each request
-  crosses the network.
-- How far bulk loads scale with concurrent requests, and what a million
-  rows cost.
-- How much of the scan gap is twinhouse's own work.
+- Sizes M and 1M on DynamoDB, with an evenly spread key and warm tables,
+  so the bulk loads measure twinhouse rather than throttling.
+- Warm throughput or provisioned capacity set by twinhouse when it creates
+  a table, so heavy ingest does not start on a cold table.
+- The Lambda deployment, which adds API Gateway and cold starts.
