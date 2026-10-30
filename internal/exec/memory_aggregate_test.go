@@ -202,6 +202,9 @@ func TestMergedSetStateIsChargedOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := call.load(merged); err != nil {
+		t.Fatal(err)
+	}
 	built := call.newAcc()
 	built.mem = q.mem.NewAccount()
 	if err := built.addMembers(append(members(0), members(1000)...)); err != nil {
