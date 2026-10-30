@@ -23,6 +23,7 @@ type config struct {
 	seed                       uint64
 	only                       map[string]bool
 	skipLoad                   bool
+	align                      bool
 }
 
 // wants reports whether step id (W1…W3, R1…R6) runs.
@@ -40,8 +41,8 @@ func (c config) wantsReads() bool {
 
 func main() {
 	var (
-		thURL   = flag.String("twinhouse", "http://localhost:38125", "twinhouse HTTP endpoint")
-		chURL   = flag.String("clickhouse", "http://localhost:38123", "ClickHouse HTTP endpoint")
+		thURL   = flag.String("twinhouse", env("CHBENCH_TWINHOUSE", "http://localhost:38125"), "twinhouse HTTP endpoint; http://user:password@host:port logs in (default from $CHBENCH_TWINHOUSE)")
+		chURL   = flag.String("clickhouse", env("CHBENCH_CLICKHOUSE", "http://localhost:38123"), "ClickHouse HTTP endpoint, as -twinhouse (default from $CHBENCH_CLICKHOUSE)")
 		db      = flag.String("db", "chbench", "database the benchmark creates (dropped first)")
 		size    = flag.String("size", "S", "events to load: S (100k), M (300k) or a number")
 		mvRows  = flag.Int("mv-rows", 200_000, "events loaded through the materialized view (W2), at most -size")
@@ -54,11 +55,13 @@ func main() {
 		skip    = flag.Bool("skip-load", false, "reuse the data of a previous run (same -size and -seed): run only W3 and the reads")
 		timeout = flag.Duration("timeout", 120*time.Second, "max_execution_time sent with every request")
 		project = flag.String("compose-project", "twinhouse-bench", "compose project of the stack, for the idle wait and the run context")
+		settleD = flag.Duration("settle", 0, "without Docker (a deployed stack): after a load, wait until ClickHouse has no merges and at least this long, instead of watching the containers' CPU")
+		align   = flag.Bool("align-steps", false, "start each step on a minute boundary, so CloudWatch's per-minute DynamoDB capacity can be split by step")
 		out     = flag.String("out", "", "raw results as JSON (default bin/chbench-<size>-<time>.json)")
 	)
 	flag.Parse()
 
-	cfg := config{mvRows: *mvRows, smallInserts: *small, rounds: *rounds, warmup: *warmup, conc: *conc, seed: *seed, skipLoad: *skip}
+	cfg := config{mvRows: *mvRows, smallInserts: *small, rounds: *rounds, warmup: *warmup, conc: *conc, seed: *seed, skipLoad: *skip, align: *align}
 	switch strings.ToUpper(*size) {
 	case "S":
 		cfg.rows = 100_000
@@ -84,14 +87,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	logf := func(format string, args ...any) { log.Printf(format, args...) }
-	names := []string{*project + "-chserver-single-1", *project + "-dynamodb-single-1", *project + "-clickhouse-1"}
 	b := &bench{
 		th:      newServer("twinhouse", *thURL, *db, *timeout),
 		ch:      newServer("clickhouse", *chURL, *db, *timeout),
 		cfg:     cfg,
-		quiet:   &quiescence{containers: names, maxCPU: 10, limit: 30 * time.Minute, logf: logf},
 		logf:    logf,
 		results: &results{},
+	}
+	var names []string
+	if *settleD > 0 {
+		b.quiet = &settle{ch: b.ch, min: *settleD, logf: logf}
+	} else {
+		names = []string{*project + "-chserver-single-1", *project + "-dynamodb-single-1", *project + "-clickhouse-1"}
+		b.quiet = &quiescence{containers: names, maxCPU: 10, limit: 30 * time.Minute, logf: logf}
 	}
 	if err := run(ctx, b, names); err != nil {
 		log.Fatal(err)
@@ -111,7 +119,9 @@ func run(ctx context.Context, b *bench, names []string) error {
 	rc.Host = hostDesc()
 	rc.Rows, rc.Seed = b.cfg.rows, b.cfg.seed
 	rc.LoadStart = loadAvg()
-	rc.Containers = inspect(ctx, names)
+	if len(names) > 0 {
+		rc.Containers = inspect(ctx, names)
+	}
 	for _, s := range b.sides() {
 		d := *s
 		d.db = "default"
@@ -144,9 +154,11 @@ func run(ctx context.Context, b *bench, names []string) error {
 		b.logf("waiting for both servers to go idle")
 		_, _ = b.quiet.wait(ctx)
 		b.logf("checking that both servers return the same results")
+		done := b.step(ctx, "check")
 		if err := b.gate(ctx); err != nil {
 			return err
 		}
+		done()
 		if err := b.readsPhase(ctx); err != nil {
 			return err
 		}
@@ -154,4 +166,14 @@ func run(ctx context.Context, b *bench, names []string) error {
 	rc.LoadEnd = loadAvg()
 	rc.Duration = time.Since(start).Round(time.Second).String()
 	return nil
+}
+
+// env returns the environment variable k, or def when it is unset. The
+// endpoints can carry a password, which stays out of shell history and the
+// process list this way.
+func env(k, def string) string {
+	if v, ok := os.LookupEnv(k); ok && v != "" {
+		return v
+	}
+	return def
 }

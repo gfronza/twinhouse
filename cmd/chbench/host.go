@@ -11,6 +11,57 @@ import (
 	"time"
 )
 
+// idler waits for both servers to finish background work after a load.
+// ok is false when the wait could not be measured.
+type idler interface {
+	wait(ctx context.Context) (d time.Duration, ok bool)
+}
+
+// settle is the idle wait without Docker (a deployed twinhouse): it waits
+// until ClickHouse has no merge or mutation running, and for at least min
+// in total. twinhouse's stream worker exposes no progress over HTTP, so
+// min stands in for it and the wait is reported as not measured.
+type settle struct {
+	ch   *server
+	min  time.Duration
+	logf func(string, ...any)
+}
+
+func (s *settle) wait(ctx context.Context) (time.Duration, bool) {
+	start := time.Now()
+	const q = "SELECT (SELECT count() FROM system.merges) + (SELECT count() FROM system.mutations WHERE NOT is_done)"
+	d := *s.ch
+	d.db = "default"
+	for calm := 0; calm < 3 && ctx.Err() == nil; {
+		n, err := d.text(ctx, q)
+		if err != nil {
+			s.logf("checking ClickHouse merges: %v", err)
+			break
+		}
+		if n == "0" {
+			calm++
+		} else {
+			calm = 0
+		}
+		sleep(ctx, time.Second)
+	}
+	sleep(ctx, s.min-time.Since(start))
+	return time.Since(start), false
+}
+
+// sleep waits for d or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
+
 // quiescence waits for the benchmark's containers to go idle: after a load,
 // twinhouse's stream worker re-applies views and ClickHouse merges parts in
 // the background, and either would otherwise slow the reads timed next.
