@@ -283,7 +283,9 @@ The data comes from a seed, so both servers get the same rows:
 | W1 | Loads `events` with `INSERT … FORMAT JSONEachRow`, 10k rows per request, one client. |
 | W2 | Loads up to 200k of the same rows into `events_mv_src`, so every row also goes through the view. |
 | W3 | Single-row `INSERT`s from 8 concurrent clients. ClickHouse runs it twice: as-is, and with `async_insert=1` (and `wait_for_async_insert=1`), the setting an application would use there. |
-| R1–R6 | The read queries listed under the results. Their parameters (user, tenant, hour) come from a seed too, with tenants drawn as skewed as the data. R1–R4 run with 1 and 8 clients, R5–R6 with one. |
+| W4 | Single-row `INSERT`s from 8 concurrent clients into `events_agg_src`, which feeds three AggregatingMergeTree views: per kind (a handful of rows), per tenant and kind (skewed like the tenants), and per tenant, hour and kind. Two keep `uniqExact(user_id)`. Concurrent inserts keep updating the same rollup rows. Both servers get the same rows, and their rollups must match afterwards. |
+| W5 | Loads up to 200k of W1's rows into `events_agg_src`, through W4's three views. It runs before W4, so W4 updates rollups that already hold sets of up to 50k users. |
+| R1–R10 | The read queries listed under the results. Their parameters (user, tenant, kind, time) come from a seed too, with tenants drawn as skewed as the data. R5–R6 run with one client, the others with 1 and 8. R7–R8 read W5's rollups: `uniqExactMerge` merges each row's set of users. R9 finds each user's latest kind (`argMax`) in an inner `GROUP BY`. R10 is the check an application makes before an insert to skip a duplicate: a few `(tenant_id, user_id, kind)` tuples within a 10-minute window. |
 
 ## How it measures
 

@@ -29,9 +29,44 @@ var schema = []string{
 	`CREATE TABLE events_daily (
 		tenant_id UInt32, day Date, kind String, n UInt64, amount Float64
 	) ENGINE = SummingMergeTree ORDER BY (tenant_id, day, kind)`,
+	// W4's source and rollups. kind_totals has a handful of rows and
+	// tenant_totals is skewed like the tenants, so concurrent inserts keep
+	// updating the same rollup rows.
+	`CREATE TABLE events_agg_src AS events`,
+	`CREATE TABLE kind_totals (
+		kind String, n SimpleAggregateFunction(sum, UInt64),
+		users AggregateFunction(uniqExact, UInt64), last SimpleAggregateFunction(max, DateTime64(3))
+	) ENGINE = AggregatingMergeTree ORDER BY kind`,
+	`CREATE TABLE tenant_totals (
+		tenant_id UInt32, kind String, n SimpleAggregateFunction(sum, UInt64),
+		users AggregateFunction(uniqExact, UInt64), last SimpleAggregateFunction(max, DateTime64(3))
+	) ENGINE = AggregatingMergeTree ORDER BY (tenant_id, kind)`,
+	`CREATE TABLE tenant_hourly (
+		tenant_id UInt32, hour DateTime, kind String, n SimpleAggregateFunction(sum, UInt64),
+		amount SimpleAggregateFunction(sum, Float64)
+	) ENGINE = AggregatingMergeTree ORDER BY (tenant_id, hour, kind)`,
+
+	// Views come last: primeStreams runs before the first one.
 	`CREATE MATERIALIZED VIEW events_daily_mv TO events_daily AS
 		SELECT tenant_id, toDate(ts) AS day, kind, count() AS n, sum(amount) AS amount
 		FROM events_mv_src GROUP BY tenant_id, day, kind`,
+	`CREATE MATERIALIZED VIEW kind_totals_mv TO kind_totals AS
+		SELECT kind, toUInt64(count()) AS n, uniqExactState(user_id) AS users, max(ts) AS last
+		FROM events_agg_src GROUP BY kind`,
+	`CREATE MATERIALIZED VIEW tenant_totals_mv TO tenant_totals AS
+		SELECT tenant_id, kind, toUInt64(count()) AS n, uniqExactState(user_id) AS users, max(ts) AS last
+		FROM events_agg_src GROUP BY tenant_id, kind`,
+	`CREATE MATERIALIZED VIEW tenant_hourly_mv TO tenant_hourly AS
+		SELECT tenant_id, toStartOfHour(ts) AS hour, kind, toUInt64(count()) AS n, sum(amount) AS amount
+		FROM events_agg_src GROUP BY tenant_id, hour, kind`,
+}
+
+// rollupChecks read W4's rollups; both servers must return the same rows.
+var rollupChecks = []string{
+	"SELECT count() FROM events_agg_src",
+	"SELECT kind, sum(n), uniqExactMerge(users), max(last) FROM kind_totals GROUP BY kind ORDER BY kind",
+	"SELECT tenant_id, kind, sum(n), uniqExactMerge(users), max(last) FROM tenant_totals GROUP BY tenant_id, kind ORDER BY tenant_id, kind",
+	"SELECT tenant_id, hour, kind, sum(n), sum(amount) FROM tenant_hourly GROUP BY tenant_id, hour, kind ORDER BY tenant_id, hour, kind",
 }
 
 // readCase is one read query shape. sql draws its parameters from p.
@@ -63,6 +98,24 @@ var reads = []readCase{
 	}},
 	{"R6", "high-cardinality GROUP BY (50k users)", []int{1}, func(*params) string {
 		return "SELECT user_id, count() AS c FROM events GROUP BY user_id ORDER BY c DESC, user_id LIMIT 10"
+	}},
+	{"R7", "rollup read with uniqExactMerge (one tenant)", []int{1, 8}, func(p *params) string {
+		return fmt.Sprintf("SELECT kind, sum(n), uniqExactMerge(users), max(last) FROM tenant_totals WHERE tenant_id = %d AND kind IN ('view', 'click', 'purchase') GROUP BY kind ORDER BY kind", p.tenant())
+	}},
+	{"R8", "rollup read with uniqExactMerge (largest sets, all kinds)", []int{1, 8}, func(*params) string {
+		return "SELECT sum(n), uniqExactMerge(users), max(last) FROM kind_totals"
+	}},
+	{"R9", "latest state per user (argMax, nested GROUP BY, one tenant)", []int{1, 8}, func(p *params) string {
+		return fmt.Sprintf("SELECT latest, count(), sum(c) FROM (SELECT user_id, argMax(kind, ts) AS latest, count() AS c FROM events WHERE tenant_id = %d GROUP BY user_id) GROUP BY latest ORDER BY latest", p.tenant())
+	}},
+	{"R10", "duplicate check (tuple IN + 10-minute window)", []int{1, 8}, func(p *params) string {
+		at := p.minute()
+		keys := make([]string, 3)
+		for i := range keys {
+			keys[i] = fmt.Sprintf("(%d, %d, '%s')", p.tenant(), p.user(), p.kind())
+		}
+		return fmt.Sprintf("SELECT tenant_id, user_id, kind, event_id, ts FROM events WHERE ts BETWEEN toDateTime64('%s', 3) AND toDateTime64('%s', 3) AND (tenant_id, user_id, kind) IN (%s) ORDER BY ts",
+			at.Add(-5*time.Minute).Format(dt64), at.Add(5*time.Minute).Format(dt64), strings.Join(keys, ", "))
 	}},
 }
 
@@ -111,14 +164,16 @@ func (b *bench) setup(ctx context.Context) error {
 		if err := d.exec(ctx, "CREATE DATABASE "+s.db); err != nil {
 			return err
 		}
+		primed := false
 		for i, q := range schema {
 			if i == 0 {
 				q = strings.Replace(q, "ORDER BY "+defaultEventsKey, "ORDER BY ("+b.cfg.eventsKey+")", 1)
 			}
-			if i == len(schema)-1 && s == b.th {
+			if !primed && s == b.th && strings.HasPrefix(q, "CREATE MATERIALIZED VIEW") {
 				if err := primeStreams(ctx, s); err != nil {
 					return err
 				}
+				primed = true
 			}
 			if err := s.exec(ctx, q); err != nil {
 				return err
@@ -134,16 +189,18 @@ func (b *bench) setup(ctx context.Context) error {
 // before that table's first record (about 0.8 s per 25-item batch after
 // 200k records), so a table first written after a large load would measure
 // the emulator rather than twinhouse. DynamoDB has no such cost. It runs
-// before the view exists, so the sentinel never reaches the rollup.
+// before the views exist, so the sentinels never reach the rollups.
 func primeStreams(ctx context.Context, s *server) error {
 	for _, q := range []string{
 		`INSERT INTO events (tenant_id, ts, event_id) VALUES (0, '2000-01-01 00:00:00', generateUUIDv4())`,
 		`INSERT INTO events_mv_src (tenant_id, ts, event_id) VALUES (0, '2000-01-01 00:00:00', generateUUIDv4())`,
 		`INSERT INTO events_small (tenant_id, ts, event_id) VALUES (0, '2000-01-01 00:00:00', generateUUIDv4())`,
+		`INSERT INTO events_agg_src (tenant_id, ts, event_id) VALUES (0, '2000-01-01 00:00:00', generateUUIDv4())`,
 		`INSERT INTO users_latest (user_id, ver) VALUES (0, 0)`,
 		`ALTER TABLE events DELETE WHERE tenant_id = 0`,
 		`ALTER TABLE events_mv_src DELETE WHERE tenant_id = 0`,
 		`ALTER TABLE events_small DELETE WHERE tenant_id = 0`,
+		`ALTER TABLE events_agg_src DELETE WHERE tenant_id = 0`,
 		`ALTER TABLE users_latest DELETE WHERE user_id = 0`,
 	} {
 		if err := s.exec(ctx, q); err != nil {
@@ -235,6 +292,91 @@ func (b *bench) writes(ctx context.Context) error {
 			return err
 		}
 		done()
+	}
+
+	// W5: bulk load through W4's three views. It runs before W4, so W4
+	// updates rollups that already hold large sets, and R7/R8 read them.
+	if b.cfg.wants("W5") || b.cfg.wants("R7") || b.cfg.wants("R8") {
+		n := min(b.cfg.rows, b.cfg.mvRows)
+		g := newEventGen(b.cfg.seed, b.cfg.rows)
+		left := n
+		b.logf("W5: loading %d events through 3 views", n)
+		done := b.step(ctx, "W5")
+		rows, took, err := b.load(ctx, "events_agg_src", func() ([]byte, int) {
+			data, k := g.batch(min(batchRows, left))
+			left -= k
+			return data, k
+		})
+		if err != nil {
+			return err
+		}
+		b.results.addThroughput("W5", "bulk load, 10k rows per INSERT, three AggregatingMergeTree views", rows, took)
+		b.logf("waiting for background work (stream worker, merges) to finish")
+		if d, ok := b.quiet.wait(ctx); ok {
+			b.results.Context.ViewCatchUpW5 = d.Round(time.Second).String()
+		}
+		done()
+		if err := b.checkRollups(ctx); err != nil {
+			return fmt.Errorf("W5: %w", err)
+		}
+	}
+
+	// W4: single-row inserts that also update three rollups.
+	if b.cfg.wants("W4") {
+		b.logf("W4: %d single-row inserts per side through 3 views, %d clients", b.cfg.smallInserts, b.cfg.conc)
+		done := b.step(ctx, "W4")
+		if err := b.viewInserts(ctx); err != nil {
+			return err
+		}
+		done()
+	}
+	return nil
+}
+
+// viewInserts runs W4. Both servers get the same rows, so their rollups can
+// be compared afterwards. ClickHouse runs without async_insert here: W3
+// already shows what that setting costs per insert.
+func (b *bench) viewInserts(ctx context.Context) error {
+	g := newEventGen(b.cfg.seed+10, b.cfg.smallInserts)
+	lat := map[string][]time.Duration{}
+	wall := map[string]time.Duration{}
+	const chunk = 200
+	for done := 0; done < b.cfg.smallInserts; done += chunk {
+		bodies := make([][]byte, min(chunk, b.cfg.smallInserts-done))
+		for i := range bodies {
+			bodies[i], _ = g.batch(1)
+		}
+		for _, s := range b.ordered(done / chunk) {
+			start := time.Now()
+			l, err := fanOut(ctx, b.cfg.conc, bodies, func(body []byte) (time.Duration, error) {
+				r, err := s.do(ctx, "INSERT INTO events_agg_src FORMAT JSONEachRow", body, nil, false, false)
+				return r.elapsed, err
+			})
+			if err != nil {
+				return err
+			}
+			wall[s.name] += time.Since(start)
+			lat[s.name] = append(lat[s.name], l...)
+		}
+	}
+	what := "single-row INSERT through 3 AggregatingMergeTree views, " + strconv.Itoa(b.cfg.conc) + " concurrent clients"
+	for _, s := range b.sides() {
+		b.results.addLatency("W4", what, s.name, lat[s.name], wall[s.name])
+	}
+	// A view application that fails inline is retried by the stream worker,
+	// so wait for it before comparing.
+	_, _ = b.quiet.wait(ctx)
+	if err := b.checkRollups(ctx); err != nil {
+		return fmt.Errorf("W4: %w", err)
+	}
+	return nil
+}
+
+func (b *bench) checkRollups(ctx context.Context) error {
+	for _, q := range rollupChecks {
+		if err := b.same(ctx, q); err != nil {
+			return err
+		}
 	}
 	return nil
 }
