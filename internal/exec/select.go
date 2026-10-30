@@ -1278,20 +1278,6 @@ func runAggregation(q *query, it rowIter, ac *aggContext) (_ *aggOutIter, err er
 	return &aggOutIter{ac: ac, order: order, acct: ch.acct}, nil
 }
 
-// loadMembers loads the stored set members that the groups' results need.
-// A load failure then fails the query before any row is out, even when the
-// consumer stops early or the failing group lies past the LIMIT.
-func loadMembers(ac *aggContext, order []*group) error {
-	for _, g := range order {
-		for j, c := range ac.calls {
-			if err := c.load(g.accs[j]); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // aggOutIter emits one row per group in first-seen order. It computes a
 // group's aggregate results only when its row is asked for and lets go of
 // the group then, so the output rows never all exist at once. The members

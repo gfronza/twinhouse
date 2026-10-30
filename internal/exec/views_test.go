@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gfronza/twinhouse/internal/catalog"
@@ -257,17 +258,17 @@ func TestUniqExactMergeLazySetSize(t *testing.T) {
 	// loading members; several states are loaded and unioned.
 	te := setupRollups(t, true)
 	te.exec(rollupInsert)
-	loads := 0
+	var loads atomic.Int64
 	te.e.cfg.Store = &loadCounter{spyStore: te.spy, loads: &loads}
 	te.expectRows(`SELECT uniqExactMerge(users) FROM by_kind WHERE tenant = 't1' AND kind = 'buy'`, "2")
-	eq(t, loads, 0)
+	eq(t, loads.Load(), int64(0))
 	te.expectRows(`SELECT uniqExactMerge(users) FROM by_kind WHERE tenant = 't1'`, "3")
-	eq(t, loads, 3)
+	eq(t, loads.Load(), int64(3))
 }
 
 type loadCounter struct {
 	*spyStore
-	loads *int
+	loads *atomic.Int64
 }
 
 func (l *loadCounter) Scan(ctx context.Context, t *catalog.Table, req storage.ScanRequest) (storage.RowIterator, error) {
@@ -280,7 +281,7 @@ func (l *loadCounter) Scan(ctx context.Context, t *catalog.Table, req storage.Sc
 
 type countingIter struct {
 	storage.RowIterator
-	loads *int
+	loads *atomic.Int64
 }
 
 func (c *countingIter) Next(ctx context.Context) (storage.Row, error) {
@@ -295,7 +296,7 @@ func (c *countingIter) Next(ctx context.Context) (storage.Row, error) {
 		}
 		load := p.LoadSet
 		p.LoadSet = func(ctx context.Context) ([]any, error) {
-			*c.loads++
+			c.loads.Add(1)
 			return load(ctx)
 		}
 	}
