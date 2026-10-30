@@ -47,7 +47,7 @@ secret_arn() {
 # $3 the timeout in seconds.
 remote() {
 	local label=$1 script=$2 timeout=${3:-600}
-	local client group cmd status tailer
+	local client group cmd status since ids shown
 	client=$(output "$BENCH_STACK" ClientInstanceId)
 	group=$(output "$BENCH_STACK" RunLogGroup)
 	cmd=$(aws ssm send-command --instance-ids "$client" --document-name AWS-RunShellScript \
@@ -56,27 +56,35 @@ remote() {
 		--parameters "$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":[sys.argv[2]]}))' "$script" "$timeout")" \
 		--query Command.CommandId --output text)
 	log "$label: SSM command $cmd on $client"
-	# The log streams appear once the command writes output; tail fails if
-	# it starts before them, so it starts once they exist.
-	tailer=
-	status=Pending
+	# Polls the command's log streams instead of `aws logs tail --follow`,
+	# which buffers its output when it is not a terminal and loses it when
+	# stopped. since is the newest timestamp shown; ids are the events shown
+	# at that timestamp, which the next poll returns again.
+	since=0 ids="" shown=0 status=Pending
+	poll() {
+		local out t
+		out=$(aws logs filter-log-events --log-group-name "$group" --log-stream-name-prefix "$cmd/" \
+			--start-time "$since" --output json 2>/dev/null) || return 0
+		jq -r --arg ids "$ids" '($ids | split(" ")) as $skip
+			| [.events[] | select(.eventId as $e | $skip | index($e) | not)]
+			| sort_by(.timestamp)[] | .message | rtrimstr("\n")' <<<"$out"
+		t=$(jq '[.events[].timestamp] | max // empty' <<<"$out")
+		if [[ -n $t ]]; then
+			shown=1 since=$t
+			ids=$(jq -r --argjson t "$t" '[.events[] | select(.timestamp == $t) | .eventId] | join(" ")' <<<"$out")
+		fi
+	}
 	while [[ $status == Pending || $status == InProgress || $status == Delayed ]]; do
 		sleep 10
-		if [[ -z $tailer ]] && [[ $(aws logs describe-log-streams --log-group-name "$group" \
-			--log-stream-name-prefix "$cmd/" --query 'length(logStreams)' --output text 2>/dev/null) =~ ^[1-9] ]]; then
-			aws logs tail "$group" --log-stream-name-prefix "$cmd/" --since 1h --follow --format short &
-			tailer=$!
-		fi
+		poll
 		status=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$client" \
 			--query Status --output text 2>/dev/null || echo Pending)
 	done
-	if [[ -n $tailer ]]; then
-		sleep 10 # let the last lines arrive
-		kill "$tailer" 2>/dev/null || true
-		wait "$tailer" 2>/dev/null || true
-	else
-		# Short commands can end before CloudWatch shows them: print what SSM
-		# kept (the last 24,000 characters of each stream).
+	sleep 5 # the last lines reach CloudWatch after the command ends
+	poll
+	if [[ $shown == 0 ]]; then
+		# Nothing in CloudWatch yet: print what SSM kept (the last 24,000
+		# characters of each stream).
 		aws ssm get-command-invocation --command-id "$cmd" --instance-id "$client" \
 			--query '[StandardOutputContent, StandardErrorContent]' --output text
 	fi
