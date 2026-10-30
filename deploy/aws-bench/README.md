@@ -67,6 +67,20 @@ deploy/aws-bench/bench.sh down        # everything, the chbench_* tables include
   per-minute capacity can be split by step.
 - `-timeout`: below the load balancer's 110 s idle timeout.
 
+`provisioned <write units> [chbench args]` runs the same on tables switched
+to provisioned capacity: chbench creates the schema (`-setup-only`),
+`bench.sh` switches the tables in `PROV_TABLES` (default `events`) to the
+given write units and `PROV_READ_UNITS` (default 1000) read units, chbench
+loads into them (`-skip-setup`), and `bench.sh` then recreates the schema
+so twinhouse drops the provisioned tables, waiting until they are gone.
+twinhouse itself always creates on-demand tables. Provisioned capacity
+bills by the hour while a table exists: 10,000 write units cost about
+$6.50 an hour in us-east-1.
+
+```sh
+deploy/aws-bench/bench.sh provisioned 10000 -size S -only W1
+```
+
 Both servers use the same login, `bench` with a random password, kept in
 the Secrets Manager secret `twinhouse-bench/ch-users`. twinhouse reads it
 as `CH_USERS`; the instances read it at start.
