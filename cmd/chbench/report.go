@@ -17,6 +17,9 @@ type results struct {
 	Context runContext    `json:"context"`
 	Writes  []writeResult `json:"writes"`
 	Reads   []readResult  `json:"reads"`
+	// Steps are when each step ran, to match DynamoDB's consumed capacity
+	// (CloudWatch, per table and minute) to it.
+	Steps []stepWindow `json:"steps"`
 }
 
 type runContext struct {
@@ -61,6 +64,12 @@ type stats struct {
 	P95     float64 `json:"p95_ms"`
 	P99     float64 `json:"p99_ms"`
 	Samples []int64 `json:"samples_us"`
+}
+
+type stepWindow struct {
+	ID    string    `json:"id"`
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
 }
 
 func summarize(d []time.Duration) stats {

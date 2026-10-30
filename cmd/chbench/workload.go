@@ -67,12 +67,27 @@ var reads = []readCase{
 type bench struct {
 	th, ch  *server
 	cfg     config
-	quiet   *quiescence
+	quiet   idler
 	logf    func(format string, args ...any)
 	results *results
 }
 
 func (b *bench) sides() []*server { return []*server{b.th, b.ch} }
+
+// step records when step id runs, so DynamoDB's consumed capacity can be
+// matched to it afterwards (CloudWatch sums it per minute). With
+// -align-steps, the step starts on a minute boundary; call the returned
+// func when it ends.
+func (b *bench) step(ctx context.Context, id string) func() {
+	if b.cfg.align {
+		now := time.Now()
+		sleep(ctx, now.Truncate(time.Minute).Add(time.Minute+time.Second).Sub(now))
+	}
+	start := time.Now().UTC()
+	return func() {
+		b.results.Steps = append(b.results.Steps, stepWindow{ID: id, Start: start, End: time.Now().UTC()})
+	}
+}
 
 // ordered alternates which side goes first, so a load swing on the host
 // does not always hit the same side.
@@ -161,10 +176,12 @@ func (b *bench) writes(ctx context.Context) error {
 	if b.cfg.wants("W1") || b.cfg.wantsReads() {
 		g := newEventGen(b.cfg.seed, b.cfg.rows)
 		b.logf("W1: loading %d events", b.cfg.rows)
+		done := b.step(ctx, "W1")
 		rows, took, err := b.load(ctx, "events", func() ([]byte, int) { return g.batch(batchRows) })
 		if err != nil {
 			return err
 		}
+		done()
 		b.results.addThroughput("W1", "bulk load, 10k rows per INSERT, no views", rows, took)
 
 		ub := userBatches(b.cfg.seed)
@@ -187,6 +204,7 @@ func (b *bench) writes(ctx context.Context) error {
 		g := newEventGen(b.cfg.seed, b.cfg.rows)
 		left := n
 		b.logf("W2: loading %d events through the view", n)
+		done := b.step(ctx, "W2")
 		rows, took, err := b.load(ctx, "events_mv_src", func() ([]byte, int) {
 			data, k := g.batch(min(batchRows, left))
 			left -= k
@@ -200,14 +218,17 @@ func (b *bench) writes(ctx context.Context) error {
 		if d, ok := b.quiet.wait(ctx); ok {
 			b.results.Context.ViewCatchUp = d.Round(time.Second).String()
 		}
+		done() // the window includes the stream worker's re-check
 	}
 
 	// W3: single-row inserts from concurrent clients.
 	if b.cfg.wants("W3") {
 		b.logf("W3: %d single-row inserts per side, %d clients", b.cfg.smallInserts, b.cfg.conc)
+		done := b.step(ctx, "W3")
 		if err := b.smallInserts(ctx); err != nil {
 			return err
 		}
+		done()
 	}
 	return nil
 }
@@ -363,7 +384,10 @@ func (b *bench) readsPhase(ctx context.Context) error {
 				conc = b.cfg.conc
 			}
 			b.logf("%s, concurrency %d", rc.id, conc)
-			if err := b.readCase(ctx, rc, conc, b.cfg.seed+200+uint64(i)*10+uint64(conc)); err != nil {
+			done := b.step(ctx, fmt.Sprintf("%s c%d", rc.id, conc))
+			err := b.readCase(ctx, rc, conc, b.cfg.seed+200+uint64(i)*10+uint64(conc))
+			done()
+			if err != nil {
 				return fmt.Errorf("%s: %w", rc.id, err)
 			}
 		}
