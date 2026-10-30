@@ -175,11 +175,19 @@ Resources:
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties: {Roles: [!Ref InstanceRole]}
+  # No inbound from outside the VPC, and outbound only what each needs:
+  # HTTPS for AWS APIs (SSM, Secrets Manager, S3, CloudWatch Logs), packages
+  # and Docker Hub; the client also reaches both servers on 8123. DNS, NTP
+  # and instance metadata are link-local or the VPC resolver, which
+  # security groups do not filter.
   ClientSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: chbench client (admitted by ClickHouse and by the twinhouse load balancer)
       VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: AWS APIs over HTTPS}
+        - {IpProtocol: tcp, FromPort: 8123, ToPort: 8123, CidrIp: !Ref VpcCidr, Description: ClickHouse and the twinhouse load balancer}
   ClickHouseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -187,6 +195,8 @@ Resources:
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 8123, ToPort: 8123, SourceSecurityGroupId: !Ref ClientSecurityGroup}
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: 'packages, Docker Hub and AWS APIs over HTTPS'}
   ClickHouse:
     Type: AWS::EC2::Instance
     Properties:

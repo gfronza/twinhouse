@@ -25,6 +25,25 @@ be measured on DynamoDB itself. Everything it creates is disposable.
 - `bench.sh` drives it all; `capacity.py` splits DynamoDB's consumed
   capacity (CloudWatch) by benchmark step.
 
+## Network and access
+
+Nothing accepts connections from the internet. The public subnet holds
+only the NAT gateway, which carries outbound connections only; the
+instances, the load balancer (`Scheme: internal`) and the twinhouse task
+have private addresses only.
+
+| Security group | Inbound | Outbound |
+|---|---|---|
+| client | none | 443 anywhere (AWS APIs); 8123 within the VPC (both servers) |
+| ClickHouse | 8123 from the client's group | 443 anywhere (packages, Docker Hub, AWS APIs) |
+| twinhouse load balancer | 8123 from the client's group | the tasks only |
+| twinhouse tasks | 8123 from the load balancer | 443 anywhere (AWS APIs) |
+
+There is no SSH: `bench.sh` runs commands on the client through SSM,
+whose agent connects out, so access is whoever may call
+`ssm:SendCommand`. The instances require IMDSv2 and have encrypted disks;
+the bucket blocks public access.
+
 ## Running it
 
 Needs the AWS CLI, Docker with buildx, Go and python3. `AWS_PROFILE`
