@@ -17,6 +17,12 @@ set -euo pipefail
 export AWS_PROFILE=${AWS_PROFILE:-twinhouse}
 export AWS_REGION=${AWS_REGION:-us-east-1}
 export AWS_PAGER=""
+# Keys in the environment would win over the profile.
+if [[ -n ${AWS_ACCESS_KEY_ID:-}${AWS_SESSION_TOKEN:-} ]]; then
+	echo "AWS_ACCESS_KEY_ID or AWS_SESSION_TOKEN is set and would override profile $AWS_PROFILE; unset it" >&2
+	exit 1
+fi
+echo "AWS profile $AWS_PROFILE, region $AWS_REGION" >&2
 BENCH_STACK=twinhouse-bench
 ECS_STACK=twinhouse-bench-ecs
 SECRET_NAME=twinhouse-bench/ch-users
