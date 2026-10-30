@@ -21,7 +21,9 @@ type quiescence struct {
 	logf       func(string, ...any)
 }
 
-func (q *quiescence) wait(ctx context.Context) time.Duration {
+// wait reports how long that took; ok is false when it could not be
+// measured (docker unavailable, or the limit was reached).
+func (q *quiescence) wait(ctx context.Context) (d time.Duration, ok bool) {
 	start := time.Now()
 	calm := 0
 	for calm < 3 && time.Since(start) < q.limit && ctx.Err() == nil {
@@ -30,7 +32,7 @@ func (q *quiescence) wait(ctx context.Context) time.Duration {
 		if err != nil {
 			q.logf("docker stats failed (%v); waiting 30s instead", err)
 			time.Sleep(30 * time.Second)
-			return time.Since(start)
+			return 0, false
 		}
 		busy := ""
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -49,7 +51,7 @@ func (q *quiescence) wait(ctx context.Context) time.Duration {
 			}
 		}
 	}
-	return time.Since(start)
+	return time.Since(start), calm >= 3
 }
 
 // container is one container's image and resource caps.

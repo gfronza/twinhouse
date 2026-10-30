@@ -197,7 +197,9 @@ func (b *bench) writes(ctx context.Context) error {
 		}
 		b.results.addThroughput("W2", "bulk load, 10k rows per INSERT, one SummingMergeTree view", rows, took)
 		b.logf("waiting for background work (stream worker, merges) to finish")
-		b.results.Context.ViewCatchUp = b.quiet.wait(ctx).Round(time.Second).String()
+		if d, ok := b.quiet.wait(ctx); ok {
+			b.results.Context.ViewCatchUp = d.Round(time.Second).String()
+		}
 	}
 
 	// W3: single-row inserts from concurrent clients.
@@ -336,13 +338,17 @@ func sameTSV(a, b string) bool {
 			}
 			x, e1 := strconv.ParseFloat(af[j], 64)
 			y, e2 := strconv.ParseFloat(bf[j], 64)
-			if e1 != nil || e2 != nil || math.Abs(x-y) > 1e-9*math.Max(1, math.Max(math.Abs(x), math.Abs(y))) {
+			// NaN and Inf only match themselves, and the strings differ.
+			if e1 != nil || e2 != nil || !finite(x) || !finite(y) ||
+				math.Abs(x-y) > 1e-9*math.Max(1, math.Max(math.Abs(x), math.Abs(y))) {
 				return false
 			}
 		}
 	}
 	return true
 }
+
+func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
 func (b *bench) readsPhase(ctx context.Context) error {
 	for i, rc := range reads {
