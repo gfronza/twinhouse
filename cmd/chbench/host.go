@@ -132,7 +132,12 @@ func inspect(ctx context.Context, names []string) []container {
 	return cs
 }
 
+// commit is the code's commit: $CHBENCH_COMMIT when set (a binary copied
+// to a machine without the repository), else git's.
 func commit() string {
+	if c := os.Getenv("CHBENCH_COMMIT"); c != "" {
+		return c
+	}
 	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		return "unknown"

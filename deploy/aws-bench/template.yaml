@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  twinhouse benchmark environment (cmd/chbench on AWS): a VPC with private
+  subnets in two Availability Zones and one NAT gateway, a ClickHouse
+  instance, a client instance that runs chbench, an ECR repository for the
+  twinhouse image and a bucket for the chbench binary. twinhouse itself is
+  the deploy/aws-ecs stack, deployed into this VPC by deploy/aws-bench/bench.sh.
+  Everything here is disposable: bench.sh down deletes it.
+
+Parameters:
+  ChUsersSecretArn:
+    Type: String
+    Description: >-
+      Secrets Manager secret whose SecretString is "user:password" (bench.sh
+      creates it). twinhouse reads it as CH_USERS; the ClickHouse instance
+      creates the same user, and the client reads it to log in to both.
+  ClickHouseImage:
+    Type: String
+    Default: clickhouse/clickhouse-server:25.8-alpine
+    Description: The image of the local comparison (deploy/local/docker-compose.yml).
+  ClickHouseInstanceType:
+    Type: String
+    Default: c7g.xlarge
+    Description: 4 vCPUs and 8 GiB, as the twinhouse task (ChserverCpu=4096, ChserverMemory=8192).
+  ClientInstanceType:
+    Type: String
+    Default: c7g.large
+  ArmAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  VpcCidr:
+    Type: String
+    Default: 10.40.0.0/16
+
+Resources:
+  # --- Network: public subnet for the NAT gateway, private subnets in two
+  # AZs (the ECS template's load balancer needs two). The instances live in
+  # the first AZ.
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: twinhouse-bench}]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: {VpcId: !Ref Vpc, InternetGatewayId: !Ref InternetGateway}
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 16, 8]]
+      Tags: [{Key: Name, Value: twinhouse-bench-public}]
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 16, 8]]
+      Tags: [{Key: Name, Value: twinhouse-bench-private-a}]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 16, 8]]
+      Tags: [{Key: Name, Value: twinhouse-bench-private-b}]
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: {VpcId: !Ref Vpc}
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PublicSubnet, RouteTableId: !Ref PublicRouteTable}
+  NatIp:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties: {Domain: vpc}
+  Nat:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      AllocationId: !GetAtt NatIp.AllocationId
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: {VpcId: !Ref Vpc}
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref Nat
+  PrivateSubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRouteTable}
+  PrivateSubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable}
+  # DynamoDB and S3 (image layers, the bucket) stay off the NAT gateway.
+  # DynamoDB Streams has no endpoint and goes through NAT.
+  DynamoDbEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.dynamodb
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+
+  # --- Image, binary and logs.
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: twinhouse-bench
+      EmptyOnDelete: true
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules: [{Status: Enabled, ExpirationInDays: 30}]
+  RunLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /twinhouse-bench/chbench
+      RetentionInDays: 14
+
+  # --- Instances: reached through SSM (no SSH keys, no public IPs).
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: bench
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub '${ChUsersSecretArn}*'
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub '${Bucket.Arn}/*'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+                Resource: !Sub '${RunLogs.Arn}'
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: '*'
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: {Roles: [!Ref InstanceRole]}
+  ClientSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: chbench client (admitted by ClickHouse and by the twinhouse load balancer)
+      VpcId: !Ref Vpc
+  ClickHouseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ClickHouse HTTP from the chbench client
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 8123, ToPort: 8123, SourceSecurityGroupId: !Ref ClientSecurityGroup}
+  ClickHouse:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ArmAmi
+      InstanceType: !Ref ClickHouseInstanceType
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroupIds: [!Ref ClickHouseSecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions: {HttpTokens: required}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 50, VolumeType: gp3, Encrypted: true}
+      Tags: [{Key: Name, Value: twinhouse-bench-clickhouse}]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y docker
+          systemctl enable --now docker
+          users=$(aws secretsmanager get-secret-value --region ${AWS::Region} \
+            --secret-id '${ChUsersSecretArn}' --query SecretString --output text)
+          user=$(echo "$users" | cut -d, -f1 | cut -d: -f1)
+          pass=$(echo "$users" | cut -d, -f1 | cut -d: -f2-)
+          docker run -d --name clickhouse --restart unless-stopped --network host \
+            --ulimit nofile=262144:262144 -v /var/lib/clickhouse:/var/lib/clickhouse \
+            -e CLICKHOUSE_USER="$user" -e CLICKHOUSE_PASSWORD="$pass" \
+            '${ClickHouseImage}'
+  Client:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ArmAmi
+      InstanceType: !Ref ClientInstanceType
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroupIds: [!Ref ClientSecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions: {HttpTokens: required}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 20, VolumeType: gp3, Encrypted: true}
+      Tags: [{Key: Name, Value: twinhouse-bench-client}]
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  PrivateSubnetIds:
+    Value: !Sub '${PrivateSubnetA},${PrivateSubnetB}'
+  ClientSecurityGroupId:
+    Value: !Ref ClientSecurityGroup
+  ClientInstanceId:
+    Value: !Ref Client
+  ClickHouseHost:
+    Value: !Sub '${ClickHouse.PrivateIp}:8123'
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  BucketName:
+    Value: !Ref Bucket
+  RunLogGroup:
+    Value: !Ref RunLogs
