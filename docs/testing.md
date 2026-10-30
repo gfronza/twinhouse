@@ -91,7 +91,12 @@ soak test (`MR_SOAK=1`).
 **DynamoDB Local slows down as state accumulates.** It keeps all stream
 and item history in memory, and gets markedly slower after a few suite
 runs: an insert with an inline view went from about 1 s to about 25 s,
-and the multiregion suite from about 3 to about 17 minutes. If tests start
+and the multiregion suite from about 3 to about 17 minutes. The main
+cause: a write to a stream-enabled table gets slower with every stream
+record written before that table's first one, and each test creates new
+tables, so later tables pay for all earlier history (measured in
+[Comparison with ClickHouse](clickhouse-comparison.md#a-dynamodb-local-slowdown-the-benchmark-works-around)).
+If tests start
 timing out, recreate the stack first (`make down && make up`, or
 `docker compose -p dhmr -f deploy/local/docker-compose.yml down -v` for the
 multiregion stack). For experiments, prefer a fresh private container:

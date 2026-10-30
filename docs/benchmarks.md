@@ -4,7 +4,9 @@ The Go benchmarks measure the CPU time and allocations of the SQL parser,
 the query engine, the output formats and the HTTP server. They run on the
 in-memory store (`internal/storage/memstore`), so they say nothing about
 DynamoDB latency or cost: see [Costs, limits and operations](operations.md)
-for those.
+for those. [Comparison with ClickHouse](clickhouse-comparison.md) runs one
+workload end to end against twinhouse on DynamoDB Local and against
+ClickHouse.
 
 A change must not make the exec or server benchmarks more than 3% slower
 than the previous commit. `make bench-compare` checks that.
