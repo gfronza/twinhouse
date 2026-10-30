@@ -142,7 +142,7 @@ func run(ctx context.Context, b *bench, names []string) error {
 	}
 	if b.cfg.wantsReads() {
 		b.logf("waiting for both servers to go idle")
-		b.quiet.wait(ctx)
+		_, _ = b.quiet.wait(ctx)
 		b.logf("checking that both servers return the same results")
 		if err := b.gate(ctx); err != nil {
 			return err

@@ -179,7 +179,7 @@ func (r *results) markdown(w io.Writer) {
 			fmt.Fprintf(w, "| %s %s | %s | %s | %s | %s faster |\n", t.ID, t.What, count(float64(t.Rows)), count(t.PerSec), count(h.PerSec), ratio(h.PerSec, t.PerSec))
 		}
 		if c.ViewCatchUp != "" {
-			fmt.Fprintf(w, "\nAfter W2, background work (twinhouse's stream worker re-checking the view, ClickHouse merges) took %s to settle.\n", c.ViewCatchUp)
+			fmt.Fprintf(w, "\nAfter W2, both servers settled (every container under 10%% CPU) within %s.\n", c.ViewCatchUp)
 		}
 	}
 	if len(small) > 0 {
@@ -192,7 +192,11 @@ func (r *results) markdown(w io.Writer) {
 		fmt.Fprintf(w, "\n| Read | Shape | Clients | twinhouse p50 / p95 | ClickHouse p50 / p95 | p50 ratio |\n|---|---|--:|--:|--:|--:|\n")
 		for _, x := range r.Reads {
 			t, h := x.Sides["twinhouse"], x.Sides["clickhouse"]
-			fmt.Fprintf(w, "| %s | %s | %d | %s / %s | %s / %s | %s |\n", x.ID, x.Shape, x.Conc,
+			rounds := ""
+			if x.Rounds < 20 {
+				rounds = fmt.Sprintf(" (%d rounds)", x.Rounds)
+			}
+			fmt.Fprintf(w, "| %s | %s%s | %d | %s / %s | %s / %s | %s |\n", x.ID, x.Shape, rounds, x.Conc,
 				ms(t.P50), ms(t.P95), ms(h.P50), ms(h.P95), ratio(t.P50, h.P50))
 		}
 		fmt.Fprintln(w, "\nQueries:")

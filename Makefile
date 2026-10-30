@@ -264,7 +264,7 @@ chbench-down:
 chbench:
 	$(if $(findstring -skip-load,$(CHBENCH_ARGS)),,$(CHBENCH_COMPOSE) up -d --force-recreate --wait dynamodb-single chserver-single)
 	$(GO) run ./cmd/chbench -twinhouse http://localhost:$(CHBENCH_TH_PORT) \
-		-clickhouse http://localhost:$(CHBENCH_CH_PORT) $(CHBENCH_ARGS)
+		-clickhouse http://localhost:$(CHBENCH_CH_PORT) -compose-project $(CHBENCH_PROJECT) $(CHBENCH_ARGS)
 
 # ---------------------------------------------------------------------------
 # Serverless AWS deployment (deploy/aws-lambda, SAM): the API on Lambda behind a
