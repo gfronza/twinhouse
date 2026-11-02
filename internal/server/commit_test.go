@@ -297,10 +297,14 @@ func TestPanicWhileEncodingEndsTheBody(t *testing.T) {
 		s := &panickingStream{fakeStream{blocks: numberBlocks(2, 3)}}
 		return &exec.Result{Columns: numberColumn, Stream: closeSpy{s, &closed}}, nil
 	}}
-	_, early := newTestServer(t, fe, func(c *Config) { c.ResponseBufferSize = 1 })
+	logs := make(chan map[string]any, 16)
+	_, early := newTestServer(t, fe, func(c *Config) { c.ResponseBufferSize = 1; c.Logger = recordLogger(logs) })
 	r := post(t, early.URL+"/", "SELECT n")
 	if r.Status != 200 || !r.Cut || !strings.HasPrefix(r.Body, "0\n1\n2\n3\n4\n5\n__exception__\r\nCode: 49. DB::Exception: Internal error: broken encoder") {
 		t.Errorf("committed: %d cut %v %q", r.Status, r.Cut, r.Body)
+	}
+	// The client sees the cut before the stream is closed; the request log comes after both.
+	for nextLog(t, logs)["msg"] != "query failed" {
 	}
 	if !closed.Load() {
 		t.Error("the stream was not closed")

@@ -3,6 +3,8 @@ package memstore
 import (
 	"context"
 	"io"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/gfronza/twinhouse/internal/catalog"
@@ -75,4 +77,52 @@ func TestReplacingIsDeletedHidden(t *testing.T) {
 	eq(t, len(scan(t, s, tb, storage.ScanRequest{})), 1)
 	ins(storage.Row{"a", uint64(3), uint64(0)})
 	eq(t, len(scan(t, s, tb, storage.ScanRequest{Limit: 1, Ranges: []storage.KeyRange{{Partition: []any{"a"}}}})), 1)
+}
+
+// Every write after a scan shows in the next scans, forward and reverse,
+// in key order.
+func TestScanSeesWritesAfterAScan(t *testing.T) {
+	tb := mkTable(catalog.EngineReplacingMergeTree, [][2]string{{"p", "String"}, {"n", "UInt64"}, {"ver", "UInt64"}, {"v", "String"}}, []string{"p"}, []string{"n"})
+	tb.VersionColumn = "ver"
+	s := newStore(t, tb)
+	ctx := context.Background()
+	check := func(step string, want ...storage.Row) {
+		t.Helper()
+		fwd := scan(t, s, tb, storage.ScanRequest{})
+		rev := scan(t, s, tb, storage.ScanRequest{Reverse: true})
+		wantRev := slices.Clone(want)
+		slices.Reverse(wantRev)
+		if !reflect.DeepEqual(fwd, want) || !reflect.DeepEqual(rev, wantRev) {
+			t.Errorf("%s: forward %v, reverse %v; want forward %v", step, fwd, rev, want)
+		}
+	}
+	insert := func(rows ...storage.Row) {
+		t.Helper()
+		if _, err := s.Insert(ctx, tb, rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(storage.Row{"x", uint64(2), uint64(1), "two"}, storage.Row{"x", uint64(1), uint64(1), "one"})
+	check("first insert", storage.Row{"x", uint64(1), uint64(1), "one"}, storage.Row{"x", uint64(2), uint64(1), "two"})
+
+	insert(storage.Row{"x", uint64(3), uint64(1), "three"})
+	check("new key", storage.Row{"x", uint64(1), uint64(1), "one"}, storage.Row{"x", uint64(2), uint64(1), "two"}, storage.Row{"x", uint64(3), uint64(1), "three"})
+
+	insert(storage.Row{"x", uint64(1), uint64(2), "one-v2"})
+	check("replaced version", storage.Row{"x", uint64(1), uint64(2), "one-v2"}, storage.Row{"x", uint64(2), uint64(1), "two"}, storage.Row{"x", uint64(3), uint64(1), "three"})
+
+	if err := s.Merge(ctx, tb, []storage.MergeRow{{Row: storage.Row{"x", uint64(0), uint64(1), "zero"}, Source: storage.SourceRef{View: "db.v", RowID: "r"}}}); err != nil {
+		t.Fatal(err)
+	}
+	check("merged key", storage.Row{"x", uint64(0), uint64(1), "zero"}, storage.Row{"x", uint64(1), uint64(2), "one-v2"}, storage.Row{"x", uint64(2), uint64(1), "two"}, storage.Row{"x", uint64(3), uint64(1), "three"})
+
+	if err := s.DeleteRows(ctx, tb, []storage.Row{{"x", uint64(2), nil, nil}}); err != nil {
+		t.Fatal(err)
+	}
+	check("deleted key", storage.Row{"x", uint64(0), uint64(1), "zero"}, storage.Row{"x", uint64(1), uint64(2), "one-v2"}, storage.Row{"x", uint64(3), uint64(1), "three"})
+
+	if err := s.TruncateTable(ctx, tb); err != nil {
+		t.Fatal(err)
+	}
+	check("truncated")
 }

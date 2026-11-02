@@ -6,11 +6,13 @@
 package memstore
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +74,48 @@ func (m *memberSet) add(vs []any) {
 
 type table struct {
 	items map[string]*item
+	// sorted caches the items in scan order, by forward and by reverse sort
+	// key, so scans do not sort the whole table each time. Adding,
+	// replacing or removing an item clears it; changing an item's values
+	// leaves its place unchanged.
+	sorted [2][]*item
+}
+
+func (tb *table) put(key string, it *item) {
+	tb.items[key] = it
+	tb.sorted = [2][]*item{}
+}
+
+func (tb *table) remove(key string) {
+	delete(tb.items, key)
+	tb.sorted = [2][]*item{}
+}
+
+// order returns the items sorted by partition key, sort key (descending
+// when reverse) and insertion order. Callers must not modify it.
+func (tb *table) order(pkT, skT []chtype.Type, reverse bool) []*item {
+	d := 0
+	if reverse {
+		d = 1
+	}
+	if tb.sorted[d] == nil {
+		items := slices.Collect(maps.Values(tb.items))
+		slices.SortFunc(items, func(a, b *item) int {
+			if c := compareTuples(a.pk, b.pk, pkT); c != 0 {
+				return c
+			}
+			c := compareTuples(a.sk, b.sk, skT)
+			if reverse {
+				c = -c
+			}
+			if c != 0 {
+				return c
+			}
+			return cmp.Compare(a.seq, b.seq)
+		})
+		tb.sorted[d] = items
+	}
+	return tb.sorted[d]
 }
 
 func physical(t *catalog.Table) string {
@@ -115,7 +159,7 @@ func (s *Store) TruncateTable(_ context.Context, t *catalog.Table) error {
 	if err != nil {
 		return err
 	}
-	tb.items = map[string]*item{}
+	*tb = table{items: map[string]*item{}}
 	return nil
 }
 
@@ -226,7 +270,7 @@ func (s *Store) Insert(ctx context.Context, t *catalog.Table, rows []storage.Row
 		default:
 			seq := s.nextSeq()
 			key := encodeKey(pk, sk) + "#" + strconv.FormatUint(seq, 10)
-			tb.items[key] = &item{key: key, pk: pk, sk: sk, seq: seq, rid: rid, vals: rowValues(t, row)}
+			tb.put(key, &item{key: key, pk: pk, sk: sk, seq: seq, rid: rid, vals: rowValues(t, row)})
 		}
 	}
 	return res, nil
@@ -251,7 +295,7 @@ func (s *Store) putReplacing(t *catalog.Table, tb *table, row storage.Row, pk, s
 			return false
 		}
 	}
-	tb.items[key] = &item{key: key, pk: pk, sk: sk, seq: s.nextSeq(), rid: rid, mv: mv, vals: rowValues(t, row)}
+	tb.put(key, &item{key: key, pk: pk, sk: sk, seq: s.nextSeq(), rid: rid, mv: mv, vals: rowValues(t, row)})
 	return true
 }
 
@@ -293,7 +337,7 @@ func (s *Store) Merge(ctx context.Context, t *catalog.Table, rows []storage.Merg
 				old.vals = rowValues(t, mr.Row)
 				continue
 			}
-			tb.items[key] = &item{key: key, pk: pk, sk: sk, seq: s.nextSeq(), rid: id, mv: true, vals: rowValues(t, mr.Row)}
+			tb.put(key, &item{key: key, pk: pk, sk: sk, seq: s.nextSeq(), rid: id, mv: true, vals: rowValues(t, mr.Row)})
 		}
 	}
 	return nil
@@ -404,7 +448,7 @@ func (s *Store) mergeOne(ctx context.Context, t *catalog.Table, tb *table, row s
 		ms.add(a.vals)
 	}
 	if fresh {
-		tb.items[key] = it
+		tb.put(key, it)
 	}
 	s.markers[marker] = struct{}{}
 	return nil
@@ -479,29 +523,16 @@ func (s *Store) Scan(_ context.Context, t *catalog.Table, req storage.ScanReques
 	deleted := t.IsDeletedColumn()
 	pkT, skT := keyTypes(t)
 	var items []*item
-	for _, it := range tb.items {
+	for _, it := range tb.order(pkT, skT, req.Reverse) {
+		if req.Limit > 0 && len(items) == req.Limit {
+			break
+		}
 		if deleted != "" && isDeletedRow(it.vals[deleted]) {
 			continue
 		}
 		if req.Ranges == nil || matchesAny(it, req.Ranges, pkT, skT) {
 			items = append(items, it)
 		}
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if c := compareTuples(items[i].pk, items[j].pk, pkT); c != 0 {
-			return c < 0
-		}
-		c := compareTuples(items[i].sk, items[j].sk, skT)
-		if req.Reverse {
-			c = -c
-		}
-		if c != 0 {
-			return c < 0
-		}
-		return items[i].seq < items[j].seq
-	})
-	if req.Limit > 0 && len(items) > req.Limit {
-		items = items[:req.Limit]
 	}
 	rows := make([]storage.Row, len(items))
 	rids := make([]string, len(items))
@@ -679,12 +710,12 @@ func (s *Store) DeleteRows(_ context.Context, t *catalog.Table, rows []storage.R
 			return err
 		}
 		if isKeyed(t.Engine) {
-			delete(tb.items, encodeKey(pk, sk))
+			tb.remove(encodeKey(pk, sk))
 			continue
 		}
 		for k, it := range tb.items {
 			if sameValues(t, it, row) {
-				delete(tb.items, k)
+				tb.remove(k)
 			}
 		}
 	}
